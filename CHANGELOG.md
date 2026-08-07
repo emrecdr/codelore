@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-08-07
+
 ### Fixed
 
 - **Gate pseudo-paths are defined once instead of copied into each emitter.** A violation whose finding is about the repository rather than a file carries a sentinel path, and the gate layer mints six of them — but the SARIF emitter tested against its own list of three, which is how `(skipped)` came to be percent-encoded into an artifact URI that anchored a Code Scanning alert to a file that does not exist. That instance was fixed; the second copy that caused it was not. Every minting site and both membership tests now consult one `is_pseudo_path`, and the regression test iterates the canonical list rather than a local copy — so a seventh sentinel is handled by every consumer the day it is added, verified by adding one and confirming the emitter picked it up with no other edit.
