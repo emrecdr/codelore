@@ -878,8 +878,34 @@ impl CodeLoreServer {
             let base_fns = ingest_at(&base_path, &base_sha)?;
             let head_fns = ingest_at(&head_path, &head_sha)?;
 
-            // All files touched between the two revs count as "PR files".
-            let pr_files: HashSet<String> = head_fns.iter().map(|r| r.path.clone()).collect();
+            // Every path present at EITHER revision. Taking head alone looks
+            // equivalent — head holds nearly every path — but it silently
+            // drops the two cases that matter most:
+            //
+            // * A deleted file has no head rows, so its path never entered the
+            //   set and its base rows were filtered out before the comparison
+            //   ran. Deleting the worst file in the repository scored as
+            //   no-change, which is the single most decisive health
+            //   improvement a change can make.
+            // * A renamed file holds its functions under the old path at base
+            //   and the new path at head. With only the new path in the set,
+            //   the base side vanished and every function read as an addition
+            //   — so moving a large complex file unchanged produced a
+            //   degrading verdict.
+            //
+            // The union is not "files the PR touched": `run_function_metrics`
+            // returns every function at a revision. Change selection is done
+            // by `compute_delta_health`, which skips rows identical on both
+            // sides. This set only has to avoid hiding a side from it.
+            //
+            // A rename still reads as a removal plus an addition rather than a
+            // paired move — pairing needs git's rename detection, which
+            // `codelore diff` has and this path does not.
+            let pr_files: HashSet<String> = base_fns
+                .iter()
+                .chain(head_fns.iter())
+                .map(|r| r.path.clone())
+                .collect();
             let clone_members: HashSet<(String, String)> = HashSet::new();
             let base_red: HashSet<String> = HashSet::new();
 
