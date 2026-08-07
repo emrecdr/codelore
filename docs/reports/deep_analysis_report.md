@@ -439,7 +439,7 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 **2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119) and **F246** (canvas keyboard a11y); **F245** (widgets.js module split) landed this pass.
 
-The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9); its 0.27.0 re-verification added **F284–F286**. The next sweep should re-open with F-IDs starting at **F287**.
+The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9); its 0.27.0 re-verification added **F284–F286**. The next sweep should re-open with F-IDs starting at **F288**; F287 was logged out of cycle (see §9).
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
@@ -908,4 +908,40 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
 *   **Outcome**: the handoff names the next section first and the reference
     guide second.
 
-The next sweep re-opens at **F287**.
+### F287 (Active — HIGH) — the documented way to use the published Action references a ref that does not exist
+
+*   **Location**: `README.md`, `docs/github-action.md` (14 occurrences); no `v1`
+    ref on origin; `scripts/cut-release.sh` and `release.yml` create none
+*   **Severity**: HIGH · **Category**: published-surface availability
+*   **Description**: every documented invocation is
+    `uses: emrecdr/codelore@v1`, including both examples under "Versioning" —
+    so the exact-pin example pins the *binary* version while still routing the
+    *action* reference through `@v1`. No `v1` tag or branch exists, and nothing
+    in the release process creates or moves one. A workflow copied from the
+    docs fails at the step with `Unable to resolve action
+    emrecdr/codelore@v1`; the action never runs.
+*   **Why two audit cycles missed it**: both audited what `action.yml`
+    *contains*, and CI exercises it as `uses: ./`. The reference form a
+    consumer actually types is exercised nowhere. F270 closed "the Action has
+    no CI coverage" by running the action; nobody asked whether it could be
+    reached. A local path proves the mechanics and says nothing about
+    availability.
+*   **Coupling to F-H1 (the version injection)**: these constrain each other's
+    order. The injection is less urgent than it appears — a `@v1` that does not
+    resolve cannot be exploited — but creating `v1` publishes whatever it
+    points at to every third-party consumer at once, so it must not be created
+    on a release carrying the vulnerable `action.yml`. Fix order is therefore
+    forced: release the fix first, then create the ref.
+*   **Open decision, not yet a prescription**: it is not established whether
+    `v1` was deliberately withheld until the Action stabilised. If so the
+    defect is the documentation promising a ref that was never published, and
+    the fix is to document exact tags (`@vX.Y.Z`) instead of creating `v1`.
+    Both are one-line-per-occurrence changes; they differ in what is promised,
+    which is the maintainer's call.
+*   **Whichever is chosen, the durable half is the same**: nothing today keeps
+    the documented reference and the published refs in agreement. A guard that
+    resolves every `uses: emrecdr/codelore@<ref>` in the docs against the
+    repository's actual refs would have caught this on the day the docs were
+    written, and would catch a floating `v1` that stops being moved.
+
+The next sweep re-opens at **F288**.
