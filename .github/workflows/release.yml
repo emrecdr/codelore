@@ -24,8 +24,15 @@
 # job removes the aggregation entirely: no digest crosses a job boundary.
 #
 # Triggered by:
-#   - Tag push matching `v*` (canonical release path)
-#   - Manual workflow_dispatch (test runs)
+#   - Tag push matching `v*` (canonical release path — everything runs)
+#   - Manual workflow_dispatch (dry run: plan/build/attest only)
+#
+# On workflow_dispatch the three publishing jobs are skipped by their own
+# `if: github.ref_type == 'tag'`, so a manual run exercises compilation,
+# packaging, and the full attestation path without creating a GitHub
+# Release, touching the Homebrew tap, or publishing to crates.io. It does
+# write real attestations for the throwaway archives — they are digest-bound
+# and harmless, and signing is the part most worth exercising.
 
 name: release
 
@@ -198,7 +205,15 @@ jobs:
 
   # Depends on `attest` as well as `build`: a failed attestation must block
   # publication rather than ship an unattested archive to the Release.
+  #
+  # Tag-gated so that `workflow_dispatch` is the dry run this file's header
+  # claims it is. Unguarded, a manual run reached here with the `plan` job's
+  # `manual-<timestamp>` fallback and published a real GitHub Release for it.
+  # Guarded on each publishing job rather than relying on the skip cascading
+  # through `needs:` — a later edit to a `needs:` list must not silently
+  # re-enable publishing.
   release:
+    if: github.ref_type == 'tag'
     needs: [plan, build, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -260,7 +275,12 @@ jobs:
   # public Release URL) so there's no CDN-propagation race after `release`
   # publishes. The artifact files are bit-identical to the Release assets,
   # so the SHA256 matches what end-users download via `brew install`.
+  #
+  # Tag-gated for the same reason as `release`: this job pushes to an external
+  # repository, so a manual run would have pointed the public tap at a
+  # throwaway build.
   homebrew-publish:
+    if: github.ref_type == 'tag'
     needs: [plan, build, release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -365,7 +385,12 @@ jobs:
   # version is already live, so a re-run after a mid-sequence registry
   # hiccup completes the remaining crates in the same rca → lib → codelore
   # order without tripping over `cargo publish`'s already-exists rejection.
+  # The job-level gate below makes a dry run skip this job outright rather
+  # than spin up a runner to reach a step that will not fire. The step-level
+  # condition stays: it also covers the unconfigured-token case, and a
+  # publish that is permanent is worth guarding twice.
   crates-publish:
+    if: github.ref_type == 'tag'
     needs: [plan, build, release]
     runs-on: ubuntu-latest
     timeout-minutes: 45

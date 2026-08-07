@@ -946,7 +946,7 @@ the deferred thresholds scaffold that F276 blocks.
     repository's actual refs would have caught this on the day the docs were
     written, and would catch a floating `v1` that stops being moved.
 
-### F288 (Active — MEDIUM) — `workflow_dispatch` on `release.yml` is documented as a test run but publishes for real
+### F288 (Fixed — Unreleased) — `workflow_dispatch` on `release.yml` is documented as a test run but publishes for real
 
 *   **Location**: `.github/workflows/release.yml` — header comment ("Manual
     workflow_dispatch (test runs)"), `release` and `homebrew-publish` jobs
@@ -968,12 +968,20 @@ the deferred thresholds scaffold that F276 blocks.
     attestation split without cutting a tag. The migration is structurally
     verified and guarded, but genuinely unexercised until the next release,
     and this is why.
-*   **Not prescribed**: the obvious fix — guard `release` and
-    `homebrew-publish` on `github.ref_type == 'tag'` — makes `workflow_dispatch`
-    build-and-attest-only, which is exactly the dry run the header promises and
-    would have validated the L3 change. But it is a behaviour change to the
-    release path and should be decided deliberately rather than folded into an
-    unrelated PR. The alternative is to drop the `workflow_dispatch` trigger and
-    the header claim, if manual runs were never wanted.
+*   **Resolution**: all three publishing jobs (`release`, `homebrew-publish`,
+    `crates-publish`) now carry `if: github.ref_type == 'tag'`, so
+    `workflow_dispatch` runs `plan` → `build` → `attest` and stops. That is the
+    dry run the header already claimed, and it makes the Build L3 attestation
+    path exercisable without cutting a tag. `crates-publish` keeps its
+    step-level condition as well: it also covers the unconfigured-token case,
+    and a permanent publish is worth guarding twice.
+*   **Why each job is guarded rather than just `release`**: skipping `release`
+    would likely cascade through `needs:`, but that couples an outward-facing
+    safety property to dependency-graph semantics — a later edit to a `needs:`
+    list would silently re-enable publishing. Each job asserts its own
+    precondition instead.
+*   **Residual**: a dry run still writes real attestations for the throwaway
+    archives. They are digest-bound and harmless, and signing is the part most
+    worth exercising, so this is accepted rather than suppressed.
 
 The next sweep re-opens at **F289**.
