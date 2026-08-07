@@ -508,7 +508,13 @@ if [[ "${DRY_RUN}" != "true" ]]; then
   ok "binary reports codelore ${VERSION}"
 fi
 
-run git add Cargo.toml Cargo.lock CHANGELOG.md crates/*/Cargo.toml
+# The ledger is staged with the rest because the re-stamp above edits it.
+# Leaving it out is what made the v0.27.1 cut fail its own guard: the commit
+# drained CHANGELOG [Unreleased] while every ledger row still claimed to be
+# backed by it — the exact rot the re-stamp exists to prevent, reintroduced by
+# a step that edited a sixth file without adding it to a five-file list.
+run git add Cargo.toml Cargo.lock CHANGELOG.md crates/*/Cargo.toml \
+  docs/reports/deep_analysis_report.md
 run git commit -m "chore(release): ${TAG}"
 ok "release commit created"
 

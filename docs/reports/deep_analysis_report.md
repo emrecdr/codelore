@@ -275,7 +275,7 @@ The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and
 
 ##### F218 — Any single layout-selector change re-renders every widget (full-dashboard cascade)
 *   **Location**: `output/spa/template.html` (one `Alpine.effect` subscribing to all layout knobs → all `_codeloreRerenderers`)
-*   **Severity**: MED-HIGH · **Category**: render performance · **Status**: Partially Fixed (Unreleased)
+*   **Severity**: MED-HIGH · **Category**: render performance · **Status**: Partially Fixed (v0.27.1)
 *   **Description**: Bumping the Kamei window 30→60 (one sparkline) re-runs `d3.pack` over the whole hotspot tree, rebuilds every ECharts instance, and re-lays-out the arch graph + DSM. The code yields between rerenderers to stay responsive — treating the symptom. The scenario toggle also auto-clicks the knowledge-loss tab, double-rendering the circle-pack on the first pick.
 *   **Partial fix**: Split the monolithic `Alpine.effect` into (a) a pure theme effect that reads only `store.theme.isDark` and fires `_codeloreRerenderers` with cooperative yield (F135), and (b) a separate layout/offboarding effect that reads `store.layout.*` and `store.scenario.departed` — so theme toggles no longer chain through layout/scenario subscriptions or trigger the CSS-token invalidation pass from unrelated clicks. The cross-widget selection and brush effects were already separate.
 *   **Residual (open)**: layout/scenario changes still fire ALL registered rerenderers — the headline Kamei-window scenario above is unchanged. Remaining follow-on: key the rerenderer registry by the store fields each widget depends on, so a layout change re-renders only its subscribers.
@@ -303,7 +303,7 @@ follow-ups (F244, F246), carried in the next-cycle backlog (§6).
 #### F232 — Coupling centrality counted twice in the composite code-health score
 
 *   **Location**: `analyses/code_health.rs` — `SHOTGUN_INSERT` (reads `coupling_centrality_v1`, writes `shotgun-surgery` biomarker) + `normalized` CTE `n_cp` term (also reads `coupling_centrality_v1` directly)
-*   **Severity**: LOW · **Category**: scoring design / weight calibration · **Status**: Fixed (Unreleased)
+*   **Severity**: LOW · **Category**: scoring design / weight calibration · **Status**: Fixed (v0.27.1)
 *   **State on main**: `coupling_centrality_v1` previously fed the composite score via two independent paths: (1) the `shotgun-surgery` biomarker (`intensity = PERCENT_RANK(ORDER BY centrality)`) flowing into `structural_risk`; and (2) directly as `n_cp = normalize(centrality)`. A high-centrality file was penalised through both at once — a double-count of the same signal.
 *   **Fix**: the `n_cp` term and its centrality join were removed from the score SQL; coupling now enters the composite once, as the shotgun-surgery biomarker inside `structural_risk`. Score reweighted to `w_sr = 0.50, w_cn = 0.30, w_au = 0.20` (sum 1.0). `CACHE_EPOCH` bumped.
 
@@ -312,35 +312,35 @@ follow-ups (F244, F246), carried in the next-cycle backlog (§6).
 #### F233 — Implicit cross-analysis contract: `refactoring-targets` consumes `code_health_biomarkers_v1` temp table as a side-effect
 
 *   **Location**: `analyses/refactoring_targets.rs` (dominant-biomarker lookup query reads `code_health_biomarkers_v1`); `analyses/code_health.rs` (`materialize_biomarkers` creates the table as a side effect of `run_code_health`)
-*   **Severity**: MED · **Category**: implicit contract / latent-robustness · **Status**: Fixed (Unreleased)
+*   **Severity**: MED · **Category**: implicit contract / latent-robustness · **Status**: Fixed (v0.27.1)
 *   **Description**: `refactoring-targets` is the first external consumer of the `code_health_biomarkers_v1` temporary table, which `run_code_health` materialises as a side effect via `materialize_biomarkers`. This elevates a private implementation detail of `code-health` into an implicit cross-analysis contract: if `code_health` dropped the table before returning, or the call order in `run_refactoring_targets` changed so the biomarker query ran before `run_code_health`, the dominant-biomarker lookup would fail at runtime with a DuckDB "table not found" error.
 *   **Fix**: the `BIOMARKERS_DDL` in `analyses/code_health.rs` now carries a doc-comment documenting the external consumer and the session-scoped contract (must stay session-scoped and readable after `run_code_health` returns; columns not renamed without updating the consumer). The two `refactoring_targets` integration tests exercise the full path and guard a runtime regression.
 
 #### F234 — `loc` display floor: files with no LOC entry show `loc = 1` (fabricated value)
 
 *   **Location**: `analyses/refactoring_targets.rs` — `loc_by_path.get(...).unwrap_or(0).max(1)` used for both the displayed `loc` column and the priority denominator
-*   **Severity**: LOW · **Category**: display fidelity / cosmetic · **Status**: Fixed (Unreleased)
+*   **Severity**: LOW · **Category**: display fidelity / cosmetic · **Status**: Fixed (v0.27.1)
 *   **Description**: A file with no non-NULL LOC entry (e.g. a file the complexity walker skipped) had its `loc` stored as `0.max(1) = 1` — a fabricated value propagated directly into the output row. The `EA_Z_FLOOR` (25) already floors the priority denominator independently, so the `.max(1)` affected only the displayed `loc`.
 *   **Fix**: `refactoring-targets` now reports the true `loc` (`0` = no LOC data); the EA-Z effort floor is confined to the priority denominator (`max(loc, EA_Z_FLOOR)`). The integration-test assertion was updated accordingly.
 
 #### F235 — `structural_risk` saturated at the ceiling on real repositories
 
 *   **Location**: `analyses/code_health.rs` — `BIOMARKERS_INSERT` (`ranked`/MAX rollup) + `file_structural` (probabilistic-OR aggregate)
-*   **Severity**: HIGH · **Category**: metric quality / scoring · **Status**: Fixed (Unreleased)
+*   **Severity**: HIGH · **Category**: metric quality / scoring · **Status**: Fixed (v0.27.1)
 *   **Description**: Empirical run on this repo showed **67 of 69 files at `structural_risk = 1.0000` and 100% `red` band** — the metric did not discriminate. Two compounding causes: (1) `BIOMARKERS_INSERT` ranked FUNCTIONS by `PERCENT_RANK` then took the per-file `MAX`, so any file with enough functions had one in the top percentile → intensity ≈ 1.0; (2) `file_structural` combined intensities with a probabilistic-OR (`1 − Π(1−intensity)`) × co-occurrence multiplier, which drove any file with ≥2 high smells to the `LEAST(1.0, …)` clamp. The per-row invariant tests (range/monotonicity/determinism) all passed while the distribution was degenerate.
 *   **Fix**: (1) rank FILES not functions — aggregate to the file first (`MAX` per file), then `PERCENT_RANK` across files, so each smell's intensity is uniformly spread; (2) replace the probabilistic-OR with a bounded weighted sum (per-smell weights summing to 1.0, absent smells contribute 0, co-occurrence implicit). Empirical result on this repo: `structural_risk` spreads `0.01–0.96`, band split **8 red / 32 yellow / 31 green** (thresholds `0.55 / 0.28`). Added a distribution regression test (`code_health_structural_risk_discriminates`) on a purpose-built `biomarker_repo` fixture. Residual (Phase-2): small per-language cohorts (e.g. a handful of JS files) make `PERCENT_RANK` coarse — the cross-repo corpus percentile addresses this.
 
 #### F236 — biomarker normalization inconsistency: god-class/dry used min-max while others used percentile
 
 *   **Location**: `analyses/code_health.rs` — `materialize_biomarkers` (god-class + dry insertion)
-*   **Severity**: MED · **Category**: metric quality / scoring · **Status**: Fixed (Unreleased)
+*   **Severity**: MED · **Category**: metric quality / scoring · **Status**: Fixed (v0.27.1)
 *   **Description**: After F235, three biomarkers (complex-method, large-method, shotgun-surgery) used per-file `PERCENT_RANK` but god-class and dry still used min-max `/max` — an outlier-dominated scheme that under-discriminated (one extreme god class compresses the rest toward 0). Naively switching them to `PERCENT_RANK` *among files that have the smell* was worse (a lone or tied occurrence — e.g. two files each with one clone — collapses to a 0 rank, losing the DRY signal entirely; verified on the fixture).
 *   **Fix**: god-class and dry now rank their raw metric over the FULL per-language file universe (absent files contributing 0), matching complex/large's scheme exactly (same `cyclomatic IS NOT NULL AND loc IS NOT NULL` filter). A file with the smell ranks above the zero-majority (e.g. a tied duplicated pair → ~0.8, not 0 or a min-max 1.0). (shotgun-surgery keeps its own pre-existing universe — the coupled-file set from `coupling_centrality_v1`, not language-partitioned; unifying that too is a separate follow-up.) Band thresholds retuned `0.50/0.25 → 0.55/0.28` to keep the red set selective after god-class intensities rose. Added `biomarker_repo` fixture + tests: `code_health_structural_risk_discriminates`, `code_health_biomarkers_fire_distinct_smells` (closes the T2-M2 dropped-`UNION`-arm gap), and `refactoring_targets_dominant_type_varies_on_biomarker_repo` (closes the P2-T2-M1 gap). `CACHE_EPOCH → schema_v8`.
 
 #### F237 — Phase 1/2 deep-validation audit fixes
 
 *   **Location**: `main.rs` (explain, check gate, refactoring-targets dispatch), `analyses/code_health.rs` (module doc), `analyses/refactoring_targets.rs` (dominant-type query), `quality_gates/mod.rs`, tests
-*   **Severity**: HIGH (aggregate) · **Category**: correctness / consistency / test coverage · **Status**: Fixed (Unreleased)
+*   **Severity**: HIGH (aggregate) · **Category**: correctness / consistency / test coverage · **Status**: Fixed (v0.27.1)
 *   **Description**: A five-stream adversarial audit of the Phase-1/2 changes confirmed the core computations correct (bounded, NaN-free, deterministic) but surfaced: (a) HIGH — `codelore explain code-health` printed the pre-F232 formula (`0.40/0.25/0.15` + a separate coupling term, `0.66/0.33` bands); (b) HIGH — the `check` gate `code_health_min` evaluated the hotspots inline cognitive-only proxy (floored 60), not the composite, so a red file (composite ~20) silently passed a `code_health_min = 70` gate; (c) MED — `refactoring-targets` claimed `html` support but its dispatch returned `html_not_wired`; (d) LOW — `dominant_type` reported a biomarker at intensity 0 (should be "none"); (e) LOW — the module doc overstated per-language-percentile uniformity (shotgun excepted); plus several weak/tautological tests and untested contracts (weights, band thresholds, code-health CSV columns).
 *   **Fix**: (a) explain tuple updated to the current formula/weights/thresholds; (b) `code_health_min` rewired to the composite via a new `evaluate_code_health_gate(&[CodeHealthRow])` (breaking change, noted in CHANGELOG); (c) `html` wired via the generic `write_html`; (d) `WHERE intensity > 0` added to the dominant-type query; (e) module doc scoped. Tests: reframed the architecturally-invalid `structural_risk_rewards_multiple_cooccurring_smells`, hardened the silent-skip in `code_health_penalizes_churn`, removed the tautological `god_class_and_dry_are_biomarkers`, fixed the `min_by_key(loc)` tie in the ManualUp test, and added `code_health_csv_column_contract` + `code_health_band_matches_thresholds`. Residual (deferred): exact-weight assertion (needs exposing `n_cn`/`n_au`), god-class biomarker firing (needs a fan-in fixture), and churn/ownership global-vs-per-language normalization (a Phase-2 tuning consideration).
 
@@ -351,35 +351,35 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 #### F238 — parallel-coords cross-widget highlight is visually inert (`emphasis.disabled`)
 
 *   **Location**: `output/spa/widgets.js` — parallel series config (`emphasis: { disabled: true }`) + the `parallel-coords` selection subscriber
-*   **Severity**: LOW · **Category**: UX / linked-brushing fidelity · **Status**: Fixed (Unreleased)
+*   **Severity**: LOW · **Category**: UX / linked-brushing fidelity · **Status**: Fixed (v0.27.1)
 *   **Description**: The pre-existing `parallel-coords` subscriber calls ECharts `highlight`/`downplay` on selection, but the parallel series sets `emphasis: { disabled: true }`, so those actions have NO visible effect — a file selected in another widget does not visibly stand out in the parallel-coordinates plot. The subscriber is wired but inert.
 *   **Fix (`dd9cfad`)**: investigation confirmed `emphasis: { disabled: true }` is a LOAD-BEARING ECharts-6 regression workaround (the hovered polyline disappears under emphasis) — so re-enabling emphasis was NOT an option. Instead the subscriber now restyles the selected line's per-item `lineStyle` directly (bold `--color-info`, width 3, opacity 1; the rest fade to opacity 0.12; a null selection restores the default `--color-warning`), extracting the series data into `parallelData` once so it can mutate + re-apply without a rebuild. No emphasis transform, so the regression stays avoided. Setting every item each fire means no stale A→B highlight.
 
 #### F239 — `trends` subscriber leaves a stale A→B highlight
 
 *   **Location**: `output/spa/widgets.js` — `trends` selection subscriber
-*   **Severity**: MED · **Category**: correctness / linked-brushing · **Status**: Fixed (Unreleased)
+*   **Severity**: MED · **Category**: correctness / linked-brushing · **Status**: Fixed (v0.27.1)
 *   **Description**: ECharts `dispatchAction({type:'highlight'})` is additive — it does not implicitly clear a prior highlight. The `trends` subscriber highlighted the selected series without downplaying first, and because the file-detail drawer is NON-modal (`.show()`, not `.showModal()`), a user can switch selection directly from file A to file B with no intervening null-clear. Result: both A's and B's trend lines stayed bold+un-blurred — a stale highlight of the previous file. (The `coupling`/`dsm` subscribers added in the slice already downplayed-first; `trends` and `parallel-coords` did not.)
 *   **Fix (`0a41b1d`)**: `trends` now `downplay`s unconditionally first, then early-returns on null, then highlights only on a match — matching the coupling/dsm shape. (`parallel-coords` was validated benign here — its `emphasis.disabled` means no highlight state persists; see F238.)
 
 #### F240 — linked-brushing publish side was asymmetric (receive-only widgets)
 
 *   **Location**: `output/spa/widgets.js` — click handlers for the circle-pack map, coupling sankey, treemap, X-Ray sunburst
-*   **Severity**: MED · **Category**: feature completeness · **Status**: Fixed (Unreleased)
+*   **Severity**: MED · **Category**: feature completeness · **Status**: Fixed (v0.27.1)
 *   **Description**: "Select a file in ANY widget → highlight everywhere" needs both a publish and a subscribe half. Plan 3b completed the subscribe half but the publish half was asymmetric: only four surfaces (hotspot table, parallel-coords, KI-table, keyboard treeview) routed clicks through `_codeloreShowDetail` (which publishes `selection.set`); the map canvas, sankey, treemap, and X-Ray sunburst called `showFileDetailDrawer` DIRECTLY — opening the drawer without broadcasting. So the coupling sankey, DSM, trends, and the map canvas were effectively receive-only.
 *   **Fix (`0a41b1d`)**: the four direct-drawer file-clicks now route through the guarded `_codeloreShowDetail` idiom (sankey gated to files mode — a module-depth node name is a prefix, not a file, and must not go on the file-level bus). The map click drops its redundant direct `selectedCouplingFile`/`updateCouplingArcs()` in the broadcast branch (the `hotspot-map` subscriber does it on fan-out). Validated NOT-VALID and intentionally excluded: the DSM as a publish source — its axes/cells are module-level, so a click cannot identify a single file for the file-level bus. Follow-on (`27d666b`): the map's canvas background-click now clears the shared selection (bus) instead of only its local arcs, so deselection is symmetric with the new publish-on-select.
 
 #### F241 — coupling-sankey subscriber highlight dead in module-depth view
 
 *   **Location**: `output/spa/widgets.js` — `coupling` selection subscriber
-*   **Severity**: LOW · **Category**: linked-brushing fidelity · **Status**: Fixed (Unreleased)
+*   **Severity**: LOW · **Category**: linked-brushing fidelity · **Status**: Fixed (v0.27.1)
 *   **Description**: The `coupling` subscriber highlighted the sankey node by the raw full path (`name: selectedPath`). In files mode (default) node names ARE full paths so it matched, but in module-depth view nodes are named by truncated `modulePathSeg` prefixes, so the highlight silently no-op'd — the sankey did not participate in cross-widget selection at non-file depths.
 *   **Fix (`0a41b1d`)**: the subscriber now maps the bus path into the current node-name space (`modulePathSeg(selectedPath, userSankeyDepth)` when depth is numeric, else the full path), mirroring the DSM subscriber's module-mapping. Also recorded as a validated non-issue: a proposed DSM "empty-indices" guard is dead code — the per-index diagonal guide cells guarantee the scan always yields ≥1 index.
 
 #### F242 — module-depth coupling-subscriber browser test is inert against the differential fixture
 
 *   **Location**: `crates/codelore-lib/tests/spa_browser_test.rs` — Step 13 in `rendered_spa_boots_without_console_errors`
-*   **Severity**: LOW · **Category**: test coverage · **Status**: Fixed (Unreleased)
+*   **Severity**: LOW · **Category**: test coverage · **Status**: Fixed (v0.27.1)
 *   **Description**: The original Step 13 (inside `rendered_spa_boots_without_console_errors`) asserted the coupling subscriber highlights a selected file's `modulePathSeg(path, 2)` module prefix in module-depth sankey view. The production mapping is correct (verified by source review), but that test's only fixture — `differential_repo::build()` — has near-zero co-changes, so at depth 2 the change-coupling sankey had no cross-module links and no qualifying node; the step always SKIPPED. Net: the guard executed no assertion in CI and provided zero live regression protection, and it spun a ~3s re-render poll to no effect on every run.
 *   **Fix (`373747e`, `9030159`)**: added a dedicated `coupling_repo` fixture (`test_support/mod.rs`) — three 2-segment modules (`src/alpha`, `src/beta`, `src/gamma`), with `alpha/svc.rs`↔`beta/svc.rs` co-changed across 6 commits so a `src/alpha`↔`src/beta` depth-2 edge is guaranteed under any coupling threshold, plus per-file solo churn for hotspot rows — and moved the assertion into its own test `sankey_module_depth_highlights_mapped_node` rendered from that fixture with `permissive_coupling_opts`. The inert Step 13 was removed from the smoke test. The new test FAILS (not skips) if the depth-2 sankey has no qualifying node, and asserts the captured highlight name equals the module prefix (not the raw path). Independently verified: `spa_browser_test` 9/9 (was 8), the new test exercises its assert (full-boot run, ~9.3s), `spa_integration_test` 4/4.
 
@@ -390,13 +390,13 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 #### F243 — `html` output support un-advertised in 4 dispatchers (stringly-typed drift)
 
 *   **Location**: `codelore-cli/src/main.rs` — `dispatch_authors`/`dispatch_top_committers`/`dispatch_knowledge_islands`/`dispatch_clone_coupling`
-*   **Severity**: LOW · **Category**: correctness / user-facing message · **Status**: Fixed (Unreleased)
+*   **Severity**: LOW · **Category**: correctness / user-facing message · **Status**: Fixed (v0.27.1)
 *   **Description**: Each of these 4 dispatchers has a working `"html" => write_html(...)` arm, but its `unsupported_format(...)` error message advertised a format list OMITTING `html` (e.g. `"csv|json|markdown"`), so a user passing an invalid `--format` was told html isn't supported when it is. Same class as F237(c). This is a live symptom of the stringly-typed dispatch (the advertised list is a hand-maintained string parallel to the actual `match` arms — F215).
 *   **Fix (`acd9568`)**: added `html` (and `sarif` where applicable) to the 4 advertised strings. Byte-identical for every success path — only the error text for an unsupported format changed. This is a symptom patch; the root cause (parallel hand-maintained format lists) is F215, logged own-slice below.
 
 #### F231 — `Plan N` phase markers in code — now Fixed via a self-enforcing guard
 
-*   **Status**: **Fixed (Unreleased)** (`52c427c` + this-pass residual close) — previously Active/deferred.
+*   **Status**: **Fixed (v0.27.1)** (`52c427c` + this-pass residual close) — previously Active/deferred.
 *   **Fix**: rather than the deferred one-off scripted sweep, the existing `comment_hygiene_test.rs` was extended with a `no_plan_phase_markers_in_code_comments` test (a `Plan`+digit whole-comment scan, sibling to the `F<NN>` guard), then all **69** existing markers were scrubbed — the majority stripped (parenthetical/provenance tags), ~18 stale future-tense/current-claim comments rewritten to present state (verified against source: single-producer ingest, Type 1/2 clones, all output formats shipped, `gix` default + `GitCliRepo` oracle). Test + fixes landed atomically; the guard makes the convention self-enforcing forever (strictly better than a sweep that can silently regress).
 *   **Residual close (this pass)**: the guard initially scanned only `.rs` comment regions, so `Plan N` markers in `.sql` DDL (`facts/schema_v1.sql`) and in user-facing string literals (`analyze.rs`'s SARIF / parquet `bail!` messages, including a multi-line-string continuation) still slipped through. The `Plan`-marker check now scans the **whole line** across `.rs` **and** `.sql` (renamed `no_plan_phase_markers_in_code`), catching comment / string-literal / DDL markers alike; the five residual markers were scrubbed to current-state wording. The `F<NN>` check deliberately stays comment-scoped — bare `F<NN>` tokens appear legitimately in test fixtures and assertion labels, a separate broader hygiene item logged as F269.
 
@@ -429,7 +429,7 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 - **Deferred — large refactor / focused pass**: F206 (HEAD-scan I/O restructure — wants a benchmark), F215 (`enum Format`), F218 residual (per-widget layout routing; the theme/layout effect split is Partially Fixed above), F231 (62-site `Plan N` scripted sweep).
 - **Carried-forward Active (output/blob cluster)**: F119 (csv-crate), F148 (`TabularEmit` dedup), F161 (`EmitterStream`), F173 (HEAD blob dedup) — byte-identical-critical (F206 is the deeper lever for F173).
 - **Carried-forward Partial / design**: F177 (schema sentinels), F186 (bench PR gate — design), F197 (dogfood advisory/separate-cache).
-- **Fixed (Unreleased) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**, **F239 (trends A→B stale highlight — downplay-first)**, **F240 (SPA linked-brushing publish symmetry — map/sankey/treemap/X-Ray now broadcast)**, **F241 (coupling-sankey highlight fires in module-depth view)** (all `0a41b1d`), **F238 (parallel-coords highlight made visible via a direct per-item `lineStyle` restyle — `dd9cfad`)**.
+- **Fixed (v0.27.1) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**, **F239 (trends A→B stale highlight — downplay-first)**, **F240 (SPA linked-brushing publish symmetry — map/sankey/treemap/X-Ray now broadcast)**, **F241 (coupling-sankey highlight fires in module-depth view)** (all `0a41b1d`), **F238 (parallel-coords highlight made visible via a direct per-item `lineStyle` restyle — `dd9cfad`)**.
 
 **Highest-leverage work remaining:**
 1. **HEAD-scan I/O** (F173) — F206's per-worker warm reader (resolve HEAD→tree once per worker) shipped in v0.25.0; the remaining lever is deduping the blob across the three sequential HEAD passes (F173), benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
@@ -443,9 +443,9 @@ The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged 
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
-**F248 (Fixed — Unreleased) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2). **Fixed** with `arch_health_falls_when_a_cycle_enters_the_import_graph`, mirroring `architecture_trend`'s cycle fixture: acyclic era, `a<->b` back-edge partway through, padded both sides so the even sampler lands on each. Asserts the score is not constant, then that the final sample sits below the acyclic peak. Proven non-vacuous before being trusted — on `biomarker_repo` the same assertion fails, because that fixture yields `[94.5 × 6]` (the finding said "pinned at 100"; the value is 94.5, constant either way). Priority rose because 0.27.0 promoted `health-trend` to step 1 of the README onboarding path, making an untestable column the first number a new user is told to trust.
+**F248 (Fixed — v0.27.1) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2). **Fixed** with `arch_health_falls_when_a_cycle_enters_the_import_graph`, mirroring `architecture_trend`'s cycle fixture: acyclic era, `a<->b` back-edge partway through, padded both sides so the even sampler lands on each. Asserts the score is not constant, then that the final sample sits below the acyclic peak. Proven non-vacuous before being trusted — on `biomarker_repo` the same assertion fails, because that fixture yields `[94.5 × 6]` (the finding said "pinned at 100"; the value is 94.5, constant either way). Priority rose because 0.27.0 promoted `health-trend` to step 1 of the README onboarding path, making an untestable column the first number a new user is told to trust.
 
-**F269 (Fixed — Unreleased; see §8) — `F<NN>` finding IDs embedded in test string literals and one test filename escape the comment-hygiene guard.** The `comment_hygiene_test` `Plan`-marker check now scans whole lines (comment + string + DDL), but the `F<NN>` task-ID check stays comment-scoped by design: bare `F<NN>` tokens appear as legitimate-looking test scaffolding — regression-message prefixes (`"F29 regression: …"` in `time_bucket_test.rs`, `"F33: …"` in `cache_test.rs`, `"F34: …"` in `gix_repo_test.rs`, `"F6 regression: …"` in `diff.rs`), an `eprintln!("[F69 spike] …")` label, and a git-config `user.name` fixture (`"F34"`) — so a whole-line/string scan would false-fire on all of them. These are the same banned class as comment F-IDs under the no-task-IDs-in-code rule, only in strings; and `tests/f69_window_spike_test.rs` carries the ID in its NAME, which a content scanner structurally cannot reach. Deferred as its own sweep (rename the file + rewrite the ~8 test labels to drop the ID while keeping each regression's description), distinct from the F231 `Plan N` sweep. Surfaced while extending the hygiene guard for F231.
+**F269 (Fixed — v0.27.1; see §8) — `F<NN>` finding IDs embedded in test string literals and one test filename escape the comment-hygiene guard.** The `comment_hygiene_test` `Plan`-marker check now scans whole lines (comment + string + DDL), but the `F<NN>` task-ID check stays comment-scoped by design: bare `F<NN>` tokens appear as legitimate-looking test scaffolding — regression-message prefixes (`"F29 regression: …"` in `time_bucket_test.rs`, `"F33: …"` in `cache_test.rs`, `"F34: …"` in `gix_repo_test.rs`, `"F6 regression: …"` in `diff.rs`), an `eprintln!("[F69 spike] …")` label, and a git-config `user.name` fixture (`"F34"`) — so a whole-line/string scan would false-fire on all of them. These are the same banned class as comment F-IDs under the no-task-IDs-in-code rule, only in strings; and `tests/f69_window_spike_test.rs` carries the ID in its NAME, which a content scanner structurally cannot reach. Deferred as its own sweep (rename the file + rewrite the ~8 test labels to drop the ID while keeping each regression's description), distinct from the F231 `Plan N` sweep. Surfaced while extending the hygiene guard for F231.
 
 ---
 
@@ -460,24 +460,24 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F-ID | Subject | Sev | Status |
 |---|---|---|---|
 | F249 | `ensure_ingest_witnessed` guards only 2 of ~13 ingest entry points — `analyze`, `gate`, `gate_changes`, `explain`, 8 MCP tools render confident empty reports over a blind (fetch-depth:1 / all-excluded) ingest. ✅ grep-verified; convergent (5 signals). Gotcha: `analyze`'s `--after/--before` also empties `commits` → message must branch. | HIGH | Fixed (v0.25.0) |
-| F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Fixed (Unreleased) |
-| F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Fixed (Unreleased) |
-| F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Fixed (Unreleased) |
-| F253 | HEAD-scan blob I/O Phase-1 (refines F173/F206): blocker smaller than tracked (blob-read handling already identical; divergence is downstream AST-parse). One warm-ODB reader per rayon worker via the existing `map_init` idiom; also fixes `architecture-trend`/`cycle-origins` (never cached, re-paid per `analyze`). ✅ verified — byte-identical ingested facts + `architecture-trend` output before/after, differential suite unaffected (`GitCliRepo` untouched). | HIGH | Fixed (Unreleased) |
-| F254 | Cache-hit path runs a full O(tracked-files) `is_worktree_dirty()` walk on every invocation, just to maybe warn — defeats the cache on the agent-loop/CI hot path. ✅ verified | MED | Fixed (Unreleased) — TTY-gated |
-| F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). **The proposed `catch_unwind` boundary was the wrong fix — it is a no-op under `abort`.** | HIGH | Fixed (Unreleased) — see §8 |
+| F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Fixed (v0.27.1) |
+| F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Fixed (v0.27.1) |
+| F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Fixed (v0.27.1) |
+| F253 | HEAD-scan blob I/O Phase-1 (refines F173/F206): blocker smaller than tracked (blob-read handling already identical; divergence is downstream AST-parse). One warm-ODB reader per rayon worker via the existing `map_init` idiom; also fixes `architecture-trend`/`cycle-origins` (never cached, re-paid per `analyze`). ✅ verified — byte-identical ingested facts + `architecture-trend` output before/after, differential suite unaffected (`GitCliRepo` untouched). | HIGH | Fixed (v0.27.1) |
+| F254 | Cache-hit path runs a full O(tracked-files) `is_worktree_dirty()` walk on every invocation, just to maybe warn — defeats the cache on the agent-loop/CI hot path. ✅ verified | MED | Fixed (v0.27.1) — TTY-gated |
+| F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). **The proposed `catch_unwind` boundary was the wrong fix — it is a no-op under `abort`.** | HIGH | Fixed (v0.27.1) — see §8 |
 | F256 | Small per-language cohorts collapse biomarker intensities to near-binary → false `structural_risk` red-bands; disclose cohort `n` (refines F236 residual — verify the "corpus lens addresses this" claim first). | MED | Active |
-| F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Fixed (Unreleased) |
-| F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Fixed (Unreleased) |
-| F259 | Dead `commits.committer_email` (all refs are test `INSERT`s ✅) → a `landed_by_other_pct` gatekeeper metric; must ship the no-`committer_name`-mailmap caveat. | MED | Fixed (Unreleased) |
+| F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Fixed (v0.27.1) |
+| F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Fixed (v0.27.1) |
+| F259 | Dead `commits.committer_email` (all refs are test `INSERT`s ✅) → a `landed_by_other_pct` gatekeeper metric; must ship the no-`committer_name`-mailmap caveat. | MED | Fixed (v0.27.1) |
 | F260 | `hotspot-velocity` combined-window floor lets a single-window burst out-rank steadier activity; `RECENT/BASELINE_DAYS` + `EA_Z_FLOOR` uncited & unoverridable (bypass the `constants.rs` convention). | MED | Active |
 | F261 | Dead `changes.similarity` (rename %) → an `avg_rename_similarity` / low-similarity-rename signal. | LOW | Active |
 | F262 | Survival analysis on hotspots (Kaplan-Meier over hot-episodes) — re-scope of the roadmap Tier-1 item; no new ingest, but needs a design pass (stateful episode extraction + KM). | — | Active (design) |
 | F263 | `[new_code]` gate `run_new_code_scope` has zero test coverage (only the pure evaluator is tested). Pairs with F249. | HIGH | Fixed (v0.25.0) |
 | F264 | `is_shallow()` has zero tests — the primitive behind cycles 2/3/4's top finding. Pairs with F249. | HIGH | Fixed (v0.25.0) |
-| F265 | `calibrate` total-failure (0-of-N) exit path untested (only partial-failure is) — would red-flag cycle-2's G2 bug. ✅ verified: G2 was already fixed (`calibrate.rs` hard-errors on 0-of-N with `CodeLoreError::Analysis`, exit 4); this was a coverage gap, not a live bug. Regression test locks in the existing behavior. | MED | Fixed (Unreleased) |
+| F265 | `calibrate` total-failure (0-of-N) exit path untested (only partial-failure is) — would red-flag cycle-2's G2 bug. ✅ verified: G2 was already fixed (`calibrate.rs` hard-errors on 0-of-N with `CodeLoreError::Analysis`, exit 4); this was a coverage gap, not a live bug. Regression test locks in the existing behavior. | MED | Fixed (v0.27.1) |
 | F266 | Differential harness missing binary / non-ASCII / submodule probes (fixture documents its own boundary). Touches the two-backend-parity invariant. | HIGH | Active |
-| F267 | MCP `hotspots` never invoked via `tools/call`; `entity-effort`/`entity-ownership` have zero behavioral coverage. | MED | Fixed (Unreleased) |
+| F267 | MCP `hotspots` never invoked via `tools/call`; `entity-effort`/`entity-ownership` have zero behavioral coverage. | MED | Fixed (v0.27.1) |
 | F268 | CI `Build test binaries` link exhausts runner disk (SIGBUS in `ld`, different binary each run) linking 100+ fat test binaries. | MED | **Fixed (#196)** — Linux-only disk-reclaim step before checkout |
 
 **Correction logged (not a finding):** Type-3 near-miss clones is *not* a latent-data quick win —
@@ -541,7 +541,7 @@ turned out to be mis-stated by the reports that logged them.
     `assert_rpc_error_code` helper. The claim that it cannot detect protocol
     or error drift does not survive reading it.
 
-### F270 (Fixed — Unreleased) — the composite GitHub Action has no CI coverage at all
+### F270 (Fixed — v0.27.1) — the composite GitHub Action has no CI coverage at all
 
 *   **Location**: `action.yml`; no workflow under `.github/workflows/` references it
 *   **Severity**: MED · **Category**: test coverage / shipped-surface risk
@@ -594,7 +594,7 @@ turned out to be mis-stated by the reports that logged them.
     Logged rather than built, per the minimum-surface rule. Revisit only if a
     client actually rejects the text-block shape.
 
-### F272 (Fixed — Unreleased) — nothing enforces agreement between the six Rust-version pin sites
+### F272 (Fixed — v0.27.1) — nothing enforces agreement between the six Rust-version pin sites
 
 *   **Location**: `rust-toolchain.toml`, workspace `rust-version`, `clippy.toml`, `Containerfile` (`ARG RUST_VERSION` and the `FROM` digest), the `dtolnay/rust-toolchain` action tags, `CHANGELOG.md`
 *   **Severity**: LOW · **Category**: release plumbing / drift guard
@@ -629,7 +629,7 @@ turned out to be mis-stated by the reports that logged them.
 Validated against the shipped 0.26.0 binary, not inferred. The narrative
 sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
 
-### F273 (Fixed — Unreleased) — the cache key carried the repo path as the user typed it
+### F273 (Fixed — v0.27.1) — the cache key carried the repo path as the user typed it
 
 *   **Location**: `options.rs::canonical_json` (classification guard + snapshot), `cache.rs` module header and `cache_path_with_root` doc
 *   **Severity**: MED · **Category**: cache correctness / performance
@@ -651,7 +651,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     changed, so old entries are unreachable by construction, and a bump would
     additionally orphan every `diff --base-cache` file for no gain.
 
-### F274 (Fixed — Unreleased) — eviction is documented as LRU and behaves as FIFO
+### F274 (Fixed — v0.27.1) — eviction is documented as LRU and behaves as FIFO
 
 *   **Location**: `cache.rs` (banner comment, `prune_global_cache` doc), `facts/mod.rs`, `external/store.rs`, `quality_gates/ledger.rs`, `docs/advanced-usage.md`
 *   **Severity**: LOW · **Category**: documentation accuracy
@@ -671,7 +671,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     one, and a wrong eviction costs one re-ingest and never correctness. The
     user-facing guide states the consequence, since it is observable.
 
-### F275 (Fixed — Unreleased) — emptied per-repo cache directories are never removed
+### F275 (Fixed — v0.27.1) — emptied per-repo cache directories are never removed
 
 *   **Location**: `cache.rs::prune_repo_cache` / `prune_global_cache`
 *   **Severity**: LOW · **Category**: cache hygiene / cache-miss latency
@@ -716,7 +716,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     all** unless `max_dependency_cycles` or `max_propagation_cost` is already
     configured, so a scaffold cannot measure what it is meant to propose.
 
-### F277 (Fixed — Unreleased) — the cache canonicalisation test pinned an invariance that could not fail
+### F277 (Fixed — v0.27.1) — the cache canonicalisation test pinned an invariance that could not fail
 
 *   **Location**: `codelore-lib/tests/cache_test.rs`
 *   **Severity**: MED · **Category**: test quality
@@ -745,7 +745,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     doc line — rather than a bare token match. Widening the vocabulary without
     that anchor produces false positives on correct code.
 
-### F279 (Fixed — Unreleased, partial) — a ticket ID shipped in user-facing help
+### F279 (Fixed — v0.27.1, partial) — a ticket ID shipped in user-facing help
 
 *   **Location**: `args.rs` (fixed); `analyze.rs`, `explain.rs`, `options.rs`, `clone_coupling.rs` (remaining)
 *   **Severity**: LOW · **Category**: convention violation
@@ -757,7 +757,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     same violation; clearing them is gated on F278's anchored rule, so they are
     fixed and guarded together rather than piecemeal.
 
-### F280 (Fixed — Unreleased) — a vacuous gate pass wrote `result` without `violations`
+### F280 (Fixed — v0.27.1) — a vacuous gate pass wrote `result` without `violations`
 
 *   **Location**: `check.rs`, `gate.rs`
 *   **Severity**: LOW · **Category**: CI contract
@@ -768,7 +768,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
 *   **Outcome**: both write `violations=0`, guarded by a test shown to fail
     against the previous behaviour.
 
-### F281 (Fixed — Unreleased) — `check --help` rendered `auto- discovered`
+### F281 (Fixed — v0.27.1) — `check --help` rendered `auto- discovered`
 
 *   **Location**: `args.rs` `thresholds_file` doc comment
 *   **Severity**: LOW · **Category**: help-text rendering
@@ -776,7 +776,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     clap re-joins doc lines with a space, so both `check --help` and
     `gate --help` printed the hyphen and the remainder separated.
 
-### F282 (Fixed — Unreleased) — a filtered-to-empty analysis reports success and explains nothing
+### F282 (Fixed — v0.27.1) — a filtered-to-empty analysis reports success and explains nothing
 
 *   **Location**: `analyze.rs` (`dispatch!` macro, `run_streaming_dispatch`, the footer's unused `Footer.rows`)
 *   **Severity**: MED · **Category**: honest-absence convention
@@ -813,7 +813,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     `CommunitiesResult` gained `len`/`is_empty` as the one dispatched result
     that is not a `Vec`.
 
-### F283 (Refuted as a metric defect; log noise Fixed — Unreleased) — the partial-tree warning fires on a grammar quirk, not on lost structure
+### F283 (Refuted as a metric defect; log noise Fixed — v0.27.1) — the partial-tree warning fires on a grammar quirk, not on lost structure
 
 *   **Location**: `codelore-lib/src/complexity`, vendored `codelore-rca` grammars
 *   **Severity**: MED (unverified impact) · **Category**: metric correctness
@@ -852,7 +852,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     (`00_setup_boot.js`, `90_toggles_utils.js`) and cannot share this cause.
     They were not investigated; assume nothing from the Rust result.
 
-### F284 (Fixed — Unreleased) — the zero-row notice prescribed a remedy most analyses cannot use
+### F284 (Fixed — v0.27.1) — the zero-row notice prescribed a remedy most analyses cannot use
 
 *   **Location**: `codelore-cli/src/analyze.rs`, the F282 notice
 *   **Severity**: LOW-MED · **Category**: honest-absence convention
@@ -883,7 +883,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     and discloses no filter thresholds, so the pointer would have been the same
     class of false promise it was meant to replace.
 
-### F285 (Fixed — Unreleased) — `check` recommended a gate key the README never explained
+### F285 (Fixed — v0.27.1) — `check` recommended a gate key the README never explained
 
 *   **Location**: `main.rs::vacuous_pass_notice` ↔ `README.md`
 *   **Severity**: LOW · **Category**: documentation coherence
@@ -897,7 +897,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     General rule worth keeping: every key a CLI message names should resolve
     where that message points.
 
-### F286 (Fixed — Unreleased) — the onboarding path handed off past its own continuation
+### F286 (Fixed — v0.27.1) — the onboarding path handed off past its own continuation
 
 *   **Location**: `README.md`, end of "Your first 5 minutes"
 *   **Severity**: LOW · **Category**: documentation flow
