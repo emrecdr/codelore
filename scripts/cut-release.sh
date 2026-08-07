@@ -454,6 +454,33 @@ open(path, "w").write(out)
 PY
   ok "flipped CHANGELOG [Unreleased] → [${VERSION}] - ${TODAY}"
 
+  # Re-stamp the findings ledger in the same breath. `Fixed (Unreleased)` is a
+  # claim ABOUT the CHANGELOG's [Unreleased] section, so draining that section
+  # above silently invalidates every such row: the finding shipped, but the
+  # ledger the team reads to know what is done still says it did not.
+  #
+  # This has rotted twice from exactly that cause. Both times it was
+  # reconciled by hand rather than at the source, so it rotted again on the
+  # next cut — which is why the fix belongs here and not in another sweep.
+  #
+  # Both spellings are rewritten. The parenthesised and em-dash forms both
+  # appear in the file, and handling only one would leave half the rows stale
+  # while looking finished.
+  python3 - "${VERSION}" docs/reports/deep_analysis_report.md <<'RESTAMP'
+import sys
+
+version, path = sys.argv[1], sys.argv[2]
+src = open(path).read()
+marks = ("Fixed (Unreleased)", "Fixed \u2014 Unreleased")
+n = sum(src.count(m) for m in marks)
+out = src.replace(marks[0], f"Fixed (v{version})").replace(
+    marks[1], f"Fixed \u2014 v{version}"
+)
+open(path, "w").write(out)
+print(f"  re-stamped {n} ledger row(s) to v{version}")
+RESTAMP
+  ok "re-stamped findings ledger Unreleased → v${VERSION}"
+
   # Sync the lockfile so cargo update doesn't churn it later.
   cargo update -p codelore-lib -p codelore -p codelore-rca --quiet
   ok "Cargo.lock synced to workspace ${VERSION}"
