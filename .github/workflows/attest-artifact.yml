@@ -1,0 +1,67 @@
+name: attest-artifact
+
+# Trusted signer for FILE artifacts — the mechanism that puts this
+# repository's binary releases at SLSA v1.0 Build L3.
+#
+# Build L3 requires the platform to "prevent secret material used to sign
+# the provenance from being accessible to the user-defined build steps"
+# (https://slsa.dev/spec/v1.0/levels). A release build runs `cargo build`,
+# which executes `build.rs` — repository-authored code. If the sigstore
+# OIDC token were present in that job, a compromised build script could
+# mint provenance for an artifact it never produced. That is precisely the
+# forgery L3 closes, and it is why attestation cannot live in the build
+# job no matter which file the build job is written in.
+#
+# So the split is by JOB, not by file: build jobs get `contents: read` and
+# nothing else, and the signing token lives here, in a job whose every step
+# is a first-party action and which executes no repository-authored code.
+#
+# Being a reusable workflow also gives verifiers a pinnable signer
+# identity — the OIDC token's `job_workflow_ref` names THIS file, so a
+# consumer can demand that specific signer rather than trusting any
+# workflow in the repo:
+#
+#   gh attestation verify codelore-<tag>-<target>.tar.gz \
+#     --owner emrecdr \
+#     --signer-workflow emrecdr/codelore/.github/workflows/attest-artifact.yml
+#
+# Each caller instance attests exactly one uploaded artifact and computes
+# its digest locally, after download. No hash ever crosses a job boundary,
+# which is what makes this survive a build matrix — see the note in
+# release.yml about the output-aggregation dead end that sank the earlier
+# attempt at L3.
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: >
+          Name of the actions/upload-artifact entry to download and attest.
+          The uploaded directory must contain exactly the archive(s) to be
+          attested and nothing else.
+        required: true
+        type: string
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write          # mint the OIDC token for the sigstore cert
+      attestations: write      # persist the attestation to the GH API
+      artifact-metadata: write # actions/attest writes a storage record
+    steps:
+      - name: Download the artifact to attest
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist
+
+      # `subject-path` hashes the downloaded file(s) in this trusted job
+      # rather than trusting a digest computed by the build job. Each
+      # staged artifact directory holds exactly one archive.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/*

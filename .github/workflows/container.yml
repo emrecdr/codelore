@@ -10,14 +10,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Two-phase multi-arch build:
+# Three-phase multi-arch build:
 #   1. `build` matrix runs ONE job per architecture on a NATIVE runner
 #      (ubuntu-latest for amd64, ubuntu-24.04-arm for arm64). Each job builds
 #      its own platform-specific image, pushes by digest only (no tags), and
 #      uploads the digest as an artifact.
 #   2. `merge` job downloads all per-arch digests and assembles them into a
 #      single multi-arch manifest list with the user-facing tags, then
-#      attests provenance against the manifest digest.
+#      reports the digest the registry assigned as a job output.
+#   3. `attest` job signs that digest via the reusable trusted signer at
+#      .github/workflows/attest-digest.yml.
+#
+# Phase 3 is separate because building the image executes the Containerfile's
+# `RUN` steps — repository-authored code. Under SLSA v1.0 Build L3 the
+# sigstore signing token must be unreachable from any job running such code,
+# so neither `build` nor `merge` may hold it. See attest-digest.yml.
 #
 # Rationale: QEMU-emulated arm64 builds of Rust workspaces are pathologically
 # slow (~2.5 hours when they don't hang) and trigger rustup `EFAULT (Bad
@@ -38,11 +45,13 @@ jobs:
             runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    # No signing permissions. This job executes the Containerfile's `RUN`
+    # steps — repository-authored code — so under SLSA Build L3 the sigstore
+    # token must be unreachable from here. Signing happens in `attest`.
+    # Do not add id-token/attestations back.
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -94,11 +103,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      # Consumed by `attest`. The registry — not this workflow — is the
+      # authority on the manifest-list digest, so it is read back after
+      # creation rather than recomputed locally.
+      digest: ${{ steps.manifest.outputs.digest }}
+    # Assembles manifests only; still no signing permissions, so the token
+    # lives in exactly one job across this workflow.
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -144,9 +158,17 @@ jobs:
         run: |
           docker buildx imagetools inspect ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
 
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
-        with:
-          subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ steps.manifest.outputs.digest }}
-          push-to-registry: true
+  # Trusted signer — the only job in this workflow permitted to sign. It
+  # runs no repository-authored code, which is what satisfies SLSA Build L3.
+  attest:
+    needs: merge
+    uses: ./.github/workflows/attest-digest.yml
+    with:
+      subject-name: ghcr.io/${{ github.repository }}
+      subject-digest: ${{ needs.merge.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write

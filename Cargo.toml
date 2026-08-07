@@ -31,7 +31,7 @@ categories = [
 # NOTE: this workspace previously carried a [workspace.metadata.dist] block
 # for cargo-dist. The release pipeline now lives entirely in
 # .github/workflows/release.yml as hand-rolled steps (build matrix, SLSA L3
-# attestation via attest-build-provenance, GitHub Release publish, Homebrew
+# attestation via a separate trusted-signer job, GitHub Release publish, Homebrew
 # formula regeneration). cargo-dist itself is not invoked anywhere, so the
 # metadata block was inert and has been removed to avoid drift between
 # documented intent and actual behaviour. If cargo-dist is reintroduced

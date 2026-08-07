@@ -1,0 +1,65 @@
+name: attest-digest
+
+# Trusted signer for REGISTRY artifacts — the container-image counterpart
+# to attest-artifact.yml. Same Build L3 rationale, different subject kind:
+# an OCI manifest already pushed to a registry is identified by its digest
+# rather than by a file on disk, so there is nothing to download and hash.
+#
+# The container build job runs the Containerfile's `RUN` steps, which are
+# repository-authored code, so it must not hold the signing token. It gets
+# `contents: read` + `packages: write` (it pushes the image by digest) and
+# nothing else. The token lives here.
+#
+# Verify with the signer pinned to this file:
+#
+#   gh attestation verify oci://ghcr.io/emrecdr/codelore:<tag> \
+#     --owner emrecdr \
+#     --signer-workflow emrecdr/codelore/.github/workflows/attest-digest.yml
+#
+# The digest is passed in as an input rather than recomputed, because the
+# registry — not this workflow — is the authority on what digest the
+# manifest list was assigned. The caller reads it back from the registry
+# via `docker buildx imagetools inspect` immediately after creating it.
+
+on:
+  workflow_call:
+    inputs:
+      subject-name:
+        description: >
+          Fully-qualified image name WITHOUT a tag, e.g.
+          ghcr.io/emrecdr/codelore. Recorded as the attestation subject.
+        required: true
+        type: string
+      subject-digest:
+        description: >
+          Digest of the manifest to attest, in "sha256:<hex>" form, as
+          reported by the registry after the manifest list was created.
+        required: true
+        type: string
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write          # push-to-registry attaches the attestation to ghcr
+      id-token: write          # mint the OIDC token for the sigstore cert
+      attestations: write      # persist the attestation to the GH API
+      artifact-metadata: write # actions/attest writes a storage record
+    steps:
+      # `push-to-registry` writes the attestation alongside the image in
+      # ghcr, so this job needs registry credentials of its own — the
+      # caller's login does not carry across the job boundary.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ inputs.subject-name }}
+          subject-digest: ${{ inputs.subject-digest }}
+          push-to-registry: true
