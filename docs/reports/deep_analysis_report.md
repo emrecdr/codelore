@@ -626,8 +626,10 @@ turned out to be mis-stated by the reports that logged them.
 
 ## 9. First-run UX pass (F273–F283)
 
-Validated against the shipped 0.26.0 binary, not inferred. The narrative
-sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
+Validated against the shipped 0.26.0 binary, not inferred. This section is
+the F-ledger and the record of the pass; `2026-08-06-first-run-ux-review.md`
+carries only what is still open — F276, F278, F279's remaining instances, and
+the deferred thresholds scaffold that F276 blocks.
 
 ### F273 (Fixed — v0.27.1) — the cache key carried the repo path as the user typed it
 
