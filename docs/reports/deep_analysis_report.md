@@ -1130,7 +1130,7 @@ the deferred thresholds scaffold that F276 blocks.
     string is the contract. Verified discriminating — restoring the old wording
     fails it by name.
 
-### F292 (Active — LOW) — a container tag from the `v1` incident survives in the registry
+### F292 (Fixed — Unreleased) — a container tag from the `v1` incident survives in the registry
 
 *   **Location**: `ghcr.io/emrecdr/codelore:v1` (registry state, not source)
 *   **Severity**: LOW · **Category**: published-surface debris
@@ -1160,10 +1160,19 @@ the deferred thresholds scaffold that F276 blocks.
     already prevents the cause, and it would make a unit test depend on network
     reachability and registry auth — a flaky check for an event that the
     source-level guard makes impossible.
-*   **Remediation requires a token scope this project's tooling does not
+*   **Remediation required a token scope this project's tooling does not
     carry**: GitHub Packages exposes version deletion, not tag deletion, so
-    removing `:v1` also removes `sha-243a85b` — acceptable, since both are
+    removing `:v1` also removed `sha-243a85b` — acceptable, since both are
     incident artifacts and the genuine `v0.27.1` image is a separate version
-    that is unaffected. Needs `read:packages` + `delete:packages`.
+    that is unaffected. Deleted from the package UI by the maintainer.
+*   **Why the version was hard to find by digest**: `:v1` is a multi-arch
+    OCI *index*, and the package UI lists its four child manifests (amd64,
+    arm64, and two attestation entries) as separate rows. Searching the page
+    for the index digest matches nothing; the index is the parent row, and
+    deleting it removes the children with it.
+*   **Verified after deletion**: `:v1` and `:sha-243a85b` both return 404,
+    while `latest`, `v0.27.2`, `0.27.2`, `0.27`, `v0.27.1`, `0.27.1`,
+    `v0.27.0` and `v0.26.0` all still resolve to their original digests. The
+    tag count fell by exactly two, so nothing else was caught in the delete.
 
 The next sweep re-opens at **F293**.
