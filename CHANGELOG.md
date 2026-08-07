@@ -4,6 +4,18 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Release and container provenance moved to SLSA Build L3; the signing token is no longer reachable from any job that runs build code.** Both pipelines attested inline: the job that ran `cargo build` — and therefore `build.rs` — also held `id-token: write`, as did the job that ran the Containerfile's `RUN` steps. SLSA v1.0 requires the platform to "prevent secret material used to sign the provenance from being accessible to the user-defined build steps", so a compromised build script could have minted provenance for an artifact it never produced. That is Build L2, not the L3 the documentation claimed. Attestation now happens in two reusable trusted signers (`attest-artifact.yml` for file subjects, `attest-digest.yml` for registry subjects) that contain no `run:` step at all; every build, package, and manifest job is reduced to `contents: read` (plus `packages: write` where it pushes), and the workflow-level defaults no longer grant signing scopes, so a job added later cannot inherit them. `release` now depends on `attest`, so a failed attestation blocks publication rather than shipping an unattested archive. Consumers can verify the stronger property by pinning the signer: `gh attestation verify <archive> --owner emrecdr --signer-workflow emrecdr/codelore/.github/workflows/attest-artifact.yml`.
+
+### Changed
+
+- **Attestation uses `actions/attest` instead of `actions/attest-build-provenance`.** The latter's own README states that it is now a wrapper and that "new implementations should use `actions/attest` instead". Build provenance is `actions/attest`'s default mode, so the predicate is still generated rather than hand-rolled; the migration adds the `artifact-metadata: write` scope the newer action requires. Each attest job now hashes the artifact it downloaded rather than trusting a digest computed elsewhere, which is also why the split survives a build matrix — no digest crosses a job boundary, the aggregation limit that made an earlier attempt at L3 unworkable.
+
+### Added
+
+- **Guard test asserting the signing token stays isolated.** The L3 property regresses silently and attractively: re-adding `id-token: write` to a build job makes an inline attestation work again, produces attestations that still appear valid, and changes no visible output — while making them forgeable. The guard encodes both halves of the rule, that no step-running job may hold signing scopes and that the trusted signers earn the token by containing no shell, and it self-tests against the exact pre-migration shape so it cannot pass vacuously.
+
 ## [0.27.1] - 2026-08-07
 
 ### Fixed

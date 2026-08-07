@@ -1,18 +1,27 @@
 # Release pipeline for CodeLore — multi-platform binaries with per-artifact
-# SLSA v1.0 build provenance attestations.
+# SLSA v1.0 Build L3 provenance attestations.
 #
-# Attestation pattern: each matrix job runs `actions/attest-build-provenance@v4`
-# on its own staged artifact AFTER staging but BEFORE upload. The action signs
-# via sigstore OIDC and pushes the attestation to GitHub's transparency log;
-# `gh attestation verify codelore-<tag>-<target>.tar.gz --owner emrecdr`
-# confirms provenance against the public Rekor entry.
+# Attestation pattern: `build` compiles and uploads, and signs NOTHING. A
+# separate `attest` job — a matrix over the same targets, calling the
+# reusable workflow at .github/workflows/attest-artifact.yml — downloads
+# each artifact, hashes it, and signs it via sigstore OIDC.
 #
-# Earlier attempts at SLSA L3 via slsa-framework/slsa-github-generator's
+# That separation is the L3 requirement itself, not a style choice:
+# `cargo build` executes `build.rs`, so the build job runs
+# repository-authored code and therefore must not hold the signing token.
+# It is granted `contents: read` and nothing more. See attest-artifact.yml
+# for the full rationale.
+#
+# Consumers verify against the pinned signer identity:
+#   gh attestation verify codelore-<tag>-<target>.tar.gz --owner emrecdr \
+#     --signer-workflow emrecdr/codelore/.github/workflows/attest-artifact.yml
+#
+# Earlier attempts at L3 via slsa-framework/slsa-github-generator's
 # reusable workflow failed because that pattern aggregates `outputs.hashes`
 # across the build matrix into a single `base64-subjects` input — and
 # GitHub Actions only preserves the LAST matrix job's outputs, so 4 of 5
-# subject hashes were silently dropped. The per-job v4 attestation flow
-# eliminates the aggregation step entirely.
+# subject hashes were silently dropped. Attesting each artifact in its own
+# job removes the aggregation entirely: no digest crosses a job boundary.
 #
 # Triggered by:
 #   - Tag push matching `v*` (canonical release path)
@@ -32,10 +41,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Workflow-level default. Signing permissions are deliberately ABSENT: only
+# the `attest` job may hold them, and it declares them on its own
+# reusable-workflow call. Keeping them out of the default means a job added
+# to this file later cannot silently inherit the ability to sign provenance.
 permissions:
   contents: write       # create the GitHub Release + upload artifacts
-  id-token: write       # OIDC token for sigstore attestation signing
-  attestations: write   # write attestations to the sigstore transparency log
 
 env:
   CARGO_TERM_COLOR: always
@@ -86,10 +97,12 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    # Read-only by design. This job runs `cargo build`, which executes
+    # `build.rs` — repository-authored code — so under SLSA Build L3 the
+    # sigstore signing token must be unreachable from here. Signing happens
+    # in the `attest` job below. Do not add id-token/attestations back.
     permissions:
       contents: read
-      id-token: write       # per-job OIDC token for sigstore signing
-      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -120,7 +133,6 @@ jobs:
         run: cargo build --release -p codelore --target ${{ matrix.target }} --features spa
 
       - name: Stage artifact
-        id: stage
         shell: bash
         # Every artifact ships GPL-3.0-only LICENSE, the MPL-2.0 notice
         # for the vendored codelore-rca fork (renamed to avoid ambiguity
@@ -142,24 +154,11 @@ jobs:
             cp README.md "$stage_dir/README.md"
             cp CHANGELOG.md "$stage_dir/CHANGELOG.md"
             (cd "$stage_dir" && 7z a "../${archive_name}.zip" codelore.exe README.md CHANGELOG.md LICENSE LICENSE-MPL-codelore-rca NOTICE 2>/dev/null || true)
-            echo "archive=dist/${archive_name}.zip" >> "$GITHUB_OUTPUT"
           else
             cp "target/${{ matrix.target }}/release/codelore" "$stage_dir/codelore"
             tar -C "$stage_dir" -czf "dist/${archive_name}.tar.gz" codelore LICENSE LICENSE-MPL-codelore-rca NOTICE
-            echo "archive=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
           fi
           rm -rf "$stage_dir"
-
-      # SLSA v1.0 build provenance for this matrix entry's artifact. The
-      # action signs with the runner's OIDC token, publishes the attestation
-      # to the sigstore Rekor transparency log, and (because we set
-      # `subject-path`) anchors the attestation to the artifact's content
-      # hash. Consumers verify via:
-      #   gh attestation verify <archive> --owner emrecdr
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
-        with:
-          subject-path: ${{ steps.stage.outputs.archive }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -167,8 +166,40 @@ jobs:
           name: codelore-${{ matrix.target }}
           path: dist/
 
+  # Trusted signer — the only job in this workflow permitted to sign.
+  #
+  # Runs the same target matrix as `build`, but each instance merely
+  # downloads one artifact and attests it: no compilation, no
+  # repository-authored code, nothing that could reach the OIDC token
+  # except first-party actions. That is what satisfies SLSA Build L3.
+  #
+  # The matrix below must stay in sync with `build`'s targets — each value
+  # names one upload-artifact entry. A target present in `build` but
+  # missing here would ship UNATTESTED, so add to both or neither.
+  attest:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-pc-windows-msvc
+    uses: ./.github/workflows/attest-artifact.yml
+    with:
+      artifact-name: codelore-${{ matrix.target }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+  # Depends on `attest` as well as `build`: a failed attestation must block
+  # publication rather than ship an unattested archive to the Release.
   release:
-    needs: [plan, build]
+    needs: [plan, build, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

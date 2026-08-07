@@ -1738,6 +1738,8 @@ codelore/
 │   ├── ci.yml                            # cargo test + clippy + fmt + deny
 │   ├── bench.yml                         # weekly perf regression gate
 │   ├── release.yml                       # cargo-build matrix + SLSA L3 + Homebrew (on tag push)
-│   └── container.yml                     # distroless image (on tag push)
+│   ├── container.yml                     # distroless image (on tag push)
+│   ├── attest-artifact.yml               # trusted signer, file subjects (reusable)
+│   └── attest-digest.yml                 # trusted signer, registry subjects (reusable)
 └── .codeloreignore                       # optional, user-supplied
 ```
