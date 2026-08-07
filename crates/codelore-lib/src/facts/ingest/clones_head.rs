@@ -135,7 +135,7 @@ impl FactsDb {
                     i32::try_from(member.start_line).unwrap_or(i32::MAX),
                     i32::try_from(member.end_line).unwrap_or(i32::MAX),
                     i32::try_from(member.fingerprint.node_count).unwrap_or(i32::MAX),
-                    1.0_f64, // Type 1 + Type 2 → exact match; T3 MinHash lands in v1.x
+                    1.0_f64, // Type 1 + Type 2 → exact match; Type 3 MinHash is not yet implemented
                 ])
                 .map_err(|e| CodeLoreError::Analysis(format!("append clone row: {e}")))?;
                 n += 1;

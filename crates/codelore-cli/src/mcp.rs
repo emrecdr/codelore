@@ -476,7 +476,7 @@ pub struct FunctionXrayParams {
     pub path: String,
 }
 
-/// Parameters for the `check_gates` tool (none required).
+/// Parameters for the `check_gates` tool.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct CheckGatesParams {
     /// Maximum violation rows to return (default: 50, clamped to 1..=500).
@@ -1596,6 +1596,20 @@ impl CodeLoreServer {
 /// check`'s exact form, one line per advisory finding capped at the CLI's row
 /// limit with a `(+n more findings)` tail, and the per-file delta table
 /// capped at the CLI's row limit with a `(+n more files)` tail.
+/// Append `(+n more <noun>)` when a rendered section was truncated.
+///
+/// `render_gate_changes` caps three sections independently, and each cap is
+/// only honest if the reader is told rows were dropped. Keeping the take and
+/// the disclosure as separate hand-written statements is what let the
+/// violations list ship uncapped while its two siblings were bounded, so the
+/// tail is a call rather than a pattern to remember.
+fn push_truncation_tail(lines: &mut Vec<String>, total: usize, cap: usize, noun: &str) {
+    let hidden = total.saturating_sub(cap);
+    if hidden > 0 {
+        lines.push(format!("(+{hidden} more {noun})"));
+    }
+}
+
 fn render_gate_changes(
     report: &change_set::ChangeSetReport,
     violations: Option<&[GateViolation]>,
@@ -1612,8 +1626,8 @@ fn render_gate_changes(
                 .to_string(),
         );
     }
-    let all_violations = violations.unwrap_or_default();
-    for v in all_violations.iter().take(crate::GATE_VIOLATION_ROWS) {
+    let violation_rows = violations.unwrap_or_default();
+    for v in violation_rows.iter().take(crate::GATE_VIOLATION_ROWS) {
         lines.push(format!(
             "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
             gate = v.gate,
@@ -1622,22 +1636,21 @@ fn render_gate_changes(
             threshold = v.threshold,
         ));
     }
-    let hidden_violations = all_violations
-        .len()
-        .saturating_sub(crate::GATE_VIOLATION_ROWS);
-    if hidden_violations > 0 {
-        lines.push(format!("(+{hidden_violations} more violations)"));
-    }
+    push_truncation_tail(
+        &mut lines,
+        violation_rows.len(),
+        crate::GATE_VIOLATION_ROWS,
+        "violations",
+    );
     for f in report.findings.iter().take(crate::GATE_FINDINGS_ROWS) {
         lines.push(format!("[{}] {}: {}", f.kind, f.path, f.detail));
     }
-    let hidden_findings = report
-        .findings
-        .len()
-        .saturating_sub(crate::GATE_FINDINGS_ROWS);
-    if hidden_findings > 0 {
-        lines.push(format!("(+{hidden_findings} more findings)"));
-    }
+    push_truncation_tail(
+        &mut lines,
+        report.findings.len(),
+        crate::GATE_FINDINGS_ROWS,
+        "findings",
+    );
     for d in report
         .health
         .deltas
@@ -1655,14 +1668,12 @@ fn render_gate_changes(
             )),
         }
     }
-    let hidden = report
-        .health
-        .deltas
-        .len()
-        .saturating_sub(crate::GATE_DELTA_TABLE_ROWS);
-    if hidden > 0 {
-        lines.push(format!("(+{hidden} more files)"));
-    }
+    push_truncation_tail(
+        &mut lines,
+        report.health.deltas.len(),
+        crate::GATE_DELTA_TABLE_ROWS,
+        "files",
+    );
     if let Some(action) = gate_changes_action(report, violations) {
         lines.push(action);
     }

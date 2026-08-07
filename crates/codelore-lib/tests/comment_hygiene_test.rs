@@ -7,8 +7,8 @@
 //! `codelore explain` **Citation** field, where it sat among real sources
 //! ("DORA 2018 Accelerate", "Bird et al. 2011"), and a `Task`-numbered marker
 //! promised integration tests that had long since been written. Widening the
-//! rule is not free — see [`line_has_ticket_id`] for the two shapes in this
-//! tree that look like a `T`-prefixed ID and are not one.
+//! rule is not free — see [`line_has_ticket_id`] for the one shape in this
+//! tree that looks like a `T`-prefixed ID and is not one.
 //!
 //! Note that this file is scanned like any other, so the rules are described
 //! by shape rather than by example; a literal ID written here as an
@@ -29,13 +29,13 @@
 //! IDs.
 //!
 //! Both checks scan the WHOLE line, so a marker is caught in a comment, a
-//! string literal (`anyhow::bail!("… Plan N")`, an assertion label), a
-//! multi-line string continuation, or DDL alike. Neither shape occurs
-//! incidentally: `Plan`+digit and a standalone `F`+digits token are both
-//! specific enough that a whole-line scan carries no false-positive risk over
-//! this source tree. Tokenisation keeps `_` inside a token, so an identifier
-//! such as `_F12` or a hex-ish `0xF12` is a single token and is not flagged;
-//! only a standalone token of that shape is.
+//! string literal (an `anyhow::bail!` message, an assertion label), a
+//! multi-line string continuation, or DDL alike. The keyword-plus-digit and
+//! `F`-plus-digits shapes carry no false-positive risk over this source tree;
+//! the `T` series does, and is narrowed by [`line_has_ticket_id`].
+//! Tokenisation keeps `_` inside a token, so an underscored identifier or a
+//! hex-ish literal is a single token and is not flagged; only a standalone
+//! token of that shape is.
 //!
 //! Task IDs also can't hide in a FILE NAME, where no content scanner would
 //! reach them — the scanned file stems are checked against the same rule.
@@ -79,11 +79,17 @@ fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// True if `token` is an ID of `prefix` followed by one to three digits and
+/// nothing else.
+fn is_id_token(token: &str, prefix: u8) -> bool {
+    let bytes = token.as_bytes();
+    matches!(bytes.len(), 2..=4) && bytes[0] == prefix && bytes[1..].iter().all(u8::is_ascii_digit)
+}
+
 /// True if `token` is a finding/task ID: an `F` followed by one to three
 /// digits and nothing else.
 fn is_task_id(token: &str) -> bool {
-    let bytes = token.as_bytes();
-    matches!(bytes.len(), 2..=4) && bytes[0] == b'F' && bytes[1..].iter().all(u8::is_ascii_digit)
+    is_id_token(token, b'F')
 }
 
 /// True if the line carries a bare task-ID token anywhere — comment, string
@@ -110,11 +116,12 @@ fn stem_opens_with_task_id(stem: &str) -> bool {
 }
 
 /// True if the line carries a phase-number marker: the capitalised word `Plan`
-/// at a word boundary, directly followed by optional spaces then an ASCII
-/// digit. These name development history (the sequence a feature shipped in),
-/// not the current contract — the same banned class as finding IDs. Scanned
-/// over the whole line so comment, string-literal, and DDL markers are all
-/// caught (see the module doc for why this is safe here but not for `F<NN>`).
+/// or `Task` at a word boundary, directly followed by optional spaces then an
+/// ASCII digit. These name development history (the sequence a feature shipped
+/// in), not the current contract — the same banned class as finding IDs.
+/// Scanned over the whole line so comment, string-literal, and DDL markers are
+/// all caught (see the module doc for why a whole-line scan is safe for these
+/// shapes but not for the `T` series).
 fn line_has_plan_marker(line: &str) -> bool {
     line_has_keyword_number(line, "Plan") || line_has_keyword_number(line, "Task")
 }
@@ -143,67 +150,23 @@ fn line_has_keyword_number(line: &str, keyword: &str) -> bool {
     false
 }
 
-/// `T`-prefixed tokens that are domain vocabulary rather than task IDs.
+/// True if the line carries a bare `T`-prefixed task-ID token anywhere.
 ///
-/// `T1`/`T2`/`T3` are the clone *type* names (Type 1 exact, Type 2
-/// renamed, Type 3 near-miss) and appear throughout the clone analyses —
-/// `clone_coupling.rs`: "1.0 for T1+T2 exact matches". They are the reason a
-/// bare `T<digits>` rule cannot be applied unconditionally. The cost of the
-/// exemption is that a future task numbered 1-3 would not be caught; that is
-/// accepted, because the alternative is a guard that fails on correct code
-/// and gets deleted.
-const CLONE_TYPE_TOKENS: &[&str] = &["T1", "T2", "T3"];
-
-/// True if `line` carries a standalone `T`-prefixed task ID, in any
-/// surrounding punctuation — a trailing colon, a following word, or wrapped
-/// in parentheses.
+/// Same tokenisation as [`line_has_task_id`], with one addition: `}` is kept
+/// *inside* a token rather than splitting one. Every ISO-8601 timestamp in the
+/// fixtures is built as `format!("…-{day:02}T10:00:00Z")`, so the separator
+/// `T` sits immediately after a placeholder's closing brace; gluing that brace
+/// to the token leaves `02}T10`, which is not a bare ID. That excludes
+/// timestamps structurally rather than through an exemption list that would
+/// rot as fixtures change.
 ///
-/// Anchored rather than a bare token match, because two things in this tree
-/// look like a `T` followed by digits and are not task IDs:
-///
-/// * the clone-type names, handled by [`CLONE_TYPE_TOKENS`];
-/// * every ISO-8601 timestamp in the fixtures, where the date/time separator
-///   is a literal `T` followed by the hour. Those always sit immediately
-///   after a digit or a format placeholder's closing brace, so requiring the
-///   preceding byte to be neither excludes them without an exemption list
-///   that would rot as fixtures change.
-///
-/// The trailing boundary keeps identifiers such as `T9_foo` or `INT8_C`
-/// whole, so only a standalone token is considered.
+/// No clone-type exemption is needed: the tree spells those `Type 1` / `Type
+/// 2` / `Type 3`, which is also what the user-facing SARIF and dashboard
+/// strings use, so the abbreviated form is not domain vocabulary here and no
+/// number has to be carved out of the rule.
 fn line_has_ticket_id(line: &str) -> bool {
-    let bytes = line.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if b != b'T' {
-            continue;
-        }
-        // Reject a `T` glued to the previous token: an identifier tail, or
-        // the `T` of a timestamp (preceded by a digit or a `}`).
-        if i > 0 {
-            let prev = bytes[i - 1];
-            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'}' {
-                continue;
-            }
-        }
-        let digits = bytes[i + 1..]
-            .iter()
-            .take_while(|c| c.is_ascii_digit())
-            .count();
-        if digits == 0 || digits > 3 {
-            continue;
-        }
-        let end = i + 1 + digits;
-        if bytes
-            .get(end)
-            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        {
-            continue;
-        }
-        let token = &line[i..end];
-        if !CLONE_TYPE_TOKENS.contains(&token) {
-            return true;
-        }
-    }
-    false
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '}'))
+        .any(|token| is_id_token(token, b'T'))
 }
 
 fn scanned_files() -> Vec<PathBuf> {
@@ -290,36 +253,40 @@ fn no_plan_phase_markers_in_code() {
 /// finding nothing — the same thing a broken predicate does. Pin both
 /// directions on the shapes that actually occur in this tree.
 ///
-/// The ID literals live here as `concat!` fragments so the assertions can be
-/// specific without the file tripping its own scan.
+/// The sample IDs are assembled at runtime rather than written as literals,
+/// because this file is scanned like any other: a literal would violate the
+/// very rule under test.
 #[test]
 fn the_hygiene_predicates_discriminate() {
-    let t = |n: &str| format!("T{n}");
+    let t = |n: u32| format!("T{n}");
 
     // Real IDs, in the punctuation they were actually written with: a
-    // trailing colon, a parenthesised aside, a following word.
+    // trailing colon, a parenthesised aside, a following word. Single-digit
+    // IDs are included because no number is exempt — the clone analyses spell
+    // their type names `Type 1` / `Type 2` / `Type 3`, so nothing in this tree
+    // needs a low-numbered `T` token to mean something else.
     for line in [
-        format!("// {}: an author is considered departed", t("8")),
-        format!("// {} (foo): bar", t("42")),
-        format!("//! ({}) emitter note", t("11")),
-        format!("// {} regression guard", t("9")),
+        format!("// {}: an author is considered departed", t(8)),
+        format!("// {} (foo): bar", t(42)),
+        format!("//! ({}) emitter note", t(11)),
+        format!("// {} regression guard", t(9)),
+        format!("// {}+{} exact match", t(1), t(2)),
     ] {
         assert!(line_has_ticket_id(&line), "must flag a task ID: {line:?}");
     }
 
-    // Domain vocabulary that a bare token rule would destroy.
+    // Shapes a bare token rule would destroy.
     for line in [
-        format!("// {}+{} exact match", t("1"), t("2")),
-        format!("// clone type {} near-miss", t("3")),
-        // An ISO-8601 stamp: the separator is glued to the preceding brace.
+        // An ISO-8601 stamp: the separator is glued to the preceding brace,
+        // so the token reads `02}T10` rather than a bare ID.
         r#"let d = format!("2026-01-{day:02}T10:00:00Z");"#.to_string(),
         // Identifiers keep `_`/alphanumerics attached, so neither boundary
         // opens or closes a standalone token.
-        format!("// INT8_C and {}_suffix identifiers", t("9")),
+        format!("// INT8_C and {}_suffix identifiers", t(9)),
     ] {
         assert!(
             !line_has_ticket_id(&line),
-            "must NOT flag domain vocabulary: {line:?}"
+            "must NOT flag a non-ID shape: {line:?}"
         );
     }
 

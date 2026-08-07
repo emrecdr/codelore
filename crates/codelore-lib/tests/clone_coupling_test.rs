@@ -106,7 +106,7 @@ fn live_clone_pair_surfaces_in_clone_coupling() {
     assert!(r.combined_score > 0.0);
     assert!(
         (r.similarity - 1.0).abs() < f64::EPSILON,
-        "T1+T2 → exact similarity, got {}",
+        "Type 1 + Type 2 → exact similarity, got {}",
         r.similarity
     );
 

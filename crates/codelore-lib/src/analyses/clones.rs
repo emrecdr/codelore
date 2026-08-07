@@ -126,7 +126,7 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
                 start_line: member.start_line,
                 end_line: member.end_line,
                 node_count: member.fingerprint.node_count,
-                similarity: 1.0, // T1+T2 = exact match
+                similarity: 1.0, // Type 1 + Type 2 = exact match
                 family_size,
             });
         }
