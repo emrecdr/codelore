@@ -733,7 +733,7 @@ the deferred thresholds scaffold that F276 blocks.
     pinned — a directory holding a ledger, a live entry, or only a
     subdirectory survives; a fresh empty one is left alone.
 
-### F276 (Active) — `evaluate_all_gates` discards measured values it already computed
+### F276 (Refuted) — `evaluate_all_gates` discards measured values it already computed
 
 *   **Location**: `codelore-cli/src/check.rs::evaluate_all_gates`
 *   **Severity**: LOW · **Category**: reusability
@@ -748,6 +748,28 @@ the deferred thresholds scaffold that F276 blocks.
     different problem — `evaluators.rs` skips **building the import graph at
     all** unless `max_dependency_cycles` or `max_propagation_cost` is already
     configured, so a scaffold cannot measure what it is meant to propose.
+*   **Refuted — the measured values are not discarded.** Checked against
+    source: every one of the three gates records its measured value through
+    `make_rec`, whose `value` field is exactly that measurement, and those
+    records leave the function as `ledger_records`.
+    *   `cognitive_max` and `hotspot_score_max` — `make_rec` inside
+        `eval_hotspot_gates`.
+    *   `hotspot_anchored_max` — `make_rec` in `evaluate_all_gates`, with the
+        value folded as the max anchored score across rows, plus an explicit
+        `"skipped"` record when no calibration anchor is active.
+*   **The rows are not discarded either.** `eval_hotspot_gates` returns the
+    full `Vec<HotspotRow>`, not a length, and `evaluate_all_gates` reuses those
+    rows for the anchored gate — its own comment says so. Only the outer return
+    narrows to `hotspot_count`, and that count has a consumer: the
+    `check: PASS (N files evaluated)` line.
+*   **Nothing consumes what widening would expose.** The stated motivation is a
+    "measured thresholds scaffold" that does not exist. Widening a return for
+    an unbuilt caller is the speculative generality the repository's own rules
+    forbid, and the ledger records already are the durable home for measured
+    values — which is what a scaffold would read.
+*   **Residual, deliberately not acted on**: none. If a thresholds scaffold is
+    ever built, it should read `GateRunRecord`s rather than re-plumb the gate
+    functions' return types.
 
 ### F277 (Fixed — v0.27.1) — the cache canonicalisation test pinned an invariance that could not fail
 
