@@ -578,7 +578,7 @@ turned out to be mis-stated by the reports that logged them.
     release disagrees with current thresholds". Deliberately not marked
     `continue-on-error`, which would make the job decorative.
 
-### F271 (Active) — MCP tools hand-roll JSON into a text block instead of declaring structured output
+### F271 (Fixed — Unreleased, partial) — MCP tools hand-roll JSON into a text block instead of declaring structured output
 
 *   **Location**: `codelore-cli/src/mcp.rs` — all eleven `#[tool]` bodies return `Result<String, ErrorData>`
 *   **Severity**: LOW-MED · **Category**: protocol fidelity (optional)
@@ -593,6 +593,37 @@ turned out to be mis-stated by the reports that logged them.
     and the trailing-summary shape would have to be redesigned to fit a schema.
     Logged rather than built, per the minimum-surface rule. Revisit only if a
     client actually rejects the text-block shape.
+*   **Resolution — `check_gates` only, and the survey that bounded it.** The
+    "eleven tools" framing hid that they are not one problem. Classified by
+    what a schema would actually cost:
+    *   **`check_gates`** — its output was already a struct (`GateSummary`) in
+        the binary crate, where `schemars` is already a dependency. Three
+        derives and a return type. Done.
+    *   **`hotspots`, `code_health`, `refactoring_targets`,
+        `finding_hotspot_overlap`** — return an array whose *last element is a
+        different type* (the `{omitted, total, note}` disclosure). That is not
+        expressible as a schema, so the wire shape would have to become an
+        object: a breaking change for every current consumer.
+    *   **`repo_overview`, `delta_health`, `explain_file`** — build their
+        output with inline `serde_json::json!`, and the content is library row
+        types. Typing them means `schemars` in `codelore-lib`, which is
+        published, so the dependency lands on every library consumer.
+    *   **`function_xray`** — returns *two incompatible top-level shapes*: an
+        object when the file is not a Tier-1 language, a bare array otherwise.
+        One schema cannot describe both without changing the wire.
+    *   **`change_context`, `gate_changes`** — prose briefings. A text-only
+        tool is valid MCP; there is no JSON document to describe.
+*   **Backwards compatibility, verified rather than assumed**: `rmcp`'s
+    `Json<T>` doc says structured content is placed in `structured_content`
+    "rather than the regular `content` field", but the implementation populates
+    **both** — the text block survives. Confirmed on the wire by probing a live
+    server before and after: `structuredContent` absent then present, text
+    block still delivered.
+*   **One thing did change**: routing through `serde_json::to_value` reorders
+    object keys alphabetically. Same fields, same values; disclosed in the
+    CHANGELOG. Established by capturing the pre-change binary's output and
+    diffing it, after two separate inferences from `Cargo.lock` and
+    `cargo tree` both predicted no change and were wrong.
 
 ### F272 (Fixed — v0.27.1) — nothing enforces agreement between the six Rust-version pin sites
 
