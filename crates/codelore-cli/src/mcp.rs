@@ -19,7 +19,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use rmcp::{
-    handler::server::wrapper::Parameters, model::ErrorData, tool, tool_handler, tool_router,
+    handler::server::wrapper::{Json, Parameters},
+    model::ErrorData,
+    tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -516,14 +518,14 @@ pub struct GateChangesParams {}
 // ── Output type for check_gates ───────────────────────────────────────────────
 
 /// Summary returned by the `check_gates` tool.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct GateSummary {
     /// `"pass"`, `"fail"`, or `"no_thresholds"`.
     verdict: String,
     /// Number of violations found.
     violation_count: usize,
     /// Individual gate violations, if any.
-    violations: Vec<GateViolation>,
+    violations: Vec<crate::diff::GateViolationOut>,
     /// Configured gates that produced no verdict in this response, each with the
     /// reason — so an empty `violations` list is distinguishable from "did not
     /// run". Empty when nothing is skipped. See [`SkippedGate`].
@@ -537,7 +539,7 @@ struct GateSummary {
 /// `[new_code]` gate with no pre-window baseline in this checkout. Carrying the
 /// reason beside the name is what lets a caller tell an empty `violations` list
 /// ("all gates passed") apart from "this gate did not run".
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct SkippedGate {
     /// The gate that produced no verdict.
     gate: &'static str,
@@ -1080,7 +1082,10 @@ impl CodeLoreServer {
             are never affected by the cap. \
             First call on a cold cache triggers history ingest."
     )]
-    async fn check_gates(&self, params: Parameters<CheckGatesParams>) -> Result<String, ErrorData> {
+    async fn check_gates(
+        &self,
+        params: Parameters<CheckGatesParams>,
+    ) -> Result<Json<GateSummary>, ErrorData> {
         let cap = resolve_row_cap(params.0.limit);
         let repo_path = self.repo.clone();
         let defect_calibration = self.defect_calibration.clone();
@@ -1095,10 +1100,10 @@ impl CodeLoreServer {
                 let summary = GateSummary {
                     verdict: "no_thresholds".into(),
                     violation_count: 0,
-                    violations: Vec::<GateViolation>::new(),
+                    violations: Vec::new(),
                     skipped_gates: Vec::new(),
                 };
-                return serde_json::to_string(&summary).map_err(internal);
+                return Ok(Json(summary));
             }
 
             // The server-resolved calibration threads into the analyses so
@@ -1243,10 +1248,14 @@ impl CodeLoreServer {
             let summary = GateSummary {
                 verdict: verdict.into(),
                 violation_count,
-                violations,
+                // Same four `String` fields as the library type, so the JSON is
+                // unchanged; the mirror is what carries `JsonSchema`, which the
+                // library type cannot without pulling `schemars` into a
+                // published crate.
+                violations: violations.into_iter().map(Into::into).collect(),
                 skipped_gates,
             };
-            serde_json::to_string(&summary).map_err(internal)
+            Ok(Json(summary))
         })
         .await
     }

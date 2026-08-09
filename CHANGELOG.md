@@ -4,6 +4,14 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`check_gates` declares an output schema and returns structured content.** Every MCP tool serialised its own JSON into a text block, so a client got no `outputSchema` and no `structuredContent`: an agent had to parse the text and could not validate it. `check_gates` is the tool where that costs most — it carries the pass/fail verdict an agent acts on — and the only one whose output type was already a struct in the binary crate, so it is now typed end to end. `tools/list` advertises the schema (verdict, violation_count, violations, skipped_gates, with `violations` typed as an array rather than left opaque), and every response carries `structuredContent` alongside the text block that clients already read, so nothing that consumes the text form is affected. The `violations` field switched to the crate-local mirror type that already existed for the JSON output path — same four `String` fields, so the document is unchanged — because the library type cannot carry `JsonSchema` without pulling `schemars` into a published crate. The other ten tools deliberately remain text-only; see the findings report for why each is not a mechanical change.
+
+### Changed
+
+- **`check_gates` JSON now orders its keys alphabetically rather than by declaration.** A side effect of routing the response through the structured-content path: the same four fields carry the same values, but `skipped_gates` now sorts first. JSON object member order is not significant, and every consumer in this repository parses rather than byte-compares, so this is disclosed rather than worked around.
+
 ### Removed
 
 - **A stale `v1` container tag from the release-trigger incident.** Pushing the Action's floating major tag also matched `container.yml`'s trigger, so a container image was published under a tag literally named `v1`. It resolved to an image distinct from every release and could never update again once the trigger was narrowed, while looking exactly like a floating major — a tag someone might reasonably reach for by analogy with `uses: emrecdr/codelore@v1`, and get a frozen image with no signal. `ghcr.io/emrecdr/codelore:v1` is deleted. GitHub Packages removes versions rather than tags, so the incident's `sha-243a85b` tag went with it; that tag had been moved off the genuine `v0.27.1` image onto the incident rebuild, so its removal restores the release images as the only published builds. Every release tag, including `latest`, was verified to resolve to its original digest afterwards.

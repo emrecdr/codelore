@@ -89,7 +89,7 @@ pub struct DiffOutput {
 /// the library's struct directly: keeps the library's gate type free
 /// of `Serialize` derives that would propagate `serde` through every
 /// gate-evaluating consumer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct GateViolationOut {
     pub gate: String,
     pub path: String,

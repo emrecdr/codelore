@@ -1888,3 +1888,77 @@ fn mcp_gate_changes_is_not_memoized_across_worktree_edit() {
     drop(stdin);
     let _ = child.wait();
 }
+
+/// `check_gates` is the one tool that declares an output schema, so an agent
+/// can validate its verdict instead of parsing a text blob.
+///
+/// Two halves, and the second is the one that would break quietly: declaring
+/// `outputSchema` obliges the server to return `structuredContent` conforming
+/// to it, and it must keep emitting the text block so clients that never read
+/// structured content are unaffected. A regression in either half still looks
+/// like a working tool from one side.
+#[test]
+fn mcp_check_gates_declares_output_schema_and_returns_structured_content() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    std::fs::write(
+        repo.dir.path().join(".codelore-thresholds.toml"),
+        "[gates]\ncode_health_min = 100.0\n",
+    )
+    .unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    let list_req = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} });
+    stdin.write_all(&ndjson_line(&list_req)).unwrap();
+    stdin.flush().unwrap();
+    let listed = read_ndjson(&mut reader);
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    let cg = tools
+        .iter()
+        .find(|t| t["name"] == "check_gates")
+        .expect("check_gates present");
+    let schema = &cg["outputSchema"];
+    assert!(
+        schema.is_object(),
+        "check_gates must declare an outputSchema: {cg}"
+    );
+    let props = schema["properties"]
+        .as_object()
+        .expect("outputSchema.properties");
+    for key in ["verdict", "violation_count", "violations", "skipped_gates"] {
+        assert!(
+            props.contains_key(key),
+            "outputSchema must describe `{key}`: {schema}"
+        );
+    }
+    assert_eq!(
+        schema["properties"]["violations"]["type"], "array",
+        "`violations` must be typed as an array, not left opaque: {schema}"
+    );
+
+    let resp = call_tool(&mut stdin, &mut reader, 2, "check_gates", &json!({}));
+    let structured = &resp["result"]["structuredContent"];
+    assert!(
+        structured.is_object(),
+        "declaring an outputSchema obliges the tool to return structuredContent: {resp}"
+    );
+    assert_eq!(
+        structured["verdict"], "fail",
+        "a 100.0 floor must fail, and the verdict must arrive as structured data: {structured}"
+    );
+
+    // The text block stays, byte-equal to the structured payload, so a client
+    // that only reads `content` sees exactly what it always did.
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block");
+    let reparsed: serde_json::Value = serde_json::from_str(text).expect("text block is JSON");
+    assert_eq!(
+        &reparsed, structured,
+        "the text block and structuredContent must carry the same document"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
