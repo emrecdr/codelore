@@ -1228,4 +1228,31 @@ the deferred thresholds scaffold that F276 blocks.
     `v0.27.0` and `v0.26.0` all still resolve to their original digests. The
     tag count fell by exactly two, so nothing else was caught in the delete.
 
+### F293 (Fixed — Unreleased) — a failed sqlite export gave no hint about its prerequisites
+
+*   **Location**: `codelore-lib/src/output/sqlite.rs`
+*   **Severity**: LOW · **Category**: actionable diagnostics
+*   **Description**: the emitter ran `INSTALL sqlite; LOAD sqlite;` inside the
+    same batch as the ATTACH and the ten table copies, and mapped any failure
+    to `format!("sqlite: {e}")`. `INSTALL` fetches the extension over the
+    network on first use and caches it under DuckDB's home directory, so an
+    air-gapped or locked-down host failed with a bare DuckDB error labelled
+    "sqlite" — indistinguishable from a bug in the export itself.
+*   **Resolution**: `INSTALL`/`LOAD` is issued as its own statement so the hint
+    attaches to the one network- and filesystem-dependent step, rather than to
+    every sqlite error and without pattern-matching DuckDB's error text, which
+    would rot. The hint names both prerequisites, the cache location, and the
+    two ways out.
+*   **Wording corrected by evidence**: the first draft said only "needs network
+    access". Reproducing the failure showed the same arm is reached by an
+    unwritable cache directory — a permission error, no network involved — so
+    the hint names both causes.
+*   **Durable half**: a `#[cfg(unix)]` test induces the failure by pointing
+    DuckDB's own `home_directory` at an unwritable path, so it needs neither
+    network isolation nor a mutation of the process environment. Verified
+    discriminating — stripping the hint fails it on the bare error. The
+    workspace's `unsafe_code = "forbid"` rejected the first attempt, which set
+    `HOME` via `std::env::set_var`; the DuckDB setting is both safe and better
+    targeted.
+
 The next sweep re-opens at **F293**.

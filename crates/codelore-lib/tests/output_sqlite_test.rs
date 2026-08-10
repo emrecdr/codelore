@@ -66,3 +66,57 @@ fn sqlite_full_dump_roundtrip() {
             .unwrap_or_else(|e| panic!("table {table} missing from sqlite dump: {e}"));
     }
 }
+
+/// A failure to load the sqlite extension must name its two prerequisites.
+///
+/// `INSTALL sqlite` is the one step of the export that reaches outside the
+/// process: it fetches the extension and caches it under `DuckDB`'s home
+/// directory. Both an air-gapped host and a locked-down home land here, and the
+/// bare `DuckDB` error names neither cause — it reads as a bug in the export
+/// rather than a missing prerequisite. That is why `INSTALL`/`LOAD` is issued
+/// as its own statement: the hint attaches to the step it explains, with no
+/// pattern matching against `DuckDB`'s error text.
+///
+/// The failure is induced by pointing `DuckDB`'s own `home_directory` at an
+/// unwritable path, so the test needs neither network isolation nor a mutation
+/// of the process environment. Unix-only because it relies on `chmod` bits,
+/// which do not express "unwritable" the same way on Windows.
+#[cfg(unix)]
+#[test]
+fn sqlite_extension_failure_explains_its_prerequisites() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let repo = codelore_lib::test_support::tiny_repo::build();
+    let opts = Options {
+        repo_path: repo.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    let gix = GixRepo::open(repo.dir.path()).expect("open fixture repo");
+    let db = FactsDb::open_or_ingest(&opts, &gix).expect("ingest fixture");
+
+    let home = repo.dir.path().join("locked-home");
+    std::fs::create_dir(&home).expect("create locked home");
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o500))
+        .expect("make home unwritable");
+    let home_sql = home.display().to_string().replace('\'', "''");
+    db.execute_batch(&format!("SET home_directory='{home_sql}';"))
+        .expect("point DuckDB at the locked home");
+
+    let out = repo.dir.path().join("dump.sqlite");
+    let err = sqlite::write_full_fact_store_sqlite(&db, &opts, &out)
+        .expect_err("an unwritable extension home must fail the export");
+    let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("hint:"),
+        "an extension-load failure must carry a hint, got: {msg}"
+    );
+    for expected in ["network access", "writable cache", ".duckdb/extensions"] {
+        assert!(
+            msg.contains(expected),
+            "the hint must name {expected:?} — the two prerequisites and where the \
+             cache lives are what make it actionable. Got: {msg}"
+        );
+    }
+}
