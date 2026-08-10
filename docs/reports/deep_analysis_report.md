@@ -1255,4 +1255,37 @@ the deferred thresholds scaffold that F276 blocks.
     `HOME` via `std::env::set_var`; the DuckDB setting is both safe and better
     targeted.
 
+### F294 (Refuted) — `calibrate-defects` mining ingest has no truncation witness
+
+*   **Location**: `codelore-cli/src/calibrate_defects.rs` (carried as cycle-6
+    through cycle-8 "M14")
+*   **Severity**: LOW · **Category**: guard coverage
+*   **Claim**: every other ingest site calls `ensure_ingest_witnessed`; the
+    mining ingest does not, so a truncated checkout could calibrate against
+    incomplete history.
+*   **Refuted — the guard cannot fire here.** `ensure_ingest_witnessed` errors
+    only when HEAD resolves *and* `commit_count() == 0`. The scenario it was
+    written for is a depth-1 fetch whose tip is a merge, which the **default**
+    merge filter drops, leaving zero rows. `calibrate-defects` sets
+    `include_merges: true`, so that same commit is ingested rather than
+    filtered. Verified empirically: a `--depth 1` clone of a merge-tipped
+    repository arrives as a *root* commit (git flattens it — its parent list is
+    one token), so the walk yields one commit, never zero. Adding the call
+    would be error handling for a state this tool's option set cannot reach,
+    which the project's own rules forbid.
+*   **What actually bounds the risk** — and it is not the ingest: the tuning
+    floor in `defect_calibration::validate` keeps the default weights and
+    records the reason (`MIN_LINKED_DEFECTS`, `MIN_IMPLICATED_FILES`) when the
+    mined evidence is thin. A shallow checkout therefore produces an artifact
+    whose weights are untuned *and say so*, not one that is silently wrong. The
+    original finding's parenthetical already noted this; it is the whole answer
+    rather than a partial one.
+*   **Residual, deliberately not acted on**: the run still spends the full
+    mining pipeline before the floor reports thin evidence, so the reason lands
+    in the artifact rather than at the point the run was already doomed.
+    Surfacing it earlier needs a "minimum commits worth mining" threshold that
+    does not exist and would have to be invented — a new tunable for a
+    cosmetic gain. Recorded here so a fourth cycle does not re-report the
+    witness as missing.
+
 The next sweep re-opens at **F293**.
