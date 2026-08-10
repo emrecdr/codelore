@@ -1,6 +1,6 @@
 # Hardening cycle 9 — the incident, the refutation, and what held
 
-**Anchor:** `66da4d6` (v0.27.3) · **Baseline:** `e788aec` (cycle-8 anchor, v0.27.2) · **Delta:** 13 commits (PRs #242–#253) plus the v0.27.3 cut.
+**Anchor:** `66da4d6` (v0.27.3) · **Baseline:** `e788aec` (cycle-8 anchor, v0.27.2) · **Delta:** 13 commits — 12 PR merges (#242–#253) plus the v0.27.3 release commit.
 
 Audited from `git archive main` staged read-only; `main` = `origin/main` (last-known) = `66da4d6`; working tree clean apart from the untracked `HANDOFF.md`. Nothing compiled (toolchain pin unreachable from the audit host); every claim is source-anchored. This cycle's brief added a line — *"all consumers of each and every change are checked"* — and this report is largely about that exact discipline: one incident where it failed (partly on this engagement's watch), and the guard rails that held when it did.
 
@@ -43,7 +43,7 @@ Beyond those three stories the delta closed the remaining audit tail: **M11** (t
 
 ## 2. Process observation, filed as a finding because it is one
 
-**The project's signature move is now converting every incident class into a discriminating guard, and the audit's job is shifting accordingly.** The suite as of v0.27.3: pin-agreement across six Rust pin sites; SHA-pinning enforcement for third-party actions; the ledger re-stamp with a release-commit completeness check; `ledger_stamp_test` (which caught F289's own mis-stamp); `tag_trigger_pattern_test` (cross-file: script constant vs workflow globs); `changelog_release_section_test`; the broadened comment-hygiene tokeniser; the canonical pseudo-path list with its iterate-everything test. Every one of these was proved discriminating at introduction (deliberately breaking it and watching it name the file). #248 even ran its own multi-agent review with an explicit rejection recorded ("shadowing `violations` would not have compiled — renamed instead"). The consumer-enumeration discipline this engagement kept preaching is now in the tree as executable policy — which is the strongest possible answer to this cycle's new brief line, and it means future audits should spend proportionally more time on the one thing guards cannot see: the *introduction of a new name, ref, or value whose pattern an existing consumer matches* (§4).
+**The project's signature move is now converting every incident class into a discriminating guard, and the audit's job is shifting accordingly.** The suite as of v0.27.3: pin-agreement across the five Rust pin sites; SHA-pinning enforcement for third-party actions; the ledger re-stamp with a release-commit completeness check; `ledger_stamp_test` (which caught F289's own mis-stamp); `tag_trigger_pattern_test` (cross-file: script constant vs workflow globs); `changelog_release_section_test`; the broadened comment-hygiene tokeniser; the canonical pseudo-path list with its iterate-everything test. Every one of these was proved discriminating at introduction (deliberately breaking it and watching it name the file). #248 even ran its own multi-agent review with an explicit rejection recorded ("shadowing `violations` would not have compiled — renamed instead"). The consumer-enumeration discipline this engagement kept preaching is now in the tree as executable policy — which is the strongest possible answer to this cycle's new brief line, and it means future audits should spend proportionally more time on the one thing guards cannot see: the *introduction of a new name, ref, or value whose pattern an existing consumer matches* (§4).
 
 ---
 
@@ -53,8 +53,7 @@ Beyond those three stories the delta closed the remaining audit tail: **M11** (t
 - **`outputSchema` for the remaining 10 tools** — the #249 pilot sets the pattern (`Json<T>` with the existing serde types); finishing the set is mechanical and is the highest-leverage MCP item.
 - **Gitlink fixture** — one commit with a mode-`160000` entry; the last unprobed differential class.
 - **Schema-vs-resolved-default parity guard** — #244's diagnosis of L1 was precise: *"nothing compared the advertised default to the resolved one"* for three cycles. That comparison is automatable in the file's own test style (parse each tool's param schema doc, assert against `DEFAULT_ROW_CAP`/clamp constants). It would close the L1 *class* the way #232/#242/#253 closed theirs.
-- **Currency:** rmcp `3.1.0` → `3.1.1` (one line); rustc pin `1.96.0` → `1.97.1` now or straight to 1.98 (stable ~2026-08-20, per the verified briefing — re-check the date before acting); `zizmor` in CI (would have flagged F289's trigger overlap class under its audit set); crates.io Trusted Publishing (retires the standing token; the env-guard conditional goes with it).
-- **`gh-pages` is 140 commits behind** — flagged since cycle 8; refresh or declare intentional.
+- **Currency:** rmcp `3.1.0` → `3.1.2` (published 2026-08-07 20:40 UTC; the manifest already requires `"3.1"`, so this is `cargo update -p rmcp` — lockfile-only, not a manifest edit); rustc pin `1.96.0` → `1.97.1` now, with 1.98 landing ~2026-08-27 on the six-week cadence; `zizmor` in CI for the classes it does audit — template-injection, unpinned-uses, permissions (it would *not* have caught F289; see Errata E6); crates.io Trusted Publishing (retires the standing token; the env-guard conditional goes with it).
 
 ---
 
@@ -80,6 +79,21 @@ Beyond those three stories the delta closed the remaining audit tail: **M11** (t
 
 ---
 
-## 6. Method
+## 6. Errata — corrections from post-publication validation (2026-08-10)
+
+A counter-report validated this cycle's claims independently. Eight load-bearing claims were confirmed with anchors. Five were refuted or corrected; all five verify against the tree or the registry and are **accepted**, and the adjudication caught a sixth error the counter-report did not list. The body above has been corrected in place on this unmerged branch; this section records what changed, because a corrected report that hides its corrections would fail the standard it audits by.
+
+- **E1 (accepted — the sharpest one): `gh-pages` is not stale; the original claim read git's tracking arrow backwards.** `git branch -v` showed the *local* `gh-pages` ref `[behind 140]` its upstream — meaning `origin/gh-pages` had moved 140 commits *ahead*, i.e. the branch is being **actively published** (by `ci.yml:383`'s "Publish self-analysis dashboard demo" job on every push to main, plus `bench.yml` — evidence that was in this engagement's own cycle-6 read of `ci.yml`). The item is deleted from §3. The disclosure in §5 (fetch blocked, refs last-known) does not rescue the conclusion: the last-known state already said "remote ahead", which is the opposite of stale. Lesson recorded: **a tracking ref's `behind` describes the local copy, not the branch** — and "commits behind" is the wrong measure entirely for a publishing branch with independent history.
+- **E2 (accepted, both counts): rmcp.** Latest is `3.1.2` (published 2026-08-07 20:40 UTC — about five hours *after* cycle 8's registry check, so cycle 8 was right when written and this cycle repeated it without re-checking). And the bump is not "one line": the workspace manifest requires `"3.1"` (`Cargo.toml:77`), a caret requirement that already admits 3.1.2 — the change is `cargo update -p rmcp`, lockfile-only. A version claim three days old is a stale claim; the engagement's own single-source rule applies to its own prior reports.
+- **E3 (accepted): five Rust pin sites, not six.** The guard's module doc says five (`rust_version_pins_test.rs:3`); "six" conflated the guard's coverage with cycle-6 M19's original enumeration, which included the CHANGELOG mention the guard deliberately does not pin.
+- **E4 (accepted): the anchor line double-counted** — "13 commits plus the cut" where the 13 *includes* the release commit (12 PR merges + the cut). Corrected.
+- **E5 (accepted): Rust 1.98 lands ~2026-08-27**, not ~08-20 — the counter-report re-derived it from the six-week cadence off 1.97.0 (2026-07-16), which beats the briefing's single-source date this report had itself flagged for re-checking. The 1.96.0 → 1.97.1 recommendation stands.
+- **E6 (self-caught during this adjudication): the claim that `zizmor` "would have flagged F289's trigger overlap class" was wrong.** zizmor audits workflow files for known defect classes (template-injection, unpinned-uses, excessive permissions, cache-poisoning); a semantically valid `v*` trigger glob colliding with a tag that a *shell script* moves is a cross-file semantic coupling outside its audit set — which is exactly why #242's bespoke `tag_trigger_pattern_test` was the right fix. The zizmor recommendation survives on its real merits; the F289 justification does not.
+
+Standing corrections to the method, both self-inflicted-error classes now twice observed: **re-verify any currency claim at report time, not engagement time** (E2, E5), and **when quoting a git status/tracking figure, state what it measures before drawing a conclusion from it** (E1).
+
+---
+
+## 7. Method
 
 Small delta, first-hand throughout: every commit read (message and diff), the two refutations adjudicated against the original findings' exact text, the incident chain traced end-to-end (trigger globs → guard test → ledger stamps → registry cleanup), final-state anchors verified in the extracted tree (caps, hint, schema pilot, guard-test files), residuals and currency swept by anchor, rmcp re-verified against crates.io earlier in the engagement window. Adversarial validation with default REFUTED — which this cycle ran in both directions: two of their refutations tested against my findings (one accepted, one noted as theirs), and my own cycle-8 verdict re-tested against the incident evidence and overturned. The report is shorter than its predecessors because the tree keeps giving the audit less to find — and because two of its sharpest findings this cycle were about the audit itself.
