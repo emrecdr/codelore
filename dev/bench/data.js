@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785752453236,
+  "lastUpdate": 1786349786834,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -349,6 +349,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 92380779,
             "range": "± 2315786",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "51da60681e22e05efecf308325bed89740726cbf",
+          "message": "fix(output): explain what a failed sqlite export needs (#251)\n\nThe emitter ran `INSTALL sqlite; LOAD sqlite;` in the same batch as the\nATTACH and the ten table copies, mapping any failure to\n`format!(\"sqlite: {e}\")`. INSTALL fetches the extension over the network\non first use and caches it under DuckDB's home directory, so an\nair-gapped or locked-down host got a bare DuckDB error labelled \"sqlite\"\n— indistinguishable from a bug in the export itself.\n\nINSTALL/LOAD is now its own statement, so the hint attaches to the one\nstep that reaches outside the process rather than to every sqlite error.\nThe structure does the discrimination; matching DuckDB's error text would\nrot.\n\nThe first draft of the hint said only \"needs network access\".\nReproducing the failure showed the same arm is reached by an unwritable\ncache directory — a permission error with no network involved — so it\nnames both causes, where the cache lives, and the two ways out.\n\nThe test induces the failure by pointing DuckDB's own `home_directory` at\nan unwritable path, needing neither network isolation nor a mutation of\nthe process environment. The workspace's forbidden `unsafe_code` rejected\nthe first attempt, which set HOME through `std::env::set_var`; the DuckDB\nsetting is both safe and better targeted. Verified discriminating —\nstripping the hint fails it on the bare error.\n\nCloses M15 from the cycle-8 carried set, logged as F293.\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-08-10T06:53:33Z",
+          "url": "https://github.com/emrecdr/codelore/commit/51da60681e22e05efecf308325bed89740726cbf"
+        },
+        "date": 1786349785090,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 51725116,
+            "range": "± 3272383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 91192811,
+            "range": "± 1683890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 91653273,
+            "range": "± 1091363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 90917475,
+            "range": "± 1118134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 90949894,
+            "range": "± 1671666",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 91392543,
+            "range": "± 2041606",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 91105079,
+            "range": "± 975991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 90779667,
+            "range": "± 457495",
             "unit": "ns/iter"
           }
         ]
