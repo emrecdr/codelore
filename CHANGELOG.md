@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.27.3] - 2026-08-10
+
 ### Added
 
 - **A failing `--format sqlite` export now names what it needs.** The export's first statement is `INSTALL sqlite`, the one step that reaches outside the process: it fetches the extension and caches it under DuckDB's home directory. On an air-gapped or locked-down host that fails with a bare DuckDB error attributed to "sqlite", which reads as a bug in the export rather than a missing prerequisite. The failure now carries a hint naming both requirements — network access and a writable cache — where the cache lives, and the two ways out: prime it once where both are available and copy it across, or pick another `--format`. `INSTALL`/`LOAD` is issued as its own statement so the hint attaches to the step it explains, rather than to every sqlite error or by pattern-matching DuckDB's error text.

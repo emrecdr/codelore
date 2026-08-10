@@ -578,7 +578,7 @@ turned out to be mis-stated by the reports that logged them.
     release disagrees with current thresholds". Deliberately not marked
     `continue-on-error`, which would make the job decorative.
 
-### F271 (Fixed — Unreleased, partial) — MCP tools hand-roll JSON into a text block instead of declaring structured output
+### F271 (Fixed — v0.27.3, partial) — MCP tools hand-roll JSON into a text block instead of declaring structured output
 
 *   **Location**: `codelore-cli/src/mcp.rs` — all eleven `#[tool]` bodies return `Result<String, ErrorData>`
 *   **Severity**: LOW-MED · **Category**: protocol fidelity (optional)
@@ -785,7 +785,7 @@ the deferred thresholds scaffold that F276 blocks.
     where it is already canonical), and asserts they differ *before* asserting
     the keys match. Verified to fail against the pre-fix behaviour.
 
-### F278 (Fixed — Unreleased) — the hygiene guard's ID vocabulary is `F`-plus-digits only
+### F278 (Fixed — v0.27.3) — the hygiene guard's ID vocabulary is `F`-plus-digits only
 
 *   **Location**: `codelore-lib/tests/comment_hygiene_test.rs::is_task_id`
 *   **Severity**: LOW · **Category**: guard coverage
@@ -1129,7 +1129,7 @@ the deferred thresholds scaffold that F276 blocks.
     a check that spans both files, because no reviewer reading either file
     alone can see the hazard.
 
-### F290 (Fixed — Unreleased) — the two remaining MCP tools that returned unbounded violation lists
+### F290 (Fixed — v0.27.3) — the two remaining MCP tools that returned unbounded violation lists
 
 *   **Location**: `codelore-cli/src/mcp.rs` — `check_gates` (JSON `violations`),
     `render_gate_changes` (text violation loop)
@@ -1163,7 +1163,7 @@ the deferred thresholds scaffold that F276 blocks.
     capped and an uncapped call while the row counts differ. Verified
     discriminating — removing the `truncate` fails it.
 
-### F291 (Fixed — Unreleased) — a `limit` schema description contradicted the handler for three cycles
+### F291 (Fixed — v0.27.3) — a `limit` schema description contradicted the handler for three cycles
 
 *   **Location**: `codelore-cli/src/mcp.rs::RefactoringTargetsParams::limit`
 *   **Severity**: LOW · **Category**: agent-facing contract accuracy
@@ -1183,7 +1183,7 @@ the deferred thresholds scaffold that F276 blocks.
     string is the contract. Verified discriminating — restoring the old wording
     fails it by name.
 
-### F292 (Fixed — Unreleased) — a container tag from the `v1` incident survives in the registry
+### F292 (Fixed — v0.27.3) — a container tag from the `v1` incident survives in the registry
 
 *   **Location**: `ghcr.io/emrecdr/codelore:v1` (registry state, not source)
 *   **Severity**: LOW · **Category**: published-surface debris
@@ -1228,7 +1228,7 @@ the deferred thresholds scaffold that F276 blocks.
     `v0.27.0` and `v0.26.0` all still resolve to their original digests. The
     tag count fell by exactly two, so nothing else was caught in the delete.
 
-### F293 (Fixed — Unreleased) — a failed sqlite export gave no hint about its prerequisites
+### F293 (Fixed — v0.27.3) — a failed sqlite export gave no hint about its prerequisites
 
 *   **Location**: `codelore-lib/src/output/sqlite.rs`
 *   **Severity**: LOW · **Category**: actionable diagnostics
