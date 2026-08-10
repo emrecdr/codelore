@@ -37,7 +37,7 @@ Beyond those three stories the delta closed the remaining audit tail: **M11** (t
 | C8 outputSchema option | ⏳ Started (#249) — 1 of 11 tools (`check_gates` → `Json<GateSummary>`); a pilot, presumably deliberate |
 | C6-M8 MCP cancellation | ⬜ Open — zero `RequestContext` reads; unchanged |
 | Gitlink differential fixture | ⬜ Open — the fourth content class remains unprobed |
-| rmcp 3.1.1 / rustc 1.97.1 / zizmor / OIDC | ⬜ Not adopted — see §3 |
+| rmcp 3.1.2 / rustc 1.97.1 / zizmor / OIDC | ⬜ Not adopted — see §3 (targets corrected per E2/E5/E6) |
 
 ---
 
@@ -49,10 +49,9 @@ Beyond those three stories the delta closed the remaining audit tail: **M11** (t
 
 ## 3. Open items and options (the whole list)
 
-- **M8 — MCP cancellation** (last substantive cycle-6 residual): no handler observes the per-request token; a cancelled cold call holds a semaphore permit to ingest completion. With `Json<T>` adoption starting, threading `RequestContext` through the handlers is the natural companion change.
-- **`outputSchema` for the remaining 10 tools** — the #249 pilot sets the pattern (`Json<T>` with the existing serde types); finishing the set is mechanical and is the highest-leverage MCP item.
-- **Gitlink fixture** — one commit with a mode-`160000` entry; the last unprobed differential class.
-- **Schema-vs-resolved-default parity guard** — #244's diagnosis of L1 was precise: *"nothing compared the advertised default to the resolved one"* for three cycles. That comparison is automatable in the file's own test style (parse each tool's param schema doc, assert against `DEFAULT_ROW_CAP`/clamp constants). It would close the L1 *class* the way #232/#242/#253 closed theirs.
+- **M8 — MCP cancellation** (last substantive cycle-6 residual): no handler observes the per-request token; a cancelled cold call holds a semaphore permit to ingest completion. The finding is confirmed (`RequestContext` occurs zero times in `mcp.rs`), but threading it is not by itself the fix — see E9.
+- **`outputSchema` for the remaining 10 tools** — the #249 pilot sets the pattern (`Json<T>` with the existing serde types). Per-tool design work, **not mechanical** — see E8.
+- **Gitlink fixture** — one commit with a mode-`160000` entry; the last unprobed differential class. **The one substantive open item on this list.**
 - **Currency:** rmcp `3.1.0` → `3.1.2` (published 2026-08-07 20:40 UTC; the manifest already requires `"3.1"`, so this is `cargo update -p rmcp` — lockfile-only, not a manifest edit); rustc pin `1.96.0` → `1.97.1` now, with 1.98 landing ~2026-08-27 on the six-week cadence; `zizmor` in CI for the classes it does audit — template-injection, unpinned-uses, permissions (it would *not* have caught F289; see Errata E6); crates.io Trusted Publishing (retires the standing token; the env-guard conditional goes with it).
 
 ---
@@ -74,14 +73,14 @@ Beyond those three stories the delta closed the remaining audit tail: **M11** (t
 ## 5. Housekeeping
 
 - **Branch list is `main` + `gh-pages`** — all prior report and fix branches merged and deleted; cycle-8's report landed via #243.
-- **This cycle's artifacts** (`cl273.tar`, `delta9.patch`, ~9.7 MB) are in `_to_delete/cycle9-audit-artifacts/`; `rm -rf _to_delete` when convenient (the bridge cannot unlink). `HANDOFF.md` remains untracked and yours. The usual `tmp_obj_*` strays clear with `find .git/objects -name 'tmp_obj_*' -delete`.
+- **This cycle's artifacts are cleared.** `_to_delete/cycle9-audit-artifacts/` (`cl273.tar`, `delta9.patch`) and the five `tmp_obj_*` strays were removed during adjudication; both artifacts reproduce from `git archive` and `git diff`, so nothing unrecoverable went with them. The stale `origin/fix/changelog-release-section` tracking ref was pruned and the local `gh-pages` ref fast-forwarded to its upstream — the ref whose staleness produced E1. `HANDOFF.md` remains untracked and yours.
 - **This report** is committed to branch `docs/hardening-cycle-9`, based on `main` (`66da4d6`), for landing via PR per the #236/#243 convention.
 
 ---
 
 ## 6. Errata — corrections from post-publication validation (2026-08-10)
 
-A counter-report validated this cycle's claims independently. Eight load-bearing claims were confirmed with anchors. Five were refuted or corrected; all five verify against the tree or the registry and are **accepted**, and the adjudication caught a sixth error the counter-report did not list. The body above has been corrected in place on this unmerged branch; this section records what changed, because a corrected report that hides its corrections would fail the standard it audits by.
+A counter-report validated this cycle's claims independently. Eight load-bearing claims were confirmed with anchors. Five were refuted or corrected; all five verify against the tree or the registry and are **accepted**, and the adjudication caught a sixth error the counter-report did not list. A second pass over §3 — the section that is nothing but prescriptions — found three more (E7–E9), all in recommendations rather than claims. The body above has been corrected in place on this unmerged branch; this section records what changed, because a corrected report that hides its corrections would fail the standard it audits by.
 
 - **E1 (accepted — the sharpest one): `gh-pages` is not stale; the original claim read git's tracking arrow backwards.** `git branch -v` showed the *local* `gh-pages` ref `[behind 140]` its upstream — meaning `origin/gh-pages` had moved 140 commits *ahead*, i.e. the branch is being **actively published** (by `ci.yml:383`'s "Publish self-analysis dashboard demo" job on every push to main, plus `bench.yml` — evidence that was in this engagement's own cycle-6 read of `ci.yml`). The item is deleted from §3. The disclosure in §5 (fetch blocked, refs last-known) does not rescue the conclusion: the last-known state already said "remote ahead", which is the opposite of stale. Lesson recorded: **a tracking ref's `behind` describes the local copy, not the branch** — and "commits behind" is the wrong measure entirely for a publishing branch with independent history.
 - **E2 (accepted, both counts): rmcp.** Latest is `3.1.2` (published 2026-08-07 20:40 UTC — about five hours *after* cycle 8's registry check, so cycle 8 was right when written and this cycle repeated it without re-checking). And the bump is not "one line": the workspace manifest requires `"3.1"` (`Cargo.toml:77`), a caret requirement that already admits 3.1.2 — the change is `cargo update -p rmcp`, lockfile-only. A version claim three days old is a stale claim; the engagement's own single-source rule applies to its own prior reports.
@@ -90,7 +89,11 @@ A counter-report validated this cycle's claims independently. Eight load-bearing
 - **E5 (accepted): Rust 1.98 lands ~2026-08-27**, not ~08-20 — the counter-report re-derived it from the six-week cadence off 1.97.0 (2026-07-16), which beats the briefing's single-source date this report had itself flagged for re-checking. The 1.96.0 → 1.97.1 recommendation stands.
 - **E6 (self-caught during this adjudication): the claim that `zizmor` "would have flagged F289's trigger overlap class" was wrong.** zizmor audits workflow files for known defect classes (template-injection, unpinned-uses, excessive permissions, cache-poisoning); a semantically valid `v*` trigger glob colliding with a tag that a *shell script* moves is a cross-file semantic coupling outside its audit set — which is exactly why #242's bespoke `tag_trigger_pattern_test` was the right fix. The zizmor recommendation survives on its real merits; the F289 justification does not.
 
-Standing corrections to the method, both self-inflicted-error classes now twice observed: **re-verify any currency claim at report time, not engagement time** (E2, E5), and **when quoting a git status/tracking figure, state what it measures before drawing a conclusion from it** (E1).
+- **E7 (accepted): the "schema-vs-resolved-default parity guard" was already shipped, by the very commit whose diagnosis it quotes.** #244 closed the *class*, not only the instance: the `tools/list` test asserts, against the schema an agent actually receives, that no `limit` description advertises an uncapped default and that each names the cap the handler applies (`mcp_test.rs:252-273`). Recommending it as open work meant reading a commit's problem statement without reading its tests.
+- **E8 (accepted): "finishing the `outputSchema` set is mechanical" is contradicted by this project's own ledger.** The entry records, per tool, why it is not: the ten remaining returns are heterogeneous — bare arrays, objects, arrays carrying a trailing `{omitted, total, note}` summary, and a plain-text briefing from `change_context` — and that trailing-summary shape would have to be redesigned to fit a schema. Logged as per-tool design work, deliberately deferred under the minimum-surface rule. This is §4's own error, verbatim, one section later.
+- **E9 (accepted): the M8 prescription is incomplete as written.** The finding is confirmed, but "thread `RequestContext` through the handlers" does not by itself deliver cancellation: the ingest runs under `tokio::task::spawn_blocking`, which cannot be aborted, so observing the token lets a handler stop *waiting* while the permit and the work continue. A fix must first decide what cancellation is meant to release — the permit, the wait, or nothing.
+
+Standing corrections to the method, all now twice observed: **re-verify any currency claim at report time, not engagement time** (E2, E5); **when quoting a git status/tracking figure, state what it measures before drawing a conclusion from it** (E1); and — the one E7–E9 share — **a recommendation is a claim about the tree's future and inherits the same burden as a claim about its present, including the claim that it has not already been implemented.** Two of the four items in §3 were already done or already refuted at the moment they were written, and the section that carried them is the one §4 had just finished apologising for.
 
 ---
 
