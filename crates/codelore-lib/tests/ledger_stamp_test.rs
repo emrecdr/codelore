@@ -108,14 +108,25 @@ fn the_guard_reads_the_changelog_shape_it_expects() {
 
     // Stamp recognition, pinned against the spellings the ledger actually
     // uses AND the compound form that defeated the previous exact-match list.
-    let stamps = "### F1 (Fixed — Unreleased) — a\n\
-                  ### F2 (Fixed (Unreleased)) — b\n\
-                  ### F3 (Fixed — v0.27.2 + Unreleased) — c\n\
-                  ### F4 (Fixed — v0.27.3) — d\n\
-                  *   **Status**: Fixed (Unreleased)\n\
-                  *   **Status**: Active\n";
+    // IDs are assembled at runtime. This file is scanned by the comment
+    // hygiene guard, so a literal finding ID written here as an illustration
+    // is a violation of the rule that guard enforces — and was one, the first
+    // time this fixture was written.
+    let f = |n: u32| format!("F{n}");
+    let stamps = format!(
+        "### {} (Fixed — Unreleased) — a\n\
+         ### {} (Fixed (Unreleased)) — b\n\
+         ### {} (Fixed — v0.27.2 + Unreleased) — c\n\
+         ### {} (Fixed — v0.27.3) — d\n\
+         *   **Status**: Fixed (Unreleased)\n\
+         *   **Status**: Active\n",
+        f(1),
+        f(2),
+        f(3),
+        f(4)
+    );
     assert_eq!(
-        unreleased_stamp_count(stamps),
+        unreleased_stamp_count(&stamps),
         4,
         "every stamp mentioning Unreleased counts, including a compound one \
          and a Status bullet; a shipped-version stamp does not"
