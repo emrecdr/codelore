@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The SPA escaping guard discovers widget sources from the directory instead of listing them.** The guard named the ten widget files in a table of its own, duplicating the concatenation in `output::spa`. A list like that has to be edited twice — once beside the emitter, once beside the guard — and the edit that gets forgotten is the second one, which would have left a newly added widget unscanned in precisely the case the guard exists for: a file that never adopted the escaping convention. Reading the directory removes the second edit site, and follows `comment_hygiene_test`, which already walks its scan roots from `CARGO_MANIFEST_DIR` and pins the walk with an assertion that it found something — a clean run and a broken path resolver are otherwise indistinguishable. Verified by restoring the pre-fix architecture widget and confirming the guard reports its ten sinks, so the walk reaches real files and the matcher still fires on the defect it was written for.
+
 ## [0.27.4] - 2026-08-12
 
 ### Security
