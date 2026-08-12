@@ -18,9 +18,20 @@
 //!
 //! What it checks: in any statement that also builds markup, an accessor
 //! naming a repository-derived string must sit inside `escapeHtml(...)`.
-//! Numeric fields are not listed — they cannot carry markup — and the
-//! accessor list is derived from the JSON payload's string fields rather
-//! than from an exemption list, so it does not rot as widgets change.
+//! Numeric fields are not listed — they cannot carry markup.
+//!
+//! The accessor list is **curated, not derived**. The analyses carry
+//! roughly seventy distinct `String` field names between them and this list
+//! names a fraction: most of the rest are computed rather than
+//! repository-derived — a band, a verdict, a trend, a date, a revision
+//! hash — and cannot carry a metacharacter no matter what the analysed
+//! repository contains. Curation is what keeps the list short enough to
+//! read, and it is also the standing liability: a genuinely
+//! repository-derived field is covered only if someone adds it. Two are
+//! knowingly absent, because a single-letter accessor cannot work under
+//! prefix matching — `.a` would swallow `.author`, `.added` and
+//! `.arch_band` — so the function-coupling endpoints are unguarded should
+//! they ever be rendered rather than used as lookup keys.
 //!
 //! What it does not check: markup assembled across statement boundaries —
 //! including a repository string parked in a local by one statement and
@@ -83,6 +94,7 @@ const RAW_STRING_ACCESSORS: &[&str] = &[
     ".module",
     ".tag",
     ".name",
+    ".function",
     "order[",
     "_author",
     "_path",
@@ -327,6 +339,16 @@ fn the_guard_reaches_table_markup_and_qualifier_first_fields() {
         unescaped_sinks("html += '<td>' + escapeHtml(r.main_author || '') + '</td>';").len(),
         0,
         "must accept the escaped compound field"
+    );
+
+    // A function name is parsed out of the analysed repository's source, so
+    // it carries whatever that source put in an identifier position — the
+    // same provenance as a path, and rendered in the same drawer.
+    let parsed_identifier = "html += '<li><code>' + (f.function || '') + '</code></li>';";
+    assert_eq!(
+        unescaped_sinks(parsed_identifier).len(),
+        1,
+        "a function name parsed from the analysed source is repository-derived"
     );
 
     let suffix = "return '<div>' + p.entity_a + '</div>';";

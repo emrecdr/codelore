@@ -22,9 +22,28 @@ use std::path::{Path, PathBuf};
 const LEDGER: &str = "docs/reports/deep_analysis_report.md";
 const CHANGELOG: &str = "CHANGELOG.md";
 
-/// Both spellings in use. A sweep that handled only one would leave half the
-/// rows stale while looking finished, so the guard counts both.
-const UNRELEASED_MARKS: &[&str] = &["Fixed (Unreleased)", "Fixed — Unreleased"];
+/// True where a finding's status is written: the parenthetical of a `### F…`
+/// heading, or a `**Status**:` bullet in the carried-forward sections. Prose
+/// that merely discusses the section is not a stamp and must not count.
+fn is_stamp_line(line: &str) -> bool {
+    line.starts_with("### F") || line.contains("**Status**:")
+}
+
+/// Stamps claiming work that has not shipped.
+///
+/// Asking whether a stamp *mentions* `Unreleased` — rather than matching a
+/// list of exact spellings — is the point. The list this replaced held two,
+/// and a compound stamp, one half shipped in a release and the other still
+/// pending, matched neither. A row claiming unreleased work was therefore
+/// invisible to the guard written to find exactly that claim, and stayed
+/// wrong for two releases after the work had shipped. A rule that enumerates
+/// the spellings it has seen fails on the next one.
+fn unreleased_stamp_count(ledger: &str) -> usize {
+    ledger
+        .lines()
+        .filter(|l| is_stamp_line(l) && l.contains("Unreleased"))
+        .count()
+}
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -52,10 +71,7 @@ fn unreleased_ledger_stamps_have_changelog_entries_behind_them() {
     let ledger = std::fs::read_to_string(root.join(LEDGER)).expect("read findings ledger");
     let changelog = std::fs::read_to_string(root.join(CHANGELOG)).expect("read CHANGELOG");
 
-    let stamped: usize = UNRELEASED_MARKS
-        .iter()
-        .map(|m| ledger.matches(m).count())
-        .sum();
+    let stamped = unreleased_stamp_count(&ledger);
     let entries = unreleased_entry_count(&changelog);
 
     assert!(
@@ -88,6 +104,32 @@ fn the_guard_reads_the_changelog_shape_it_expects() {
         unreleased_entry_count(drained),
         0,
         "a drained section has no entries even though later sections do"
+    );
+
+    // Stamp recognition, pinned against the spellings the ledger actually
+    // uses AND the compound form that defeated the previous exact-match list.
+    let stamps = "### F1 (Fixed — Unreleased) — a\n\
+                  ### F2 (Fixed (Unreleased)) — b\n\
+                  ### F3 (Fixed — v0.27.2 + Unreleased) — c\n\
+                  ### F4 (Fixed — v0.27.3) — d\n\
+                  *   **Status**: Fixed (Unreleased)\n\
+                  *   **Status**: Active\n";
+    assert_eq!(
+        unreleased_stamp_count(stamps),
+        4,
+        "every stamp mentioning Unreleased counts, including a compound one \
+         and a Status bullet; a shipped-version stamp does not"
+    );
+
+    // Prose discussing the section is not a stamp. The previous rule matched
+    // anywhere in the document, so a sentence quoting a stamp would have
+    // counted as one.
+    let prose = "The stamp read \"+ Unreleased\" for two releases after the \
+                 work shipped, which is the rot this guard exists to catch.\n";
+    assert_eq!(
+        unreleased_stamp_count(prose),
+        0,
+        "a sentence about unreleased stamps is not itself a stamp"
     );
 
     // And the ledger itself must be readable and non-trivial, or the real
