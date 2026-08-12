@@ -210,6 +210,14 @@ F84, F88 (silent ODB skip rationale), F95 (window filter at ingest level), F116 
 
 ## 4. Active Findings
 
+**Reading the locations below.** File and line references are as-of-discovery
+and several predate the module splits that broke `main.rs`, `output/csv.rs`
+and `output/markdown.rs` into directories — a line number here may point
+nowhere. The finding is identified by the symbol and behaviour described, not
+by its coordinates; re-locate before acting. Counts and constant *values* are
+a different matter — those are claims, and where a re-validation found one
+wrong it has been corrected in place rather than left to mislead.
+
 ### 4.1 Carried forward from prior passes (re-validated 2026-07-01)
 
 #### F173 — Same HEAD blobs read + tree re-walked up to 3× across complexity/clones/imports
@@ -218,15 +226,15 @@ F84, F88 (silent ODB skip rationale), F95 (window filter at ingest level), F116 
 *   **State on main**: Still three sequential HEAD passes each re-reading live blobs. Only `head_rev`/`live_paths` were hoisted once (SQL path-queries no longer repeated); blob reads + tree walks still happen 3×. Deepened by the newly-found per-file re-resolution cost in **F206** — even a single deduped pass keeps paying F206's per-file HEAD/commit/tree decode.
 *   **Deferral blocker**: divergent extractor error contracts (clones aborts ingest via `collect::<Result>>?`; complexity/imports warn-and-skip) + the memory-regression risk of hoisting all live blobs into one map. Needs a bounded shared-blob LRU or unified error contracts first.
 
-#### F119 — Hand-rolled CSV emitter (now 1122 LOC) instead of the `csv` crate
-*   **Location**: `output/csv.rs`
+#### F119 — Hand-rolled CSV emitter (now 1692 LOC) instead of the `csv` crate
+*   **Location**: `output/csv/` — a seven-file module since the split; no longer the single `output/csv.rs` this finding was written against
 *   **Severity**: MED · **Category**: tool replacement · **Status**: Active (re-scoped)
-*   **State on main**: Still hand-rolled (`wc -l` = 1122, up from ~826; no `csv` dep). **Re-scope note**: no longer a clean byte-identical swap — the emitter now carries a deliberate formula-injection guard (F170) and `\n` line endings; the `csv` crate would change both. Any migration must preserve the injection guard + line-ending contract, or the swap is rejected.
+*   **State on main**: Still hand-rolled (1692 LOC across the module, up from 1122; no `csv` dep). **Re-scope note**: no longer a clean byte-identical swap — the emitter now carries a deliberate formula-injection guard (F170) and `\n` line endings; the `csv` crate would change both. Any migration must preserve the injection guard + line-ending contract, or the swap is rejected.
 
-#### F148 — `csv.rs` + `markdown.rs` per-analysis emitters, no shared row abstraction
-*   **Location**: `output/csv.rs` (~34 KB, 43 `write_*` fns), `output/markdown.rs` (~36 KB)
+#### F148 — `output/csv` + `output/markdown` per-analysis emitters, no shared row abstraction
+*   **Location**: `output/csv/` (1692 LOC, 58 `write_*` fns), `output/markdown/` (1863 LOC, 58 `write_*` fns)
 *   **Severity**: LOW · **Category**: copy-paste drift · **Status**: Active
-*   **State on main**: Both grew past the previously-noted ~25 KB; still one `write_*` fn per analysis, no `TabularEmit`/row trait. Coupled to F119 (csv-crate) + F161 (streaming) — treat as one output-layer cluster.
+*   **State on main**: Both were since split from single files into seven-file modules, which addressed the file-size symptom and not the finding: still one `write_*` fn per analysis on each side, in lockstep at 58 apiece (up from 43), with no `TabularEmit`/row trait. The parallel counts are the finding — every analysis added costs two near-identical emitters. Coupled to F119 (csv-crate) + F161 (streaming) — treat as one output-layer cluster.
 
 #### F161 — Every emitter materializes the full `Vec<Row>` — no streaming path
 *   **Location**: `output/json.rs:29`, `sarif.rs:90`, `markdown.rs` — all `rows: &[T]`
@@ -234,9 +242,9 @@ F84, F88 (silent ODB skip rationale), F95 (window filter at ingest level), F116 
 *   **State on main**: All emitters still take a fully-materialized slice; no `EmitterStream`. Peak memory grows with row count; a 200k-path monorepo CSV export can spike multi-GB. SARIF stays batch (needs run-level totals); CSV/JSON/markdown are the streamable targets.
 
 #### F177 — Three schema-version sentinels still coexist
-*   **Location**: `facts/schema.rs:10` (`CURRENT_SCHEMA_VERSION="3"`), `cache.rs:25` (`CACHE_EPOCH="schema_v5"`), `schema_v1.sql` filename literal; stray `"schema_v3"` help-text at `main.rs:373`
+*   **Location**: `facts/schema.rs` (`CURRENT_SCHEMA_VERSION`, now `"8"`), `cache.rs` (`CACHE_EPOCH`, now `"schema_v18"`), `schema_v1.sql` filename literal reached through `facts::schema::SCHEMA_V1`
 *   **Severity**: MED · **Category**: duplicated source-of-truth · **Status**: PARTIAL
-*   **State on main**: Both named sub-fixes landed — CLI `profile` now derives the schema string from `CURRENT_SCHEMA_VERSION`, and the cache sentinel was renamed to the honest `CACHE_EPOCH` (matches CLAUDE.md). But three version constants remain structurally disjoint (none derived from another) and a stray `"schema_v3"` help literal persists. Residual: unify or cross-reference the three; fix the stray literal.
+*   **State on main**: Both named sub-fixes landed — CLI `profile` now derives the schema string from `CURRENT_SCHEMA_VERSION`, and the cache sentinel was renamed to the honest `CACHE_EPOCH` (matches CLAUDE.md). But three version constants remain structurally disjoint (none derived from another), and they have drifted independently since — `CURRENT_SCHEMA_VERSION` is now `"8"` while `CACHE_EPOCH` reads `"schema_v18"`, two sentinels whose shared `schema_v` spelling implies a correspondence that does not exist. The stray `"schema_v3"` help literal is **gone** (0 occurrences), so that half of the residual is closed. Residual: unify or cross-reference the three, or rename `CACHE_EPOCH`'s value so it stops looking like a schema version.
 
 #### F186 — Bench regression gate never runs on PRs (advisory-only weekly cron)
 *   **Location**: `.github/workflows/bench.yml:3` (`schedule` + `workflow_dispatch`, no `pull_request`), `:116` (`fail-on-alert: false`)
@@ -265,11 +273,11 @@ The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and
 
 #### Rust idioms / error handling
 
-##### F215 — Stringly-typed `format: &str` re-matched with `unreachable!()` in ~11 dispatchers
-*   **Location**: `codelore-cli/src/main.rs:705` + sibling dispatch fns; also `args.output…expect("validated above")` at `:751/757`
-*   **Severity**: LOW · **Category**: type-safety / simplification (optional) · **Status**: Deferred (large refactor)
-*   **Description**: `--format` is validated once then re-matched in many dispatchers, each carrying an `unreachable!("format validated…")` arm — a hand-maintained invariant a parse-once `enum Format` would make compile-time-total, deleting the arms + the "validated above" coupling.
-*   **Suggested improvement**: Parse `--format` into a `Format` enum at the boundary and thread it through dispatch. A non-trivial refactor across ~11 dispatchers — flagged, not forced.
+##### F215 — Stringly-typed `format: &str` re-matched with `unreachable!()`
+*   **Location**: `codelore-cli/src/analyze.rs` — one `unreachable!("format validated by outer matches!()")` arm
+*   **Severity**: LOW · **Category**: type-safety / simplification (optional) · **Status**: Active (largely overtaken)
+*   **Description**: `--format` is validated once then re-matched in dispatch, carrying an `unreachable!("format validated…")` arm — a hand-maintained invariant a parse-once `enum Format` would make compile-time-total.
+*   **Re-validated**: the finding was written against `main.rs` when it was a ~6700-line monolith and claimed ~11 such dispatchers. The monolith split dissolved most of that: **exactly one** `unreachable!` remains in the whole CLI crate. What is left is a one-site cleanup, not the cross-cutting refactor this entry was deferred as — and small enough that the `enum Format` argument no longer carries its own weight. Re-scope or close.
 
 #### SPA / UI / UX
 
@@ -655,7 +663,7 @@ turned out to be mis-stated by the reports that logged them.
     injecting drift into both a file pin and a workflow tag and confirming the
     guard names both — a drift guard that cannot fail is worth nothing.
 
-## 9. First-run UX pass (F273–F283)
+## 9. First-run UX pass (F273–F283), plus findings appended after it (F284–F294)
 
 Validated against the shipped 0.26.0 binary, not inferred. This section is
 the F-ledger and the record of the pass; `2026-08-06-first-run-ux-review.md`
@@ -827,7 +835,7 @@ the deferred thresholds scaffold that F276 blocks.
     fails the gate, which is the guard behaving correctly and was observed
     twice while writing it.
 
-### F279 (Fixed — v0.27.2 + Unreleased) — a ticket ID shipped in user-facing help
+### F279 (Fixed — v0.27.2 + v0.27.3) — a ticket ID shipped in user-facing help
 
 *   **Location**: `args.rs` (fixed); `analyze.rs`, `explain.rs`, `options.rs`, `clone_coupling.rs` (remaining)
 *   **Severity**: LOW · **Category**: convention violation
@@ -838,7 +846,7 @@ the deferred thresholds scaffold that F276 blocks.
     library doc comments and inline comments are not user-facing but are the
     same violation; clearing them is gated on F278's anchored rule, so they are
     fixed and guarded together rather than piecemeal.
-*   **Closed**: the remainder is cleared with F278's rule, as planned. The
+*   **Closed (v0.27.3)**: the remainder is cleared with F278's rule, which landed in that release. Re-validated: all five files this finding named carry no ID markers. The stamp read "+ Unreleased" for two releases after the work shipped — the exact rot `ledger_stamp_test` exists to catch, and invisible to it because a compound stamp matches neither spelling it counts. The
     sweep found one more user-facing instance than this finding listed —
     `codelore explain knowledge-islands` printed a task ID in its **Citation**
     field, which the original `--help` search did not reach because it looked
@@ -1363,7 +1371,7 @@ came out of that rotation, which is the argument for doing it.
     decoration** — and the version that is easy to add is exactly the version
     that does not work.
 
-## 11. Cycle-11 audit of the guard cycle 10 asked for (F297–F298)
+## 11. Cycle-11 audit of the guard cycle 10 asked for (F297–F299)
 
 The delta was small, so the pass adversarially tested the *guard* added by
 F295 rather than re-reading the code it protects. Its report reached the
@@ -1434,6 +1442,40 @@ review and change nothing.
     merely recorded, because widening markup detection (F297) increases the
     number of statements walked, and therefore its exposure.
 
+### F299 (Fixed — Unreleased) — the comment-hygiene guard could not see hyphen-joined phase markers
+
+*   **Location**: `codelore-lib/tests/comment_hygiene_test.rs` — `line_has_keyword_number`, `line_has_plan_marker`
+*   **Severity**: LOW · **Category**: test reach / convention enforcement
+*   **Defect**: the guard forbids audit and phase markers in source and enforced
+    it two ways — bare `F`/`T`-plus-digits tokens, and a keyword followed by
+    spaces then a number. One audit pass joined its name to its number with a
+    **hyphen**, which fell between both rules: the token scans split at the
+    hyphen into a bare word and a bare digit, neither of which is an ID, and
+    the keyword scan stopped at a separator it did not expect.
+*   **Scope**: four markers in `analyses/coupling.rs`, `analyses/soc.rs` and
+    `output/csv/coupling.rs` — inside the scanned roots, across every cycle
+    this guard has run, while it reported clean.
+*   **Found by**: validating F279's closure claim. That claim proved *correct*
+    for its own scope — all five files it names are clean — but the check that
+    established it surfaced a marker family F279 never listed. A finding
+    verified rather than assumed is what turned up the one next to it.
+*   **Fix**: the keyword rule accepts a single `-`/`_` joiner, and the pass
+    name joins `Plan`/`Task` in a named keyword list. The four comments were
+    rewritten to state the code-maat compatibility contract they describe
+    without the marker — the explanations were correct, only the prefix was
+    history.
+*   **Verified**: restoring one marker fails the new guard naming its file and
+    line, where the previous rule passed; the self-test exercises the joined
+    shape for every keyword, so a joiner handled for one and not the others
+    cannot pass.
+*   **Generalisation, third instance this cycle**: F297 (SPA escaping), F298,
+    and now this one are all *a guard narrower than the class it polices,
+    reporting clean for the wrong reason*. The common cause is that each rule
+    was written from the instances in front of it rather than from the shape
+    of the class, and the gap is only ever visible from outside the rule. The
+    cheap standing check: for any guard, name a member of its class it would
+    not catch — if that is easy, the rule is an instance list.
+
 ### Deferred from this cycle
 
 *   **A Content-Security-Policy for the dashboard**, again. The cycle-11
@@ -1446,4 +1488,4 @@ review and change nothing.
     That is an argument for a policy, not for that policy. **The open decision
     is the hash-based form or nothing.**
 
-The next sweep re-opens at **F299**.
+The next sweep re-opens at **F300**.
