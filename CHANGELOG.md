@@ -4,6 +4,18 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Stored XSS in the architecture dashboard's graph and matrix tooltips.** The force-graph and DSM tooltips concatenated module paths straight into their markup — `p.name`, the edge endpoints `p.data.source`/`p.data.target`, and the axis labels `order[r]`/`order[c]` — with no escaping. An ECharts *function* formatter's return value is inserted as markup, so the token filtering that protects `{b}`/`{c}` templates never applied; that the code emitted `<br/>` and `<strong>` is the same property the payload used. `<` and `>` are legal in path names on Linux and macOS and git tracks them verbatim, so a repository containing a directory such as `src/x<img src=q onerror=…>/` reached the tooltip intact. The emitter's only defence was rewriting `</` to `<\/` in the JSON payload, which stops `</script>` breakout and nothing else — after `JSON.parse` the metacharacters are intact and the next markup concatenation is a fresh injection point. The five values are now wrapped in the `escapeHtml` helper every sibling widget already used, and this file was the only one that had never adopted it. Exploiting it requires analysing a repository whose paths an attacker controls and then viewing or publishing the dashboard — the shape that matters for a hosted scan, or the Action running against a fork pull request; a dashboard of your own repository was latent rather than live. Present in released builds. Only the two tooltips were affected: the graph's node labels render as canvas text, and every load-time `innerHTML` assignment in the file interpolates static strings, theme tokens, or generated element IDs, so there was no no-hover path.
+
+### Added
+
+- **Guard asserting SPA widgets escape repository strings before building markup.** This is the class's third appearance — one widget built an `onclick` by concatenating row data into an attribute, and three cycles later a different widget concatenated module paths into two tooltips. Both times the fix was the missing `escapeHtml` call and nothing stopped the next widget from skipping it again, because the convention lived only in the sibling files. The guard scans every widget source for accessors naming a repository-derived string inside a statement that also builds markup, and requires each to sit inside `escapeHtml(...)`. Two distinctions are structural rather than exemptions, so they do not rot: a path used as a subscript is a lookup key, not rendered output, and escaping it would change what is looked up; and a `;` that closes an HTML entity is not a statement boundary, because splitting there would sever a statement from the `&rarr;` that identifies it as markup and hide every accessor after it. Both were found by running the guard against the pre-fix file: an earlier matcher required a `+` before the accessor and allowed a single member segment, and reported zero violations on the vulnerable code — so the self-test pins the matcher against the vulnerable form, the fixed form, a leading-position accessor, an indexed axis label, and a lookup key.
+
+### Fixed
+
+- **A `|` in a git tag no longer corrupts the release-cadence Markdown table.** The tag column was written raw while every other cell in the same emitter — author, path, metric, caveat — already went through `escape_md_cell`. `git check-ref-format` permits `|` in a tag name, and one there broke column alignment for any consumer rendering the table. Markdown is not evaluated, so this only ever corrupted layout.
+
 ## [0.27.3] - 2026-08-10
 
 ### Added

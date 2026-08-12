@@ -288,13 +288,13 @@
           if (p.dataType === 'edge') {
             if (p.data && p.data._kind === 'violation') {
               return 'Modularity violation — co-change, no import<br/>' +
-                p.data.source + ' &harr; ' + p.data.target +
+                escapeHtml(p.data.source) + ' &harr; ' + escapeHtml(p.data.target) +
                 '<br/>coupling degree ' + (Number(p.data.value) || 0).toFixed(1) + '%';
             }
-            return 'Imports: ' + p.data.source + ' &rarr; ' + p.data.target +
-              ' (' + p.data.value + ')';
+            return 'Imports: ' + escapeHtml(p.data.source) + ' &rarr; ' + escapeHtml(p.data.target) +
+              ' (' + (Number(p.data.value) || 0) + ')';
           }
-          return p.name + '<br/>role: ' + (moduleRole[p.name] || 'periphery') +
+          return escapeHtml(p.name) + '<br/>role: ' + (moduleRole[p.name] || 'periphery') +
             (moduleInCycle[p.name] ? ' &middot; in cycle' : '') +
             (unstableModules[p.name] ? ' &middot; unstable interface' : '');
         },
@@ -916,9 +916,10 @@
           const c = p.value[0];
           const r = p.value[1];
           const v = p.value[2];
-          if (r === c) return order[r] + '<br/><span style="opacity:.7">diagonal (self)</span>';
+          if (r === c) return escapeHtml(order[r]) + '<br/><span style="opacity:.7">diagonal (self)</span>';
           if (effectiveMode !== 'fusion') {
-            return order[r] + ' &rarr; ' + order[c] + '<br/>' + v + ' import' + (v === 1 ? '' : 's') +
+            return escapeHtml(order[r]) + ' &rarr; ' + escapeHtml(order[c]) +
+              '<br/>' + v + ' import' + (v === 1 ? '' : 's') +
               (r > c ? '<br/><strong>back-edge — dependency cycle / layering violation</strong>' : '');
           }
           const meta = cellMeta[c + '\x00' + r] || { cls: 'struct-only', count: v };
@@ -932,7 +933,8 @@
           const coTxt = (typeof meta.degree === 'number')
             ? ('co-change degree: ' + meta.degree.toFixed(1) + '%')
             : 'co-change degree: n/a';
-          return order[r] + ' &rarr; ' + order[c] + ' — ' + label + '<br/>' + importsTxt + ', ' + coTxt;
+          return escapeHtml(order[r]) + ' &rarr; ' + escapeHtml(order[c]) +
+            ' — ' + label + '<br/>' + importsTxt + ', ' + coTxt;
         },
       },
       grid: { left: gridLeft, top: padTop, width: span, height: span, containLabel: false },
