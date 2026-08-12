@@ -1288,4 +1288,79 @@ the deferred thresholds scaffold that F276 blocks.
     cosmetic gain. Recorded here so a fourth cycle does not re-report the
     witness as missing.
 
-The next sweep re-opens at **F293**.
+## 10. Cycle-10 surface rotation (F295–F296)
+
+The code had not moved since the prior anchor, so the pass rotated onto the
+least-recently-audited surface instead of auditing a delta: the SPA widget
+JavaScript, untouched by deep review for five cycles. Both findings below
+came out of that rotation, which is the argument for doing it.
+
+### F295 (Fixed — v0.27.4) — stored XSS in the architecture graph and matrix tooltips
+
+*   **Location**: `codelore-lib/src/output/spa/js/40_architecture.js` — the
+    force-graph and DSM `tooltip.formatter` bodies
+*   **Severity**: HIGH · **Category**: injection / output escaping
+*   **Defect**: both formatters concatenated module paths straight into their
+    markup — the node name, both edge endpoints, and both axis labels — with
+    no escaping. An ECharts *function* formatter's return value is inserted as
+    markup, so the token filtering that protects `{b}`/`{c}` templates never
+    applied; that these tooltips emit `<br/>` and `<strong>` is the same
+    property a payload uses. `<` and `>` are legal in path names on Linux and
+    macOS and git tracks them verbatim.
+*   **Reproduced, not inferred**: a fixture repository containing a directory
+    named with an `<img … onerror=…>` payload, analysed by the *released*
+    binary, emitted that payload unaltered into the dashboard's JSON block.
+*   **Why the existing defence did not cover it**: the emitter rewrites `</` to
+    `<\/` in that block. That is transport-level — it prevents `</script>`
+    breakout and has no jurisdiction over what happens after `JSON.parse`,
+    where the string carries its metacharacters intact into the next
+    concatenation. A payload containing no `</` passes untouched.
+*   **Scope, bounded by checking rather than asserted**: only the two tooltips.
+    The graph's node labels render as canvas text, and all ten load-time
+    `innerHTML` assignments in the file interpolate static strings, theme
+    tokens, or generated element IDs — read individually — so there was no
+    no-hover path.
+*   **Fix**: the five values wrapped in the `escapeHtml` helper every sibling
+    widget already used. This file held zero calls against four to fifteen in
+    each sibling: the one file that never adopted the convention, not one that
+    opted out. Verified by rebuilding and re-emitting against the same fixture.
+*   **Exposure**: needs a repository whose paths an attacker controls plus a
+    viewer — a hosted scan, or the Action running on a fork pull request. A
+    dashboard of one's own repository was latent. Present in released builds
+    through v0.27.3.
+*   **Class closure**: third appearance of "row data reaches an HTML sink
+    unescaped" (an `onclick` attribute two cycles earlier), so the fix ships
+    with a guard rather than a fourth point fix. The guard's own first matcher
+    reported **zero** violations against the real pre-fix file — it required a
+    `+` before the accessor and allowed one member segment — and would have
+    merged in the same commit as the fix, passing on the exact defect it was
+    written for. Only a negative control caught it. Recorded because the
+    near-miss is the reusable part.
+
+### F296 (Fixed — v0.27.4) — a `|` in a git tag corrupts the release-cadence table
+
+*   **Location**: `codelore-lib/src/output/markdown/delivery.rs`
+*   **Severity**: LOW · **Category**: output escaping
+*   **Defect**: the tag column was written raw while every other cell in the
+    same emitter — author, path, metric, caveat — already went through
+    `escape_md_cell`. `git check-ref-format` permits `|` in a tag name, and one
+    there broke column alignment for any consumer rendering the table.
+*   **Fix**: route the tag through the same helper. Markdown is not evaluated,
+    so this only ever corrupted layout.
+
+### Deferred from this cycle
+
+*   **A Content-Security-Policy for the dashboard** — researched and
+    deliberately not shipped. The SPA is a single self-contained file with
+    large inline scripts, so a policy would need `script-src 'unsafe-inline'`,
+    which permits inline event handlers and would have given F295's payload no
+    protection while reading, in review, like a mitigation. A hash-based policy
+    is viable — the template carries zero inline `on*=` attributes, so
+    `'unsafe-hashes'` is not required — but needs a per-emit digest of each
+    inline block including the interpolated data. That is an emitter change and
+    a separate decision. The generalisation worth keeping: **a control that
+    cannot block the finding that motivated it is not defence in depth, it is
+    decoration** — and the version that is easy to add is exactly the version
+    that does not work.
+
+The next sweep re-opens at **F297**.
