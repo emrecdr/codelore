@@ -296,7 +296,7 @@ fn build_coupling_sql(
     bucket: Option<TimeBucket>,
     use_lineage: bool,
 ) -> String {
-    // DEEP-3: under compat, average_revs uses CEIL((a+b)/2.0) to match
+    // Under compat, average_revs uses CEIL((a+b)/2.0) to match
     // code-maat's `(math/ceil average-revs)`. CodeLore's modern default
     // uses integer-floor `(a+b)/2` (DuckDB integer division). The
     // ceiling differs from the floor by 1 for any odd-sum pair.

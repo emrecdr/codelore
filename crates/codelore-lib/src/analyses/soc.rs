@@ -56,7 +56,7 @@ fn build_soc_sql(
     bucket: Option<crate::options::TimeBucket>,
     use_lineage: bool,
 ) -> String {
-    // DEEP-4: code-maat's `as-soc` filter is `(> n min-revs)` — strict
+    // code-maat's `as-soc` filter is `(> n min-revs)` — strict
     // greater-than. Under `--code-maat-compat` we honour that semantic
     // so threshold-boundary results match exactly. CodeLore's modern
     // default uses `>=`, which is more intuitive ("SoC of at least N").

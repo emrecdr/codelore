@@ -1,6 +1,7 @@
 //! Guard: no internal finding/task IDs (an `F` or `T` followed by digits) and
-//! no `Plan`/`Task` phase-number markers anywhere in `.rs`/`.sql` source —
-//! comment, string literal, DDL, or file name.
+//! no phase-number markers — a [`PHASE_KEYWORDS`] word joined to a number by
+//! spaces or a hyphen — anywhere in `.rs`/`.sql` source: comment, string
+//! literal, DDL, or file name.
 //!
 //! The ID vocabulary was `F`-plus-digits only for three audit cycles, so the
 //! `T`-prefixed series stayed invisible. One of them reached a published
@@ -115,19 +116,28 @@ fn stem_opens_with_task_id(stem: &str) -> bool {
     is_task_id(&head.to_ascii_uppercase())
 }
 
-/// True if the line carries a phase-number marker: the capitalised word `Plan`
-/// or `Task` at a word boundary, directly followed by optional spaces then an
-/// ASCII digit. These name development history (the sequence a feature shipped
-/// in), not the current contract — the same banned class as finding IDs.
-/// Scanned over the whole line so comment, string-literal, and DDL markers are
-/// all caught (see the module doc for why a whole-line scan is safe for these
-/// shapes but not for the `T` series).
+/// Capitalised keywords that name a development phase or audit pass. The
+/// third is the pass name whose markers survived every cycle this guard has
+/// run: it joins its number with a hyphen, so the token rules split it into a
+/// word and a digit and saw neither as an ID. A guard blind to one spelling
+/// of the class it polices is the reason that spelling accumulated.
+const PHASE_KEYWORDS: &[&str] = &["Plan", "Task", "DEEP"];
+
+/// True if the line carries a phase-number marker: one of [`PHASE_KEYWORDS`]
+/// at a word boundary, followed by optional spaces or a single `-`/`_`, then
+/// an ASCII digit. These name development history (the sequence a feature
+/// shipped in), not the current contract — the same banned class as finding
+/// IDs. Scanned over the whole line so comment, string-literal, and DDL
+/// markers are all caught (see the module doc for why a whole-line scan is
+/// safe for these shapes but not for the `T` series).
 fn line_has_plan_marker(line: &str) -> bool {
-    line_has_keyword_number(line, "Plan") || line_has_keyword_number(line, "Task")
+    PHASE_KEYWORDS
+        .iter()
+        .any(|keyword| line_has_keyword_number(line, keyword))
 }
 
 /// True if `line` carries `keyword` at a word boundary, followed by optional
-/// spaces then an ASCII digit.
+/// spaces or a single `-`/`_` joiner, then an ASCII digit.
 fn line_has_keyword_number(line: &str, keyword: &str) -> bool {
     let bytes = line.as_bytes();
     let klen = keyword.len();
@@ -140,6 +150,14 @@ fn line_has_keyword_number(line: &str, keyword: &str) -> bool {
             start == 0 || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
         let mut j = start + klen;
         while j < bytes.len() && bytes[j] == b' ' {
+            j += 1;
+        }
+        // A single `-` or `_` may join the keyword to its number. Without
+        // this the hyphenated form is invisible to every rule here: the
+        // token scans split it at the hyphen into a bare word and a bare
+        // digit, neither of which is an ID, and the keyword scan stops at a
+        // separator it does not expect.
+        if j < bytes.len() && (bytes[j] == b'-' || bytes[j] == b'_') {
             j += 1;
         }
         if boundary_ok && j < bytes.len() && bytes[j].is_ascii_digit() {
@@ -301,6 +319,26 @@ fn the_hygiene_predicates_discriminate() {
         !line_has_plan_marker("// Task list lives in the roadmap"),
         "the keyword without a number is not a marker"
     );
+
+    // The hyphenated form — the spelling that survived every cycle because
+    // the token rules split it in half and the keyword rule stopped at the
+    // joiner. Every keyword is exercised in that shape, so a joiner handled
+    // for one and not the others cannot pass.
+    for keyword in PHASE_KEYWORDS {
+        for line in [
+            format!("// {keyword}-{} under compat, emit the legacy shape", 3),
+            format!("// {keyword}_{}: the legacy filter is strict", 4),
+        ] {
+            assert!(
+                line_has_plan_marker(&line),
+                "must flag a hyphen- or underscore-joined marker: {line:?}"
+            );
+        }
+        assert!(
+            !line_has_plan_marker(&format!("// {keyword}-driven review notes")),
+            "the keyword joined to a word rather than a number is not a marker"
+        );
+    }
 
     // The original vocabulary still works.
     let f = format!("F{}", 12);

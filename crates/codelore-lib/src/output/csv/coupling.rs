@@ -8,7 +8,7 @@ use crate::analyses::coupling::CouplingRow;
 use crate::{CodeLoreError, Result};
 use std::io::Write;
 
-/// DEEP-1, DEEP-2, DEEP-3: under `--code-maat-compat`, emit code-maat's
+/// Under `--code-maat-compat`, emit code-maat's
 /// verbose 7-column shape with truncated-integer `degree` and the
 /// legacy column-name set (`entity`, `coupled`, `first-entity-revisions`,
 /// `second-entity-revisions`, `shared-revisions`). The Fisher exact p-value
@@ -32,7 +32,7 @@ pub fn write_coupling_csv<W: Write>(
         )
         .map_err(CodeLoreError::Io)?;
         for row in rows {
-            // DEEP-2: degree formatted as truncated integer to match
+            // Degree is formatted as a truncated integer to match
             // code-maat's `(int coupling)`. `as u32` performs the
             // truncation; `f64::min(100.0)` guards against the rare
             // > 100 round-up case (boundary degenerate from the SQL
