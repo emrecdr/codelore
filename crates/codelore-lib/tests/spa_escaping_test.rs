@@ -60,14 +60,17 @@ fn widget_sources() -> Vec<(String, String)> {
     out
 }
 
-/// Accessors whose value is a repository-derived string. Taken from the
-/// string fields of the SPA JSON payload plus the two chart-library
-/// carriers (`p.name`, `order[...]`) that receive them.
+/// Accessors whose value is a repository-derived string: the string fields
+/// of the SPA JSON payload, the two chart-library carriers (`p.name`,
+/// `order[...]`) that receive them, and a few fields carried by analyses
+/// the dashboard does not embed today — cheap cover for the day one is.
+///
+/// Matching is by prefix, so `.entity` covers `.entity_a` and `.entity_b`:
+/// a suffixed variant lands at the same byte offset, is judged from that
+/// same offset, and so can only report the one defect twice.
 const RAW_STRING_ACCESSORS: &[&str] = &[
     ".path",
     ".entity",
-    ".entity_a",
-    ".entity_b",
     ".author",
     ".canonical_author",
     ".source",
@@ -103,24 +106,23 @@ const HTML_MARKERS: &[&str] = &[
 /// at `&rarr;` — severing it from the very marker that identifies it as
 /// markup, and hiding every accessor after the entity. So a `;` that closes
 /// an entity is not a statement boundary.
-fn statements(src: &str) -> Vec<&str> {
-    let bytes = src.as_bytes();
+/// Each slice is paired with its byte offset in `src`, so a violation can
+/// name the line in the file rather than the line within the statement —
+/// the latter reads like a file line and points hundreds of lines away.
+fn statements(src: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let mut start = 0;
-    for (i, b) in bytes.iter().enumerate() {
-        if *b != b';' {
-            continue;
-        }
-        let name_start = src[..i]
-            .rfind(|c: char| !c.is_ascii_alphanumeric())
-            .map_or(0, |j| j + 1);
-        let closes_entity = name_start > 0 && name_start < i && bytes[name_start - 1] == b'&';
+    for (i, _) in src.match_indices(';') {
+        let head = src[..i].trim_end_matches(|c: char| c.is_ascii_alphanumeric());
+        // `head.len() < i` means at least one name character was trimmed;
+        // without it a bare `&;` would read as an entity and never split.
+        let closes_entity = head.len() < i && head.ends_with('&');
         if !closes_entity {
-            out.push(&src[start..i]);
+            out.push((start, &src[start..i]));
             start = i + 1;
         }
     }
-    out.push(&src[start..]);
+    out.push((start, &src[start..]));
     out
 }
 
@@ -148,19 +150,16 @@ fn is_lookup_key(stmt: &str, pos: usize) -> bool {
 /// Unescaped raw-string accessors inside markup-building statements.
 fn unescaped_sinks(src: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for stmt in statements(src) {
+    for (offset, stmt) in statements(src) {
         if !HTML_MARKERS.iter().any(|m| stmt.contains(m)) {
             continue;
         }
         for accessor in RAW_STRING_ACCESSORS {
-            let mut from = 0;
-            while let Some(rel) = stmt[from..].find(accessor) {
-                let at = from + rel;
+            for (at, _) in stmt.match_indices(accessor) {
                 if !is_escaped(stmt, at) && !is_lookup_key(stmt, at) {
-                    let line = stmt[..at].lines().count();
-                    out.push(format!("{accessor} (statement line ~{line})"));
+                    let line = src[..offset + at].matches('\n').count() + 1;
+                    out.push(format!("{line}: {accessor}"));
                 }
-                from = at + accessor.len();
             }
         }
     }
@@ -172,7 +171,7 @@ fn no_widget_concatenates_repository_strings_into_markup_unescaped() {
     let mut violations = Vec::new();
     for (name, src) in widget_sources() {
         for hit in unescaped_sinks(&src) {
-            violations.push(format!("  {name}: {hit}"));
+            violations.push(format!("  {name}:{hit}"));
         }
     }
 
