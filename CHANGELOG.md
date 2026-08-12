@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.27.4] - 2026-08-12
+
 ### Security
 
 - **Stored XSS in the architecture dashboard's graph and matrix tooltips.** The force-graph and DSM tooltips concatenated module paths straight into their markup — `p.name`, the edge endpoints `p.data.source`/`p.data.target`, and the axis labels `order[r]`/`order[c]` — with no escaping. An ECharts *function* formatter's return value is inserted as markup, so the token filtering that protects `{b}`/`{c}` templates never applied; that the code emitted `<br/>` and `<strong>` is the same property the payload used. `<` and `>` are legal in path names on Linux and macOS and git tracks them verbatim, so a repository containing a directory such as `src/x<img src=q onerror=…>/` reached the tooltip intact. The emitter's only defence was rewriting `</` to `<\/` in the JSON payload, which stops `</script>` breakout and nothing else — after `JSON.parse` the metacharacters are intact and the next markup concatenation is a fresh injection point. The five values are now wrapped in the `escapeHtml` helper every sibling widget already used, and this file was the only one that had never adopted it. Exploiting it requires analysing a repository whose paths an attacker controls and then viewing or publishing the dashboard — the shape that matters for a hosted scan, or the Action running against a fork pull request; a dashboard of your own repository was latent rather than live. Present in released builds. Only the two tooltips were affected: the graph's node labels render as canvas text, and every load-time `innerHTML` assignment in the file interpolates static strings, theme tokens, or generated element IDs, so there was no no-hover path.
