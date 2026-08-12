@@ -1363,4 +1363,87 @@ came out of that rotation, which is the argument for doing it.
     decoration** — and the version that is easy to add is exactly the version
     that does not work.
 
-The next sweep re-opens at **F297**.
+## 11. Cycle-11 audit of the guard cycle 10 asked for (F297–F298)
+
+The delta was small, so the pass adversarially tested the *guard* added by
+F295 rather than re-reading the code it protects. Its report reached the
+right finding by the wrong route: the mechanism it named was not the
+mechanism, and the fix it prescribed closes none of the gap. Both were
+corrected by compiling and running the guard, which the audit pass could
+not do. The lesson is recorded in F297 because it generalises past this
+finding — an audit that cannot execute what it audits will produce
+plausible mechanisms, and plausible mechanisms produce fixes that pass
+review and change nothing.
+
+### F297 (Fixed — Unreleased) — the escaping guard could not see the markup its widgets most often build
+
+*   **Location**: `codelore-lib/tests/spa_escaping_test.rs` — `HTML_MARKERS`,
+    `RAW_STRING_ACCESSORS`, `is_escaped`
+*   **Severity**: MEDIUM · **Category**: test reach / regression detection
+*   **Defect**: the guard examines a statement only if it matches one of ten
+    markup substrings, and none of them are the tags the widgets build rows
+    from. A statement assembling `<h4>`, `<dl>`, `<dt>`, `<dd>`, `<tr>` or
+    `<td>` was not markup at all, so *every* accessor in it went unchecked.
+    Two narrower defects compounded it: accessors matched by dotted prefix, so
+    `.author` does not occur in `main_author` — a payload field rendered today
+    — though it does cover `.entity_a`/`.entity_b`, where the base name comes
+    first; and a value counted as escaped only when `escapeHtml(` sat directly
+    before it, so the second operand of `escapeHtml(a || b)` read as bare.
+*   **Scope, measured rather than asserted**: four of the five author sinks in
+    the dashboard were invisible. Three failed the markup test; only
+    `partnerAuthor` failed for the accessor reason the cycle report named.
+    All five were correctly escaped, so nothing was exploitable — what was
+    missing was detection of a regression.
+*   **Why author names are the sharper vector**: a path needs `<`, legal only
+    on some filesystems. `git commit --author` rejects a name beginning with
+    `<` outright (`fatal: empty ident name`), but accepts a **quote**
+    verbatim in both name and email — an attribute-context breakout needing no
+    angle brackets — and author identity is rendered into
+    `data-primary-author="…"`. Safe today only because `escapeHtml` covers
+    `"` and `'`.
+*   **Fix**: markup recognised as an opening tag *inside a string literal*
+    (which separates `'<td>'` from a `j < n` comparison and from the literal
+    `'<anonymous>'`, both observed false positives); escaping judged by
+    walking back to the innermost unclosed `(`, so one call covers every
+    operand within it; `_author`/`_path`/`_name` added for qualifier-first
+    compounds. All three were needed — the accessor change alone catches
+    nothing.
+*   **Verified**: with both `main_author` sinks unescaped, the previous guard
+    passes and the new one fails naming both lines; the corpus reports zero
+    violations either way; the tree was restored byte-identical after each
+    run.
+*   **Deliberately still out of reach**: a repository string parked in a local
+    by one statement and rendered by the next (`partnerAuthor`, `rowAuthor`).
+    Every design that reaches them was measured and turns the guard red on a
+    clean tree, flagging a comment and a truthiness test. This is the
+    across-statement limit the guard's own doc states, now stated explicitly
+    rather than by implication.
+
+### F298 (Fixed — Unreleased) — `preceding` could panic on a multi-byte terminator
+
+*   **Location**: `codelore-lib/tests/spa_escaping_test.rs` — `preceding`
+*   **Severity**: LOW · **Category**: correctness (test infrastructure)
+*   **Defect**: the identifier-chain start was located with
+    `rfind(…).map_or(0, |i| i + 1)`, stepping one byte past a terminator that
+    may be several bytes wide, then slicing there. The widgets contain `—`
+    and `·`; such a terminator would split mid-character and panic the guard
+    rather than report on the file.
+*   **Reachability**: none in the current corpus — a probe over every accessor
+    match found zero non-ASCII terminators — so it was latent.
+*   **Fix**: step by the terminator's own `len_utf8`. Fixed inline rather than
+    merely recorded, because widening markup detection (F297) increases the
+    number of statements walked, and therefore its exposure.
+
+### Deferred from this cycle
+
+*   **A Content-Security-Policy for the dashboard**, again. The cycle-11
+    report re-proposed the `script-src 'unsafe-inline'` policy that the
+    cycle-10 note above had already researched and rejected, without citing
+    that rejection — the failure mode this ledger exists to prevent. The
+    rejection stands. One axis it had not weighed is worth keeping: it scored
+    the policy on blocking *execution*, and a `default-src 'none'` policy with
+    no `connect-src` and no remote `img-src` also constrains *exfiltration*.
+    That is an argument for a policy, not for that policy. **The open decision
+    is the hash-based form or nothing.**
+
+The next sweep re-opens at **F299**.
