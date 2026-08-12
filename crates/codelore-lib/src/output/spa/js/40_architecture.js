@@ -913,6 +913,11 @@
       tooltip: {
         position: 'top',
         formatter: function (p) {
+          // The repeated escapeHtml(order[...]) below reads like something to
+          // hoist into a local. It isn't: the guard that keeps this file
+          // escaped only inspects statements that also build markup, so an
+          // escape moved to its own line leaves the guard's window and takes
+          // these sinks out of coverage — the exact sinks it was written for.
           const c = p.value[0];
           const r = p.value[1];
           const v = p.value[2];
