@@ -83,8 +83,8 @@ The project's signature move — demonstrated by `tag_trigger_pattern_test`, `ch
 
 ## 5. Open items (the whole list, M8 reframed)
 
-- **F1 fix + the escapeHtml guard** (§1, §4) — the one thing this cycle adds that should land.
-- **F2** — one-line escape (§1).
+- ~~**F1 fix + the escapeHtml guard**~~ — **landed** (§8).
+- ~~**F2**~~ — **landed** (§8).
 - **M8 — MCP cancellation, reframed per E9:** not "thread `RequestContext`" but "decide what a cancelled call releases, given the work runs under non-abortable `spawn_blocking`." The honest options are a cancellation-aware permit (drop the permit when the caller cancels, let the detached ingest finish and populate the cache anyway) or accepting that cold calls are uncancellable and documenting it. A design note, not a code stub.
 - **`outputSchema` for the remaining 10 tools** — per-tool design (E8), not mechanical; the `{omitted,total,note}` summary shape is the crux.
 - **Gitlink differential fixture** — the last unprobed content class; one commit with a mode-`160000` entry.
@@ -97,7 +97,7 @@ No item here is a regression, and none moves an exit code except F1's security s
 ## 6. Housekeeping
 
 - **Branch list is `main` + `gh-pages`** (the latter actively published, per the E1 correction — not stale). All prior report/fix branches merged and deleted; cycle 9 landed via #254.
-- **This cycle's artifacts** (`cl273.tar`, `delta9.patch` reused; `agent10.md` findings) sit in the audit workspace and `_to_delete/cycle9-audit-artifacts/` on the device; `rm -rf _to_delete` when convenient (the bridge cannot unlink). `HANDOFF.md` remains untracked and yours. `tmp_obj_*` strays clear with `find .git/objects -name 'tmp_obj_*' -delete`.
+- **This cycle's artifacts** (`cl273.tar`, `delta9.patch` reused; `agent10.md` findings) sit in the audit workspace. `_to_delete/cycle9-audit-artifacts/` was already removed during the cycle-9 adjudication, before this report was written — the instruction to `rm -rf` it was carried forward against a stale view of the device, the same class as cycle-9's E1. `HANDOFF.md` remains untracked and yours. `tmp_obj_*` strays clear with `find .git/objects -name 'tmp_obj_*' -delete`.
 - **This report** is committed to branch `docs/hardening-cycle-10`, based on `main` (`e62763c`), for landing via PR per the #243/#254 convention.
 
 ---
@@ -105,3 +105,17 @@ No item here is a regression, and none moves an exit code except F1's security s
 ## 7. Method
 
 Because the code had not moved, the pass was a surface rotation rather than a delta audit: a fresh-eyes sweep of the SPA JS, output emitters, an analysis-SQL sample, ingest edges, and identity/clones, each candidate default-REFUTED and each survivor re-read first-hand against source before landing here (F1's sink verified as an ECharts function-formatter HTML insertion, its escaping absence confirmed against the house pattern, its no-CSP backstop confirmed in `template.html`, its scope bounded by checking the file's other sinks; F2 confirmed against its own in-file siblings). The E7–E9 adjudication was run against the tree, not accepted from the landed report. Currency was re-verified live at report time. Findings: one High, one Low, one guard proposal, ~15 clean probes, five refutations — a shape that says the tree is still hard to find defects in, and that the one place it wasn't is the place the audit had not looked since cycle 5.
+
+---
+
+## 8. Validation and remediation
+
+The findings were re-derived against source before any fix, and **F1 was reproduced rather than reasoned about**: a fixture repository containing a directory named with an `<img … onerror=…>` payload, analysed by the *released* binary, emits that payload verbatim into the dashboard's JSON block. Every link in the chain was verified independently — the zero-versus-four-to-fifteen `escapeHtml` disparity across widgets, both formatter bodies, the module-name derivation from `rr.path`, the absent CSP, and the JSON payload's `"</"` rewrite, which stops `</script>` breakout and has no jurisdiction over what happens after `JSON.parse`. F1 is confirmed as reported, at the severity reported.
+
+**The report's scope-bounding held under checking**, which is worth recording because it is the part an audit is most tempted to overstate. All ten load-time `innerHTML` assignments were read individually: static strings, a view-toggle label, a numeric loop index, and theme tokens. No row data, so no no-hover path — the two tooltips really were the whole finding. The §4 dismissal of the marginal-owner `title` attribute also held: `note` is a hardcoded literal string. F2 was confirmed and is if anything understated — the emitter escapes four sibling columns, not the two cited.
+
+**Remediation landed:** the five values wrapped at the sink, F2's tag column escaped, and the guard §4 asked for. The fix was verified the same way the defect was — rebuild, re-emit against the same malicious fixture, ten sinks escaped and none left raw.
+
+**The guard nearly shipped vacuous, and that is the entry worth keeping.** Its first matcher required a `+` before the accessor and allowed a single member segment; run against the real pre-fix file it reported **zero** violations — it would have passed on the exact defect it was written for, in the same commit that fixed it. Only a negative control caught it. Rebuilding it surfaced two distinctions that are structural rather than exemptions: a path used as a subscript is a lookup key, and escaping it would change what is looked up; and a `;` closing an HTML entity is not a statement boundary, because splitting there severs a statement from the `&rarr;` that marks it as markup. It now flags ten sinks on the pre-fix file and none on the fixed tree, across all ten widgets.
+
+**CSP was researched and deliberately not shipped.** The dashboard is a single self-contained file with large inline scripts, so a policy would need `script-src 'unsafe-inline'` — which permits inline event handlers and would have given this payload **no** protection while reading, in review, like a mitigation. A hash-based policy is viable, and the template helps by carrying zero inline `on*=` attributes, but it requires computing a per-emit digest of each inline block including the interpolated data. That is an emitter change and a separate decision; recorded rather than half-done. The generalisation, and the reason this is in the report rather than a commit message: **a control that cannot block the finding that motivated it is not defence in depth, it is decoration** — and the version of it that is easy to add is exactly the version that does not work.
