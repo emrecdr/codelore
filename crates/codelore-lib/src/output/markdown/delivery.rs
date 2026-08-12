@@ -83,7 +83,14 @@ pub fn write_release_cadence_markdown<W: Write>(
             Some(d) => format!("{d:.1}"),
             None => "—".to_string(),
         };
-        writeln!(w, "| {} | {} | {} |", row.tag, row.date, gap).map_err(CodeLoreError::Io)?;
+        writeln!(
+            w,
+            "| {} | {} | {} |",
+            escape_md_cell(&row.tag),
+            row.date,
+            gap
+        )
+        .map_err(CodeLoreError::Io)?;
     }
     if let Some(summary) = rows.iter().find(|r| r.tag == "__summary__") {
         writeln!(w).map_err(CodeLoreError::Io)?;
