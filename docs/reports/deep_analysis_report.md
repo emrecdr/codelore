@@ -1488,4 +1488,97 @@ review and change nothing.
     That is an argument for a policy, not for that policy. **The open decision
     is the hash-based form or nothing.**
 
-The next sweep re-opens at **F300**.
+## 12. Turning the cycle-11 generalisation on this repository's own guards (F300–F302)
+
+F299 closed with a standing check: *for any guard, name a member of the class
+it polices that it would not catch — if that is easy, the rule is an instance
+list rather than a rule.* That was written as a lesson. This section is what
+happened when it was run as a procedure against all thirteen guards in the
+tree. Four carry instance lists; all four were probed, two confirmed, one
+refuted, and one turned out to be scoped to a single file.
+
+The refutation matters as much as the confirmations: a check that only ever
+confirms is not a check.
+
+### F300 (Fixed — Unreleased) — the escaping guard did not cover function names
+
+*   **Location**: `codelore-lib/tests/spa_escaping_test.rs` — `RAW_STRING_ACCESSORS`
+*   **Severity**: LOW · **Category**: test reach / regression detection
+*   **Defect**: `function` was absent from the accessor list. A function name
+    is parsed out of the analysed repository's source, so it carries whatever
+    that source put in an identifier position — the same provenance as a path,
+    and rendered in the same drawer (`12_drawer.js:368` in the X-ray table,
+    `:509` in the function list).
+*   **Scope**: both sites are correctly escaped, so nothing was exploitable.
+    What was missing was detection of a regression.
+*   **Fix**: `.function` added; verified by unescaping one site and confirming
+    the previous guard passes where the new one fails naming its line.
+*   **Also corrected — a doc claim that was not true**: the module doc said the
+    accessor list "is derived from the JSON payload's string fields rather than
+    from an exemption list, so it does not rot as widgets change." It is
+    hand-curated and names 18 of roughly 70 `String` field names across the
+    analyses. The curation is defensible — most of the remainder are computed
+    values (a band, a verdict, a trend, a date, a revision hash) that cannot
+    carry a metacharacter — but "derived, therefore does not rot" described a
+    property the code did not have, and that description is why the gap was
+    not looked for sooner.
+*   **Knowingly left uncovered**: the function-coupling endpoints `a`/`b`.
+    Prefix matching makes a single-letter accessor unusable — `.a` would
+    swallow `.author`, `.added` and `.arch_band` — so they are unguarded should
+    they ever be rendered rather than used as lookup keys, as they are today.
+
+### F301 (Fixed — Unreleased) — the ledger-stamp guard could not see a compound stamp
+
+*   **Location**: `codelore-lib/tests/ledger_stamp_test.rs` — `UNRELEASED_MARKS`
+*   **Severity**: LOW · **Category**: test reach / ledger integrity
+*   **Defect**: the guard matched two exact spellings of an unreleased stamp.
+    A compound stamp naming both a shipped release and pending work matched
+    neither.
+*   **Not hypothetical**: F279 carried exactly that shape and claimed
+    unreleased work for two releases after it shipped — invisible to the guard
+    written to catch precisely that claim. The stamp was corrected by hand
+    before this guard was; fixing the row without fixing the rule is the
+    pattern the guard's own module doc warns about.
+*   **Fix**: the rule now asks whether a stamp *line* — a `### F…` heading or a
+    `**Status**:` bullet — mentions the unreleased state, rather than matching
+    spellings. Scoping to stamp lines keeps prose discussing the section from
+    counting; the self-test pins both directions.
+
+### F302 (Active) — the release publish gate reads one file and three markers
+
+*   **Location**: `codelore-lib/tests/release_publish_gate_test.rs`
+*   **Severity**: MED · **Category**: CI safety / guard scope
+*   **Defect**: the guard's own doc states it is "a *detector*, not a list of
+    job names… A publishing job added later is therefore covered without anyone
+    remembering to update a list here." Both halves of that are narrower than
+    claimed: it reads `release.yml` and nothing else, and its
+    `PUBLICATION_MARKERS` names three mechanisms — `action-gh-release`,
+    `cargo publish`, `git push`. Publishing a container image matches none of
+    them.
+*   **What is outside it**: `container.yml` pushes to ghcr via
+    `docker/build-push-action` with `push: true`, and runs on
+    `workflow_dispatch` as well as `v*.*.*` tags. Its `latest` tag is correctly
+    gated on `github.ref_type == 'tag'`, but `type=sha,prefix=sha-` is not, so
+    a manual dispatch publishes a real `sha-<short>` tag to the public
+    registry. `attest-digest.yml` likewise holds `packages: write`.
+*   **Why this is filed rather than fixed**: whether a dispatch-time `sha-` tag
+    is a hazard or a deliberate traceability affordance is a design call, and
+    the two available answers differ in kind — gate the container publish to
+    tags, or widen the guard to cover every publishing workflow and accept
+    that this one publishes on dispatch by design. The precedent argues for
+    looking: this guard exists because `release.yml`'s `workflow_dispatch` was
+    documented as a dry run and published a real GitHub Release and a Homebrew
+    formula. **Open decision.**
+
+### Probed and refuted
+
+*   **Widening the comment-hygiene phase-keyword list.** `Tier`, `Phase`,
+    `Step` and `Day` all appear followed by digits (150, 6, 83 and 7
+    occurrences), which looks like the same class F299 closed. It is not:
+    they name Tier-1 languages, algorithm phases, algorithm steps, and a
+    fixture's day-by-day timeline — **current contract, not development
+    history**. A keyword list cannot draw that distinction, so widening would
+    fail correct comments. Recorded because the next person to run this check
+    will find the same 150 hits and needs to know they were looked at.
+
+The next sweep re-opens at **F303**.
