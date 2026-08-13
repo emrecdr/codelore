@@ -42,12 +42,18 @@ fmt:
 deny:
     cargo deny check
 
+# Audit the GitHub Actions workflows — requires: cargo install zizmor@1.29.0
+# (CI pins that version; a different one can disagree, which is the whole
+# reason this recipe exists rather than leaving the audit to CI alone.)
+zizmor:
+    zizmor --min-severity high --format plain .github/workflows/
+
 # Coverage report — requires: cargo install cargo-llvm-cov
 coverage:
     cargo llvm-cov --workspace --html
 
 # All CI checks
-ci: fmt-check lint deny test
+ci: fmt-check lint zizmor deny test
 
 # Run the binary
 codelore *ARGS:
