@@ -311,11 +311,9 @@ const LOCAL_CARRIED_SINKS: &[(&str, &str)] = &[
 fn repository_strings_parked_in_locals_are_escaped_where_they_render() {
     let sources = widget_sources();
     for (file, local) in LOCAL_CARRIED_SINKS {
-        let src = sources
-            .iter()
-            .find(|(name, _)| name == file)
-            .map(|(_, src)| src)
-            .unwrap_or_else(|| panic!("{file} is no longer a widget source"));
+        let Some((_, src)) = sources.iter().find(|(name, _)| name == file) else {
+            panic!("{file} is no longer a widget source");
+        };
 
         let rendered: Vec<_> = src
             .lines()
