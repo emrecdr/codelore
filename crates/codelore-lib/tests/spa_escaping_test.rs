@@ -102,18 +102,29 @@ const RAW_STRING_ACCESSORS: &[&str] = &[
     "_name",
 ];
 
-/// Tag names the widgets emit. Checked against the token following a `<`
-/// that opens a tag *inside a string literal* — see `builds_markup`.
+/// A superset of the tag names the widgets emit today — eight are not used
+/// anywhere yet, and are kept so markup written tomorrow is watched on the
+/// day it lands rather than the day someone remembers this list. Checked
+/// against the token following a `<` that opens a tag *inside a string
+/// literal* — see `builds_markup`.
 const HTML_TAGS: &[&str] = &[
     "div", "span", "br", "strong", "p", "td", "tr", "th", "dt", "dd", "dl", "li", "ul", "ol", "h1",
     "h2", "h3", "h4", "h5", "code", "b", "em", "i", "a", "img", "option", "small", "label",
     "button", "svg", "table", "tbody", "thead",
 ];
 
-/// Markup evidence that is not an opening tag. Written without the
-/// entity-terminating `;` on purpose: statements are split on `;`, which
-/// would otherwise cut every entity in half and make these unmatchable.
-const HTML_ENTITIES: &[&str] = &["&rarr", "&harr", "&middot", "&nbsp", "title=\""];
+/// Markup evidence that is not an opening tag: entities, an attribute
+/// assignment, and the sink itself. The entities are written without their
+/// terminating `;` on purpose — statements are split on `;`, which would
+/// otherwise cut every entity in half and make these unmatchable.
+const HTML_MARKERS: &[&str] = &[
+    "innerHTML",
+    "&rarr",
+    "&harr",
+    "&middot",
+    "&nbsp",
+    "title=\"",
+];
 
 /// Whether a statement builds markup rather than plain text.
 ///
@@ -124,12 +135,11 @@ const HTML_ENTITIES: &[&str] = &["&rarr", "&harr", "&middot", "&nbsp", "title=\"
 /// check, the literal `'<anonymous>'` — the placeholder for an unnamed
 /// function in the X-ray widget — reads as an opening tag.
 fn builds_markup(stmt: &str) -> bool {
-    if stmt.contains("innerHTML") || HTML_ENTITIES.iter().any(|e| stmt.contains(e)) {
+    if HTML_MARKERS.iter().any(|m| stmt.contains(m)) {
         return true;
     }
     stmt.match_indices('<').any(|(i, _)| {
-        let before = stmt[..i].trim_end_matches(' ');
-        if !before.ends_with('\'') && !before.ends_with('"') {
+        if !stmt[..i].trim_end_matches(' ').ends_with(['\'', '"']) {
             return false;
         }
         let rest = &stmt[i + 1..];
@@ -137,7 +147,7 @@ fn builds_markup(stmt: &str) -> bool {
         let len = rest
             .find(|c: char| !c.is_ascii_alphanumeric())
             .unwrap_or(rest.len());
-        len > 0 && HTML_TAGS.contains(&&rest[..len])
+        HTML_TAGS.contains(&&rest[..len])
     })
 }
 
@@ -149,7 +159,6 @@ fn builds_markup(stmt: &str) -> bool {
 /// at `&rarr;` — severing it from the very marker that identifies it as
 /// markup, and hiding every accessor after the entity. So a `;` that closes
 /// an entity is not a statement boundary.
-///
 /// Each slice is paired with its byte offset in `src`, so a violation can
 /// name the line in the file rather than the line within the statement —
 /// the latter reads like a file line and points hundreds of lines away.
@@ -170,31 +179,15 @@ fn statements(src: &str) -> Vec<(usize, &str)> {
     out
 }
 
-/// Byte index where the identifier chain ending `s` begins.
-///
-/// Stepping back by the terminator's own width, rather than one byte, keeps
-/// the index on a character boundary: the widgets carry `—` and `·`, and a
-/// multi-byte terminator would otherwise split mid-character and panic the
-/// guard instead of reporting on the file. Both callers need that property,
-/// which is why the walk lives here instead of in each of them — a second
-/// copy is a second place for the boundary step to be got wrong.
-///
-/// `dotted` decides whether `.` continues the chain: a member expression is
-/// walked off whole (`p.data.source`), while a callee name stops at the dot
-/// so the function's own name stays isolated.
-fn ident_start(s: &str, dotted: bool) -> usize {
-    s.char_indices()
-        .rev()
-        .find(|(_, c)| {
-            !(c.is_ascii_alphanumeric() || *c == '_' || *c == '$' || (dotted && *c == '.'))
-        })
-        .map_or(0, |(i, c)| i + c.len_utf8())
-}
-
 /// What precedes the member expression containing `pos`, with the
-/// expression's own identifier chain walked off.
+/// expression's own identifier chain walked off. Trimming the chain rather
+/// than indexing back over it keeps the slice on a character boundary for
+/// free — the widgets carry `—` and `·`, and hand-rolled index arithmetic
+/// here once split one mid-character.
 fn preceding(stmt: &str, pos: usize) -> &str {
-    stmt[..ident_start(&stmt[..pos], true)].trim_end()
+    stmt[..pos]
+        .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.')
+        .trim_end()
 }
 
 /// Whether the expression at `pos` sits inside an `escapeHtml(...)` call.
@@ -211,9 +204,13 @@ fn is_escaped(stmt: &str, pos: usize) -> bool {
             ')' => depth += 1,
             '(' if depth == 0 => {
                 let head = stmt[..i].trim_end();
-                // Not `dotted`: the callee's own name is wanted, so a
-                // qualified `a.escapeHtml(` must not read as `escapeHtml`.
-                return &head[ident_start(head, false)..] == "escapeHtml";
+                // `.` is not trimmed here: the callee's own name is wanted,
+                // so a qualified `a.escapeHtml(` must not read as bare
+                // `escapeHtml`.
+                let name = head
+                    .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                    .len();
+                return &head[name..] == "escapeHtml";
             }
             '(' => depth -= 1,
             _ => {}
