@@ -160,7 +160,12 @@ runs:
         STEP_VERSION: ${{ steps.resolve.outputs.version }}
         STEP_TARGET: ${{ steps.target.outputs.target }}
         STEP_EXT: ${{ steps.target.outputs.ext }}
-      run: |
+      # This step writes the install directory to GITHUB_PATH, which is what
+      # a setup action does. `DEST` is `$RUNNER_TEMP/codelore` — a
+      # runner-provided directory with a constant suffix, not built from any
+      # input — so there is nothing for a caller to redirect. The audit's own
+      # confidence is Low.
+      run: |  # zizmor: ignore[github-env]
         set -euo pipefail
         TAG="$STEP_TAG"
         VERSION="$STEP_VERSION"

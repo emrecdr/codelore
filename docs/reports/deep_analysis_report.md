@@ -1778,4 +1778,61 @@ applies to its own gate.
     only thing keeping bots out of the pair counts. A documented design
     decision, not an oversight.
 
-The next sweep re-opens at **F306**.
+### F306 (Fixed — Unreleased) — zizmor adopted, and the seven findings it still reports
+
+*   **Location**: `.github/zizmor.yml`, `ci.yml`
+*   **Severity**: MED · **Category**: CI coverage / supply chain
+*   **Why now**: `zizmor` is the de facto standard auditor for GitHub
+    Actions, and running it against this tree found three live
+    template-injection sites (F304) that nothing here would have caught. That
+    is the argument for adopting it: not that the tool is popular, but that
+    it found something on first contact.
+*   **Configured, not silenced**: exactly one audit is configured.
+    `unpinned-uses` is given the policy this repository *already* enforces in
+    `workflow_action_pin_test` — SHA for third-party actions, tag permitted
+    for `actions/*` and `dtolnay/rust-toolchain`. Two gates disagreeing about
+    pinning would be worse than either alone, because a contributor would be
+    told to pin by one and told it is fine by the other. That drops the count
+    from 111 findings / 44 high to 74 / 7 without suppressing a single
+    finding.
+*   **On the `actions/*` divergence**: OpenSSF Scorecard asks for first-party
+    actions to be SHA-pinned too, and the tj-actions and reviewdog
+    compromises are why. The exemption is kept because a compromise inside
+    GitHub's own namespace is a compromise of the platform running the job,
+    which a pinned SHA does not survive either — and because the repository
+    made this call explicitly, with that reasoning recorded in the guard.
+    Overriding a documented, guarded policy on a general principle, when the
+    stricter half is already enforced, is not an improvement.
+*   **Blocking, not advisory** — the first draft of this job was advisory
+    during bake-in, on `dogfood`'s pattern. Running it proved that wrong: with
+    findings outstanding the check is red on every pull request, and a
+    permanently red check teaches people to ignore red checks. That is worse
+    than not running the tool. So the seven were resolved instead, and the
+    gate is real:
+    *   **`excessive-permissions` on `release.yml` — fixed.** The
+        workflow-level default was `contents: write`, inherited by `plan`,
+        `crates-publish` and `homebrew-publish`. None of them write to this
+        repository: `plan` reads the ref, `crates-publish` authenticates to
+        crates.io with a token, and `homebrew-publish` checks out the tap with
+        its own deploy key and pushes there. The default is now `contents:
+        read`; `release`, which creates the GitHub Release, already declared
+        its own write.
+    *   **`dangerous-triggers` ×2 and `excessive-permissions` ×3 on the
+        Dependabot auto-merge workflow — written exceptions.** The triggers
+        are what that pattern is, mitigated the documented way: neither stage
+        checks out or executes pull-request code. The three write scopes are
+        the capability itself — approving, merging, and re-dispatching CI —
+        and cannot be narrowed without removing it.
+    *   **`cache-poisoning` — written exception.** The audit rates its own
+        confidence Low, and a cache entry is written under the ref that
+        produced it, so poisoning what a tag-triggered release build restores
+        needs push access to the repository.
+*   **Exceptions live on the line that raises them**, as
+    `# zizmor: ignore[rule]` comments with the reasoning beside them, rather
+    than as line numbers in a config file that drift the moment the file is
+    edited.
+*   **Gated at `high`.** The 16 remaining `low` findings are `artipacked` —
+    `actions/checkout` persisting credentials — and deserve their own pass
+    rather than a blocking gate adopted in the same commit as the tool.
+
+The next sweep re-opens at **F307**.

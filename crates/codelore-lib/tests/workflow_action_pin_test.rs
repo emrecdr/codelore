@@ -128,3 +128,63 @@ fn the_pin_guard_rejects_a_tag_and_accepts_a_sha() {
         "an ordinary third-party action is not exempt"
     );
 }
+
+/// Patterns `.github/zizmor.yml` permits to be referenced by tag.
+///
+/// Scanned textually, the way `rust_version_pins_test` reads the other pin
+/// sites, rather than by pulling in a YAML parser the workspace does not
+/// otherwise need.
+fn zizmor_ref_pin_patterns(config: &str) -> Vec<String> {
+    config
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(": ref-pin"))
+        .map(|pattern| pattern.trim_matches('"').to_owned())
+        .collect()
+}
+
+#[test]
+fn the_external_auditor_permits_exactly_what_this_guard_exempts() {
+    // Two gates now enforce this one policy: this test, and `zizmor`'s
+    // `unpinned-uses` audit via `.github/zizmor.yml`. Two gates that can
+    // disagree are worse than either alone, because a contributor gets told
+    // to pin by one and told it is fine by the other, and neither says which
+    // is right. The config argues in prose that it is kept in step with this
+    // function; this is that claim, checked.
+    //
+    // The same shape `rust_version_pins_test` uses for the toolchain pinned
+    // in five places: name a source of truth, read the other statements of
+    // it, and fail listing the disagreements.
+    let root = workspace_root();
+    let config =
+        std::fs::read_to_string(root.join(".github/zizmor.yml")).expect("read .github/zizmor.yml");
+
+    let mut permitted = zizmor_ref_pin_patterns(&config);
+    permitted.sort();
+    assert!(
+        !permitted.is_empty(),
+        "parsed no `ref-pin` patterns out of .github/zizmor.yml — the config \
+         changed shape and this guard is reading nothing"
+    );
+
+    // `actions/*` is zizmor's glob for the namespace `is_exempt` matches by
+    // prefix; the local-action exemption has no counterpart, because
+    // zizmor's patterns are `owner/repo`-shaped and `./…` is not in that space.
+    let disagreements: Vec<&String> = permitted
+        .iter()
+        .filter(|pattern| !is_exempt(&pattern.replace('*', "")))
+        .collect();
+    assert!(
+        disagreements.is_empty(),
+        "`.github/zizmor.yml` permits {disagreements:?} to be tag-referenced, \
+         but `is_exempt` does not. Whichever is right, they must say the same \
+         thing — a contributor reads whichever gate fails first."
+    );
+
+    for exempt in ["actions/", "dtolnay/rust-toolchain"] {
+        assert!(
+            permitted.iter().any(|p| p.replace('*', "") == exempt),
+            "`is_exempt` allows `{exempt}` by tag but `.github/zizmor.yml` \
+             does not, so zizmor will fail a reference this guard accepts"
+        );
+    }
+}

@@ -56,12 +56,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Workflow-level default. Signing permissions are deliberately ABSENT: only
-# the `attest` job may hold them, and it declares them on its own
-# reusable-workflow call. Keeping them out of the default means a job added
-# to this file later cannot silently inherit the ability to sign provenance.
+# Workflow-level default, minimal in two directions for the same reason: a
+# job added to this file later inherits it, and should inherit nothing it can
+# publish or sign with.
+#
+# Signing permissions are absent — only `attest` may hold them, and it
+# declares them on its own reusable-workflow call.
+#
+# Write is absent — only `release` creates the GitHub Release, and it declares
+# `contents: write` on itself. The three jobs that used to inherit a write
+# default do not need it: `plan` reads the ref, `crates-publish` authenticates
+# to crates.io with a token, and `homebrew-publish` checks out the tap
+# repository with its own deploy key and pushes there, not here.
 permissions:
-  contents: write       # create the GitHub Release + upload artifacts
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -136,6 +144,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
+        # zizmor: ignore[cache-poisoning]
+        # The audit's own confidence is Low. A cache entry is written under
+        # the ref that produced it, so poisoning what a tag-triggered release
+        # build restores requires push access to this repository — at which
+        # point the cache is not the exposure.
         uses: actions/cache@v6
         with:
           path: |

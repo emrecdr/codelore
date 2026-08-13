@@ -81,6 +81,46 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Fails the run on any `high` finding. Not yet one of `protect-main`'s
+    # required contexts, so it reddens a pull request without refusing the
+    # merge; adding it to that ruleset is a one-line change and the reason
+    # this is a separately-named job rather than a step inside `rustfmt`.
+    #
+    # Every finding it reports at `high` is either fixed or carries a
+    # written exception on the line that raises it — five on the
+    # Dependabot auto-merge workflow, whose triggers and write scopes are what
+    # auto-merge is, and one low-confidence cache finding on the release
+    # build. Adding the tool in an advisory mode would have meant a red check
+    # on every pull request, which teaches people to ignore red checks; that
+    # is worse than not running it.
+    #
+    # Gated at `high` rather than everything: the 16 `low` findings are
+    # `artipacked` (checkout persisting credentials) and are worth their own
+    # pass, not a blocking gate adopted in the same commit as the tool.
+    #
+    # Scans the published composite action as well as the workflows — the
+    # same file set `workflow_action_pin_test` reads, and the repository's
+    # public entry point. Adding it surfaced a finding the workflow-only
+    # scan could not see.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      # Installed the way every other CI tool here is, rather than through a
+      # second mechanism: `install-action` fetches a prebuilt binary from the
+      # tool's own GitHub Releases, and the action is already SHA-pinned, so
+      # this adds no new pin to maintain. Version-pinned so a new audit
+      # landing upstream changes this job's verdict through a visible bump
+      # rather than silently on someone else's pull request.
+      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: zizmor@1.29.0
+      - run: zizmor --min-severity high --format plain .github/workflows/ action.yml
+
   test:
     # Explicit display name so the matrix `include` flags (run_tests) don't
     # leak into the rendered check name. Without this, GitHub appends every

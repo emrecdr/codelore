@@ -19,17 +19,25 @@ name: Dependabot auto-merge
 #
 # Neither stage checks out or executes PR code.
 
-on:
+# Both triggers are inherent to Dependabot auto-merge and are mitigated the
+# documented way, in the header above: neither stage checks out or executes
+# pull-request code. The danger `pull_request_target` carries is running
+# untrusted code with a privileged token; nothing here runs it.
+on:  # zizmor: ignore[dangerous-triggers]
   pull_request_target:
   workflow_run:
     workflows: [CI]
     types: [completed]
 
+# These three are what auto-merge is: approving and merging a pull request,
+# and re-dispatching CI on main afterwards. They cannot be narrowed without
+# removing the capability. They are workflow-level because both jobs need
+# them, and the workflow contains nothing else.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write        # zizmor: ignore[excessive-permissions]
+  pull-requests: write   # zizmor: ignore[excessive-permissions]
   # merge-on-green re-dispatches main's CI after a merge (see below).
-  actions: write
+  actions: write         # zizmor: ignore[excessive-permissions]
 
 jobs:
   mark-eligible:
