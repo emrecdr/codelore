@@ -75,6 +75,37 @@ fn indent(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 
+/// Scopes granted by a `permissions:` line that carries its value inline
+/// rather than opening a block, or `None` when a block follows.
+///
+/// Three spellings grant the same thing and only one of them names a scope.
+/// `write-all` grants every scope, including the signing ones, while writing
+/// neither of their names — and it is the first thing anyone reaches for when
+/// an attestation step fails for want of a permission. The flow map
+/// `{id-token: write}` names them but not on their own lines, where the block
+/// parser looks. A guard that recognises one spelling of the grant it forbids
+/// leaves the other two as silent ways back to Build L2.
+fn inline_permissions(trimmed: &str) -> Option<Vec<String>> {
+    let value = trimmed.strip_prefix("permissions:")?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value == "write-all" {
+        return Some(SIGNING_SCOPES.iter().map(|s| (*s).to_owned()).collect());
+    }
+    let Some(inner) = value.strip_prefix('{').and_then(|v| v.strip_suffix('}')) else {
+        // `read-all`, `{}`, or anything else that grants nothing signable.
+        return Some(Vec::new());
+    };
+    Some(
+        inner
+            .split(',')
+            .filter_map(|entry| entry.split_once(':'))
+            .map(|(scope, _)| scope.trim().to_owned())
+            .collect(),
+    )
+}
+
 /// Parse the shape this guard needs out of a workflow file.
 ///
 /// Hand-rolled rather than pulling in a YAML crate for one guard: these
@@ -133,6 +164,8 @@ fn parse(text: &str) -> Workflow {
             in_triggers = trimmed == "on:";
             if trimmed == "permissions:" {
                 perm_indent = Some(0);
+            } else if let Some(scopes) = inline_permissions(trimmed) {
+                wf.top_level_permissions.extend(scopes);
             }
             continue;
         }
@@ -168,6 +201,8 @@ fn parse(text: &str) -> Workflow {
                 job.runs_steps = true;
             } else if trimmed == "permissions:" {
                 perm_indent = Some(4);
+            } else if let Some(scopes) = inline_permissions(trimmed) {
+                job.permissions.extend(scopes);
             }
         }
     }
@@ -337,6 +372,33 @@ jobs:
         !grants_signing(&build.permissions).is_empty(),
         "the guard must see the signing scopes on the build job — this is \
          precisely the L2 regression"
+    );
+
+    // The same grant, written the two ways that name no scope on a line of
+    // its own. Both were invisible until the parser learned the inline form:
+    // `write-all` is the reflex fix when an attestation step fails for want
+    // of a permission, and it drops the pipeline to L2 while looking like a
+    // one-word convenience.
+    for shorthand in ["permissions: write-all", "permissions: {id-token: write}"] {
+        let wf = parse(&format!(
+            "on:\n  push:\n\njobs:\n  build:\n    {shorthand}\n    steps:\n      - run: cargo build\n"
+        ));
+        let job = &wf.jobs[0];
+        assert!(
+            !grants_signing(&job.permissions).is_empty(),
+            "a job granting signing scopes via `{shorthand}` must be seen; \
+             parsed scopes were {:?}",
+            job.permissions
+        );
+    }
+
+    // `read-all` grants nothing signable and must not be read as a grant, or
+    // the guard fails every workflow that uses the safe shorthand.
+    let readonly =
+        parse("jobs:\n  build:\n    permissions: read-all\n    steps:\n      - run: x\n");
+    assert!(
+        grants_signing(&readonly.jobs[0].permissions).is_empty(),
+        "`read-all` is not a signing grant"
     );
 
     let attest = &wf.jobs[1];
