@@ -1,7 +1,7 @@
 //! Guard: no internal finding/task IDs (an `F` or `T` followed by digits) and
 //! no phase-number markers — a [`PHASE_KEYWORDS`] word joined to a number by
-//! spaces or a hyphen — anywhere in `.rs`/`.sql` source: comment, string
-//! literal, DDL, or file name.
+//! spaces, a hyphen, or an underscore — anywhere in `.rs`/`.sql` source:
+//! comment, string literal, DDL, or file name.
 //!
 //! The ID vocabulary was `F`-plus-digits only for three audit cycles, so the
 //! `T`-prefixed series stayed invisible. One of them reached a published
@@ -116,11 +116,7 @@ fn stem_opens_with_task_id(stem: &str) -> bool {
     is_task_id(&head.to_ascii_uppercase())
 }
 
-/// Capitalised keywords that name a development phase or audit pass. The
-/// third is the pass name whose markers survived every cycle this guard has
-/// run: it joins its number with a hyphen, so the token rules split it into a
-/// word and a digit and saw neither as an ID. A guard blind to one spelling
-/// of the class it polices is the reason that spelling accumulated.
+/// Capitalised keywords that name a development phase or audit pass.
 const PHASE_KEYWORDS: &[&str] = &["Plan", "Task", "DEEP"];
 
 /// True if the line carries a phase-number marker: one of [`PHASE_KEYWORDS`]
@@ -140,32 +136,21 @@ fn line_has_plan_marker(line: &str) -> bool {
 /// spaces or a single `-`/`_` joiner, then an ASCII digit.
 fn line_has_keyword_number(line: &str, keyword: &str) -> bool {
     let bytes = line.as_bytes();
-    let klen = keyword.len();
-    let mut search_from = 0;
-    while let Some(pos) = line[search_from..].find(keyword) {
-        let start = search_from + pos;
+    line.match_indices(keyword).any(|(start, _)| {
         // Word boundary before the keyword so a longer identifier ending in
         // the keyword (e.g. inside a path segment) doesn't false-match.
-        let boundary_ok =
-            start == 0 || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
-        let mut j = start + klen;
-        while j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
+        if start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+            return false;
         }
+        let rest = line[start + keyword.len()..].trim_start_matches(' ');
         // A single `-` or `_` may join the keyword to its number. Without
         // this the hyphenated form is invisible to every rule here: the
         // token scans split it at the hyphen into a bare word and a bare
         // digit, neither of which is an ID, and the keyword scan stops at a
         // separator it does not expect.
-        if j < bytes.len() && (bytes[j] == b'-' || bytes[j] == b'_') {
-            j += 1;
-        }
-        if boundary_ok && j < bytes.len() && bytes[j].is_ascii_digit() {
-            return true;
-        }
-        search_from = start + klen;
-    }
-    false
+        let rest = rest.strip_prefix(['-', '_']).unwrap_or(rest);
+        rest.starts_with(|c: char| c.is_ascii_digit())
+    })
 }
 
 /// True if the line carries a bare `T`-prefixed task-ID token anywhere.
@@ -320,18 +305,15 @@ fn the_hygiene_predicates_discriminate() {
         "the keyword without a number is not a marker"
     );
 
-    // The hyphenated form — the spelling that survived every cycle because
-    // the token rules split it in half and the keyword rule stopped at the
-    // joiner. Every keyword is exercised in that shape, so a joiner handled
-    // for one and not the others cannot pass.
+    // Every keyword against every joiner, so one handled and the others
+    // missed cannot pass — which is how the hyphenated spelling survived
+    // every cycle before this.
     for keyword in PHASE_KEYWORDS {
-        for line in [
-            format!("// {keyword}-{} under compat, emit the legacy shape", 3),
-            format!("// {keyword}_{}: the legacy filter is strict", 4),
-        ] {
+        for joiner in ['-', '_', ' '] {
+            let line = format!("// {keyword}{joiner}{} under compat", 3);
             assert!(
                 line_has_plan_marker(&line),
-                "must flag a hyphen- or underscore-joined marker: {line:?}"
+                "must flag a joined marker: {line:?}"
             );
         }
         assert!(

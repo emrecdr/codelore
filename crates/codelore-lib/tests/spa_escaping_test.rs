@@ -79,11 +79,12 @@ fn widget_sources() -> Vec<(String, String)> {
 ///
 /// Matching is by prefix, so `.entity` covers `.entity_a` and `.entity_b`:
 /// a suffixed variant lands at the same byte offset, is judged from that
-/// same offset, and so can only report the one defect twice.
-/// The `_`-prefixed entries cover qualifier-first compounds — `main_author`
-/// is a payload field rendered today, and `.author` does not occur in it
-/// because the character before `author` is `_`, not `.`. Suffix compounds
-/// need no entry: `.entity` already covers `.entity_a` and `.entity_b`.
+/// same offset, and so can only report the one defect twice. Suffix
+/// compounds therefore need no entry of their own.
+///
+/// The `_`-prefixed entries cover the opposite shape, a qualifier-first
+/// compound: `main_author` is a payload field rendered today, and `.author`
+/// does not occur in it because the character before `author` is `_`.
 const RAW_STRING_ACCESSORS: &[&str] = &[
     ".path",
     ".entity",
@@ -101,18 +102,29 @@ const RAW_STRING_ACCESSORS: &[&str] = &[
     "_name",
 ];
 
-/// Tag names the widgets emit. Checked against the token following a `<`
-/// that opens a tag *inside a string literal* — see `builds_markup`.
+/// A superset of the tag names the widgets emit today — eight are not used
+/// anywhere yet, and are kept so markup written tomorrow is watched on the
+/// day it lands rather than the day someone remembers this list. Checked
+/// against the token following a `<` that opens a tag *inside a string
+/// literal* — see `builds_markup`.
 const HTML_TAGS: &[&str] = &[
     "div", "span", "br", "strong", "p", "td", "tr", "th", "dt", "dd", "dl", "li", "ul", "ol", "h1",
     "h2", "h3", "h4", "h5", "code", "b", "em", "i", "a", "img", "option", "small", "label",
     "button", "svg", "table", "tbody", "thead",
 ];
 
-/// Markup evidence that is not an opening tag. Written without the
-/// entity-terminating `;` on purpose: statements are split on `;`, which
-/// would otherwise cut every entity in half and make these unmatchable.
-const HTML_ENTITIES: &[&str] = &["&rarr", "&harr", "&middot", "&nbsp", "title=\""];
+/// Markup evidence that is not an opening tag: entities, an attribute
+/// assignment, and the sink itself. The entities are written without their
+/// terminating `;` on purpose — statements are split on `;`, which would
+/// otherwise cut every entity in half and make these unmatchable.
+const HTML_MARKERS: &[&str] = &[
+    "innerHTML",
+    "&rarr",
+    "&harr",
+    "&middot",
+    "&nbsp",
+    "title=\"",
+];
 
 /// Whether a statement builds markup rather than plain text.
 ///
@@ -123,20 +135,27 @@ const HTML_ENTITIES: &[&str] = &["&rarr", "&harr", "&middot", "&nbsp", "title=\"
 /// check, the literal `'<anonymous>'` — the placeholder for an unnamed
 /// function in the X-ray widget — reads as an opening tag.
 fn builds_markup(stmt: &str) -> bool {
-    if stmt.contains("innerHTML") || HTML_ENTITIES.iter().any(|e| stmt.contains(e)) {
-        return true;
-    }
-    stmt.match_indices('<').any(|(i, _)| {
-        let before = stmt[..i].trim_end_matches(' ');
-        if !before.ends_with('\'') && !before.ends_with('"') {
-            return false;
+    HTML_MARKERS.iter().any(|m| stmt.contains(m))
+        || literal_tags(stmt).any(|(_, tag)| HTML_TAGS.contains(&tag))
+}
+
+/// Every tag name opened inside a string literal in `s`, with its offset.
+///
+/// The literal anchor and the name extraction live here because two callers
+/// need the same answer: `builds_markup` asks whether any of them is a tag
+/// it knows, and `every_tag_the_widgets_open_is_covered` asks whether any of
+/// them is one it does not.
+fn literal_tags(s: &str) -> impl Iterator<Item = (usize, &str)> {
+    s.match_indices('<').filter_map(move |(i, _)| {
+        if !s[..i].trim_end_matches(' ').ends_with(['\'', '"']) {
+            return None;
         }
-        let rest = &stmt[i + 1..];
+        let rest = &s[i + 1..];
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         let len = rest
             .find(|c: char| !c.is_ascii_alphanumeric())
             .unwrap_or(rest.len());
-        len > 0 && HTML_TAGS.contains(&&rest[..len])
+        (len > 0).then(|| (i, &rest[..len]))
     })
 }
 
@@ -169,18 +188,14 @@ fn statements(src: &str) -> Vec<(usize, &str)> {
 }
 
 /// What precedes the member expression containing `pos`, with the
-/// expression's own identifier chain walked off.
+/// expression's own identifier chain walked off. Trimming the chain rather
+/// than indexing back over it keeps the slice on a character boundary for
+/// free — the widgets carry `—` and `·`, and hand-rolled index arithmetic
+/// here once split one mid-character.
 fn preceding(stmt: &str, pos: usize) -> &str {
-    // Stepping by the terminator's own width, rather than one byte, keeps
-    // the slice on a character boundary: the widgets contain `—` and `·`,
-    // and a multi-byte terminator would otherwise split mid-character and
-    // panic the guard instead of reporting on the file.
-    let head = stmt[..pos]
-        .char_indices()
-        .rev()
-        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '$' || *c == '.'))
-        .map_or(0, |(i, c)| i + c.len_utf8());
-    stmt[..head].trim_end()
+    stmt[..pos]
+        .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.')
+        .trim_end()
 }
 
 /// Whether the expression at `pos` sits inside an `escapeHtml(...)` call.
@@ -197,12 +212,13 @@ fn is_escaped(stmt: &str, pos: usize) -> bool {
             ')' => depth += 1,
             '(' if depth == 0 => {
                 let head = stmt[..i].trim_end();
-                let start = head
-                    .char_indices()
-                    .rev()
-                    .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '$'))
-                    .map_or(0, |(i, c)| i + c.len_utf8());
-                return &head[start..] == "escapeHtml";
+                // `.` is not trimmed here: the callee's own name is wanted,
+                // so a qualified `a.escapeHtml(` must not read as bare
+                // `escapeHtml`.
+                let name = head
+                    .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                    .len();
+                return &head[name..] == "escapeHtml";
             }
             '(' => depth -= 1,
             _ => {}
@@ -260,6 +276,42 @@ fn no_widget_concatenates_repository_strings_into_markup_unescaped() {
          already uses.",
         violations.len(),
         violations.join("\n"),
+    );
+}
+
+/// Literal-adjacent `<token>` strings in the widgets that are not markup:
+/// the X-ray widget's placeholder for an unnamed function, and the import
+/// graph's label for the tree root. Both are proof that a bare "any token
+/// after `<`" rule would misread text as markup.
+const NON_TAG_PLACEHOLDERS: &[&str] = &["anonymous", "root"];
+
+#[test]
+fn every_tag_the_widgets_open_is_covered() {
+    let mut missing = Vec::new();
+    for (name, src) in widget_sources() {
+        for (at, tag) in literal_tags(&src) {
+            if HTML_TAGS.contains(&tag) || NON_TAG_PLACEHOLDERS.contains(&tag) {
+                continue;
+            }
+            let line = src[..at].matches('\n').count() + 1;
+            missing.push(format!("  {name}:{line}: <{tag}"));
+        }
+    }
+    missing.sort();
+    missing.dedup();
+
+    assert!(
+        missing.is_empty(),
+        "{} tag(s) opened in widget markup are absent from `HTML_TAGS`:\n{}\n\n\
+         `builds_markup` examines a statement only when it recognises the \
+         markup, so a tag missing from that list silently takes every \
+         accessor in the statement out of coverage — no failure, no output, \
+         just a blind spot. That is the defect this guard was widened to \
+         close, and the list is the one place it can reopen.\n\n\
+         Add the tag, or if the token is not markup, add it to \
+         `NON_TAG_PLACEHOLDERS` with the reason.",
+        missing.len(),
+        missing.join("\n"),
     );
 }
 
