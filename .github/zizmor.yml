@@ -20,7 +20,9 @@ rules:
         # version — the opposite of the intent — and `rust_version_pins_test`
         # reads this tag as a version, so pinning it breaks that guard.
         "dtolnay/rust-toolchain": ref-pin
-        # Everything else: full commit SHA. This is the half that stops
+        # Everything else: full commit SHA — the half that stops
         # tag-repointing, the shape of the tj-actions and reviewdog
-        # compromises.
+        # compromises. This restates zizmor's own default rather than
+        # changing it; it is written out so the policy can be read here in
+        # full, and so an upstream change of default cannot quietly relax it.
         "*": hash-pin

@@ -100,9 +100,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      # Version-pinned: a new audit landing upstream should change this job's
-      # verdict through a visible bump, not silently on someone else's PR.
-      - run: pipx install zizmor==1.29.0
+      # Installed the way every other CI tool here is, rather than through a
+      # second mechanism: `install-action` fetches a prebuilt binary from the
+      # tool's own GitHub Releases, and the action is already SHA-pinned, so
+      # this adds no new pin to maintain. Version-pinned so a new audit
+      # landing upstream changes this job's verdict through a visible bump
+      # rather than silently on someone else's pull request.
+      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: zizmor@1.29.0
       - run: zizmor --min-severity high --format plain .github/workflows/
 
   test:
