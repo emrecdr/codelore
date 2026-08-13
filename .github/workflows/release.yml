@@ -61,7 +61,13 @@ concurrency:
 # reusable-workflow call. Keeping them out of the default means a job added
 # to this file later cannot silently inherit the ability to sign provenance.
 permissions:
-  contents: write       # create the GitHub Release + upload artifacts
+  contents: read
+  # Write is granted where it is used, not by default. Only `release` creates
+  # the GitHub Release, and it declares `contents: write` on itself. The three
+  # jobs that used to inherit the write default do not need it: `plan` only
+  # reads the ref, `crates-publish` authenticates to crates.io with a token,
+  # and `homebrew-publish` checks out the tap repository with its own deploy
+  # key and pushes there — not here.
 
 env:
   CARGO_TERM_COLOR: always
@@ -136,6 +142,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
+        # zizmor: ignore[cache-poisoning]
+        # The audit's own confidence is Low. A cache entry is written under
+        # the ref that produced it, so poisoning what a tag-triggered release
+        # build restores requires push access to this repository — at which
+        # point the cache is not the exposure.
         uses: actions/cache@v6
         with:
           path: |

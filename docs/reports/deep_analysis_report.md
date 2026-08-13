@@ -1803,25 +1803,36 @@ applies to its own gate.
     made this call explicitly, with that reasoning recorded in the guard.
     Overriding a documented, guarded policy on a general principle, when the
     stricter half is already enforced, is not an improvement.
-*   **Advisory during bake-in**, matching `dogfood`'s existing pattern in the
-    same file. The seven remaining `high` findings, adjudicated rather than
-    hidden:
-    *   **`dangerous-triggers` ×2** — `pull_request_target` and
-        `workflow_run` in the Dependabot auto-merge workflow. Inherent to
-        that pattern, and mitigated the documented way: neither stage checks
-        out or executes PR code. Likely a permanent, reasoned exception.
-    *   **`excessive-permissions` ×3** on the same workflow — the write
-        scopes auto-merge needs. Reducible only by splitting the workflow;
-        worth weighing, not obvious.
-    *   **`excessive-permissions` ×1** on `release.yml`'s workflow-level
-        `contents: write`. This one looks genuinely reducible: `build`
-        already overrides to `contents: read`, so the default exists for the
-        publishing jobs and could move to them. It touches the release path,
-        which is why it is not being done in the commit that adds the tool.
-    *   **`cache-poisoning` ×1** — `actions/cache` in the release build.
-        zizmor rates its own confidence Low; poisoning the cache this reads
-        requires push access to the branch that wrote it.
-*   **Exit condition, so "advisory" does not become permanent**: the flag
-    comes off once those seven are resolved or carry a recorded exception.
+*   **Blocking, not advisory** — the first draft of this job was advisory
+    during bake-in, on `dogfood`'s pattern. Running it proved that wrong: with
+    findings outstanding the check is red on every pull request, and a
+    permanently red check teaches people to ignore red checks. That is worse
+    than not running the tool. So the seven were resolved instead, and the
+    gate is real:
+    *   **`excessive-permissions` on `release.yml` — fixed.** The
+        workflow-level default was `contents: write`, inherited by `plan`,
+        `crates-publish` and `homebrew-publish`. None of them write to this
+        repository: `plan` reads the ref, `crates-publish` authenticates to
+        crates.io with a token, and `homebrew-publish` checks out the tap with
+        its own deploy key and pushes there. The default is now `contents:
+        read`; `release`, which creates the GitHub Release, already declared
+        its own write.
+    *   **`dangerous-triggers` ×2 and `excessive-permissions` ×3 on the
+        Dependabot auto-merge workflow — written exceptions.** The triggers
+        are what that pattern is, mitigated the documented way: neither stage
+        checks out or executes pull-request code. The three write scopes are
+        the capability itself — approving, merging, and re-dispatching CI —
+        and cannot be narrowed without removing it.
+    *   **`cache-poisoning` — written exception.** The audit rates its own
+        confidence Low, and a cache entry is written under the ref that
+        produced it, so poisoning what a tag-triggered release build restores
+        needs push access to the repository.
+*   **Exceptions live on the line that raises them**, as
+    `# zizmor: ignore[rule]` comments with the reasoning beside them, rather
+    than as line numbers in a config file that drift the moment the file is
+    edited.
+*   **Gated at `high`.** The 16 remaining `low` findings are `artipacked` —
+    `actions/checkout` persisting credentials — and deserve their own pass
+    rather than a blocking gate adopted in the same commit as the tool.
 
 The next sweep re-opens at **F307**.
