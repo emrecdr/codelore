@@ -81,6 +81,29 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Advisory during bake-in, the same way `dogfood` is, and for the same
+    # reason: the signal is worth having on every PR from today, and the
+    # remediation is worth doing deliberately rather than in the commit that
+    # adds the tool. The flag comes off once the seven `high` findings this
+    # currently reports are adjudicated — four `excessive-permissions`, two
+    # `dangerous-triggers` on the Dependabot workflow, one `cache-poisoning`.
+    # Silencing them to make the gate green on day one would defeat the point
+    # of adding it, so the config in `.github/zizmor.yml` configures exactly
+    # one audit and suppresses none.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      # Version-pinned: a new audit landing upstream should change this job's
+      # verdict through a visible bump, not silently on someone else's PR.
+      - run: pipx install zizmor==1.29.0
+      - run: zizmor --format plain .github/workflows/
+
   test:
     # Explicit display name so the matrix `include` flags (run_tests) don't
     # leak into the rendered check name. Without this, GitHub appends every

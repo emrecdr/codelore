@@ -1778,4 +1778,50 @@ applies to its own gate.
     only thing keeping bots out of the pair counts. A documented design
     decision, not an oversight.
 
-The next sweep re-opens at **F306**.
+### F306 (Fixed — Unreleased) — zizmor adopted, and the seven findings it still reports
+
+*   **Location**: `.github/zizmor.yml`, `ci.yml`
+*   **Severity**: MED · **Category**: CI coverage / supply chain
+*   **Why now**: `zizmor` is the de facto standard auditor for GitHub
+    Actions, and running it against this tree found three live
+    template-injection sites (F304) that nothing here would have caught. That
+    is the argument for adopting it: not that the tool is popular, but that
+    it found something on first contact.
+*   **Configured, not silenced**: exactly one audit is configured.
+    `unpinned-uses` is given the policy this repository *already* enforces in
+    `workflow_action_pin_test` — SHA for third-party actions, tag permitted
+    for `actions/*` and `dtolnay/rust-toolchain`. Two gates disagreeing about
+    pinning would be worse than either alone, because a contributor would be
+    told to pin by one and told it is fine by the other. That drops the count
+    from 111 findings / 44 high to 74 / 7 without suppressing a single
+    finding.
+*   **On the `actions/*` divergence**: OpenSSF Scorecard asks for first-party
+    actions to be SHA-pinned too, and the tj-actions and reviewdog
+    compromises are why. The exemption is kept because a compromise inside
+    GitHub's own namespace is a compromise of the platform running the job,
+    which a pinned SHA does not survive either — and because the repository
+    made this call explicitly, with that reasoning recorded in the guard.
+    Overriding a documented, guarded policy on a general principle, when the
+    stricter half is already enforced, is not an improvement.
+*   **Advisory during bake-in**, matching `dogfood`'s existing pattern in the
+    same file. The seven remaining `high` findings, adjudicated rather than
+    hidden:
+    *   **`dangerous-triggers` ×2** — `pull_request_target` and
+        `workflow_run` in the Dependabot auto-merge workflow. Inherent to
+        that pattern, and mitigated the documented way: neither stage checks
+        out or executes PR code. Likely a permanent, reasoned exception.
+    *   **`excessive-permissions` ×3** on the same workflow — the write
+        scopes auto-merge needs. Reducible only by splitting the workflow;
+        worth weighing, not obvious.
+    *   **`excessive-permissions` ×1** on `release.yml`'s workflow-level
+        `contents: write`. This one looks genuinely reducible: `build`
+        already overrides to `contents: read`, so the default exists for the
+        publishing jobs and could move to them. It touches the release path,
+        which is why it is not being done in the commit that adds the tool.
+    *   **`cache-poisoning` ×1** — `actions/cache` in the release build.
+        zizmor rates its own confidence Low; poisoning the cache this reads
+        requires push access to the branch that wrote it.
+*   **Exit condition, so "advisory" does not become permanent**: the flag
+    comes off once those seven are resolved or carry a recorded exception.
+
+The next sweep re-opens at **F307**.

@@ -1,0 +1,26 @@
+# zizmor configuration — static analysis for the workflows in this repository.
+#
+# Only one audit is configured, and it is configured to match a policy this
+# repository already enforces in `workflow_action_pin_test` rather than to
+# silence it. Divergence between the two would be worse than either alone: a
+# contributor would be told to pin by one gate and told it is fine by the
+# other.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # GitHub's own first-party namespace. A compromise here is a
+        # compromise of the platform running the job, which a pinned SHA does
+        # not survive either. OpenSSF Scorecard asks for these to be pinned
+        # too; this is a deliberate, narrow divergence, and the reasoning is
+        # the same one recorded in `workflow_action_pin_test::is_exempt`.
+        "actions/*": ref-pin
+        # The tag names the TOOLCHAIN to install, not a release of the action.
+        # A SHA would freeze the action while changing nothing about the Rust
+        # version — the opposite of the intent — and `rust_version_pins_test`
+        # reads this tag as a version, so pinning it breaks that guard.
+        "dtolnay/rust-toolchain": ref-pin
+        # Everything else: full commit SHA. This is the half that stops
+        # tag-repointing, the shape of the tj-actions and reviewdog
+        # compromises.
+        "*": hash-pin

@@ -77,7 +77,7 @@ This is the guard cycle 6 filed as **M17**, recommending it be broadened to a to
 
 **Unchanged and open:** the gitlink differential fixture (0 refs — now by a wide margin the oldest untouched item, carried since cycle 6 M12); `outputSchema` at 1 of 11 tools (per-tool design work, E8); M8 MCP cancellation (0 `RequestContext`; a design question per E9, not a wiring one); `zizmor` unadopted; crates.io Trusted Publishing unadopted.
 
-**Currency, re-verified live 2026-08-13** (per the standing rule — at report time, not engagement time): rmcp lockfile `3.1.2` = live latest ✅. Rust pin remains `1.96.0`; 1.97.1 is current and 1.98 lands ~2026-08-27, so the pin is now two releases behind and the six-site bump is guarded by `rust_version_pins_test` — this is the cheapest open item on the list.
+**Currency, re-verified live 2026-08-13** (per the standing rule — at report time, not engagement time): rmcp lockfile `3.1.2` = live latest ✅. Rust pin remains `1.96.0`; 1.97.1 is current and 1.98 lands ~2026-08-27, so the pin is now two releases behind and the bump is guarded by `rust_version_pins_test` across the five sites it names (`rust-toolchain.toml`, the workspace `rust-version`, `clippy.toml`'s msrv, the `Containerfile` ARG, and the action tags) — corrected from "six-site" on verification — this is the cheapest open item on the list.
 
 ---
 
