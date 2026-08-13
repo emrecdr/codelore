@@ -6,6 +6,17 @@ on:
     # major tag `v1` is a `v*` tag that moves on every release, and under
     # `v*` that push triggered a duplicate container build and publish.
     tags: ['v*.*.*']
+  # Manual re-run of a release publish that failed after the tag was pushed.
+  # Dispatch it FROM THE TAG, not from a branch: every job here is gated on
+  # `github.ref_type == 'tag'` and a branch dispatch skips the whole
+  # workflow rather than publishing.
+  #
+  # Without that gate a branch dispatch published for real. `type=sha` is the
+  # only tag rule that matches a non-tag ref, so the run produced a genuine,
+  # publicly pullable, attested `sha-<short>` image from unreleased code —
+  # quietly, because nothing else about the run looked like a release. The
+  # same shape as the `release.yml` dispatch that was documented as a dry run
+  # and published a GitHub Release plus a Homebrew formula.
   workflow_dispatch:
 
 # Cancel any superseded run for the same tag — see release.yml for context.
@@ -36,6 +47,14 @@ concurrency:
 
 jobs:
   build:
+    # Publishing is a tag-ref property, not a trigger property: a dispatch
+    # from a tag is the legitimate retry path and still publishes, while a
+    # dispatch from a branch skips. `merge` and `attest` follow through
+    # `needs:`, so this one condition gates the whole pipeline — but each is
+    # stated on its own job anyway, because a publish gate that depends on
+    # dependency-graph semantics is one `needs:` edit away from silently
+    # re-opening.
+    if: github.ref_type == 'tag'
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -104,6 +123,7 @@ jobs:
 
   merge:
     needs: build
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -165,6 +185,7 @@ jobs:
   # runs no repository-authored code, which is what satisfies SLSA Build L3.
   attest:
     needs: merge
+    if: github.ref_type == 'tag'
     uses: ./.github/workflows/attest-digest.yml
     with:
       subject-name: ghcr.io/${{ github.repository }}
