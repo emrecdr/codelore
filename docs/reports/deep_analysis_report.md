@@ -1488,14 +1488,19 @@ review and change nothing.
     That is an argument for a policy, not for that policy. **The open decision
     is the hash-based form or nothing.**
 
-## 12. Turning the cycle-11 generalisation on this repository's own guards (F300–F302)
+## 12. Turning the cycle-11 generalisation on this repository's own guards (F300–F303)
 
 F299 closed with a standing check: *for any guard, name a member of the class
 it polices that it would not catch — if that is easy, the rule is an instance
 list rather than a rule.* That was written as a lesson. This section is what
 happened when it was run as a procedure against all thirteen guards in the
-tree. Four carry instance lists; all four were probed, two confirmed, one
-refuted, and one turned out to be scoped to a single file.
+tree. **Six** carry instance lists. The first pass probed four of them —
+two confirmed, one refuted, one scoped to a single file — and reported that
+as complete. It was not: `doc_analysis_count_test` and
+`workflow_signing_isolation_test` were never looked at. An enumeration
+reported as exhaustive without being counted is the same defect this
+section is about, committed while writing it up, and F303 below is what the
+missing two produced.
 
 The refutation matters as much as the confirmations: a check that only ever
 confirms is not a check.
@@ -1570,6 +1575,39 @@ confirms is not a check.
     documented as a dry run and published a real GitHub Release and a Homebrew
     formula. **Open decision.**
 
+### F303 (Fixed — Unreleased) — the signing-isolation guard recognised one of three ways to grant a scope
+
+*   **Location**: `codelore-lib/tests/workflow_signing_isolation_test.rs` — `parse`
+*   **Severity**: MED · **Category**: CI safety / guard reach
+*   **Defect**: the guard keeps the release pipeline at SLSA Build L3 by
+    refusing to let any job running repository-authored code hold
+    `id-token`/`attestations`. It found those scopes by reading a
+    `permissions:` block line by line, and GitHub accepts two further
+    spellings of the same grant: `permissions: write-all`, which grants every
+    scope including the signing ones while naming neither, and the flow map
+    `permissions: {id-token: write}`, which names them but not on lines of
+    their own. Both parsed to zero scopes.
+*   **Why `write-all` is the sharp one**: it is the first thing anyone reaches
+    for when an attestation step fails for want of a permission. The blind
+    spot therefore sat exactly where the pressure to use it is highest, and
+    taking it would have dropped the pipeline to L2 while changing no visible
+    output — which is verbatim the regression the guard's own module doc
+    calls "silent and attractive".
+*   **Scope**: no workflow uses either form, so nothing was ungated. What was
+    missing was the tripwire.
+*   **Fix**: a `permissions:` line carrying its value inline is parsed —
+    `write-all` expands to the signing scopes, a flow map contributes its
+    keys, and `read-all` contributes nothing.
+*   **Verified end to end rather than at the parser**: rewriting
+    `container.yml`'s build job to `permissions: write-all` fails the guard
+    naming the job and both implied scopes, where it previously reported
+    nothing; the workflow was restored byte-identical. `read-all` is pinned
+    as granting nothing signable, so the safe shorthand does not start
+    failing every workflow that uses it.
+*   **Correctly handled already, and worth recording**: the guard reads
+    workflow-level `permissions:` and flags a top-level grant that every job
+    would inherit. That half of the inheritance question was never the gap.
+
 ### Probed and refuted
 
 *   **Widening the comment-hygiene phase-keyword list.** `Tier`, `Phase`,
@@ -1581,4 +1619,21 @@ confirms is not a check.
     fail correct comments. Recorded because the next person to run this check
     will find the same 150 hits and needs to know they were looked at.
 
-The next sweep re-opens at **F303**.
+    A later attempt at the general rule put a number on it: *capitalised word
+    joined to a number* produces **924 hits over the scanned roots, every one
+    a false positive* — `Tier1` ×85, `Tier-1` ×64, `Sha2` ×39, `UTF-8` ×26,
+    `Step 1..6` ×~80, `Type 1/2/3` ×~40, SQL keywords (`ELSE 0`, `LIMIT 1`),
+    academic citations (Tornhill 2011, Coleman 1994), conference years
+    (ICSE/MSR/FSE 2xxx), and dates. The banned class is semantic — development
+    history versus current contract — and only a closed keyword vocabulary can
+    express it.
+
+*   **`doc_analysis_count_test`'s `docs/`-only scope.** Its two lists are
+    documented *exclusions*, not an enumeration of the policed class, so it is
+    a different shape from the others here. The obvious class member outside
+    its scope is a stale analysis count in a tracked file above `docs/`. There
+    is none: `README.md` states no count, and the counts that do exist outside
+    the scan are in `CHANGELOG.md`, where historical numbers are correct by
+    design. No live gap.
+
+The next sweep re-opens at **F304**.
