@@ -46,7 +46,7 @@ deny:
 # (CI pins that version; a different one can disagree, which is the whole
 # reason this recipe exists rather than leaving the audit to CI alone.)
 zizmor:
-    zizmor --min-severity high --format plain .github/workflows/
+    zizmor --min-severity high --format plain .github/workflows/ action.yml
 
 # Coverage report — requires: cargo install cargo-llvm-cov
 coverage:
