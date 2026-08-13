@@ -77,9 +77,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: tag
+        # Ref name and type reach the shell through the environment rather
+        # than through an inline expression, which would be substituted into
+        # the script text before bash parses it. `git check-ref-format`
+        # permits far more than it looks like it does — this repository
+        # already has a finding about a `|` in a tag name — so a tag is
+        # untrusted input to a shell, and a release job is the worst place to
+        # learn that.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
           else
             echo "tag=manual-$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
           fi
