@@ -1549,7 +1549,7 @@ confirms is not a check.
     spellings. Scoping to stamp lines keeps prose discussing the section from
     counting; the self-test pins both directions.
 
-### F302 (Active) — the release publish gate reads one file and three markers
+### F302 (Fixed — Unreleased) — the release publish gate reads one file and three markers
 
 *   **Location**: `codelore-lib/tests/release_publish_gate_test.rs`
 *   **Severity**: MED · **Category**: CI safety / guard scope
@@ -1566,14 +1566,18 @@ confirms is not a check.
     gated on `github.ref_type == 'tag'`, but `type=sha,prefix=sha-` is not, so
     a manual dispatch publishes a real `sha-<short>` tag to the public
     registry. `attest-digest.yml` likewise holds `packages: write`.
-*   **Why this is filed rather than fixed**: whether a dispatch-time `sha-` tag
-    is a hazard or a deliberate traceability affordance is a design call, and
-    the two available answers differ in kind — gate the container publish to
-    tags, or widen the guard to cover every publishing workflow and accept
-    that this one publishes on dispatch by design. The precedent argues for
-    looking: this guard exists because `release.yml`'s `workflow_dispatch` was
-    documented as a dry run and published a real GitHub Release and a Homebrew
-    formula. **Open decision.**
+*   **Filed as a decision, then decided** (§13): whether a dispatch-time
+    `sha-` tag was a hazard or a deliberate traceability affordance was a
+    design call, and the precedent argued for looking — this guard exists
+    because `release.yml`'s `workflow_dispatch` was documented as a dry run
+    and published a real GitHub Release and a Homebrew formula.
+*   **Resolution**: publishing was made a property of the ref rather than the
+    trigger. Every job in `container.yml` now requires a tag ref, so
+    dispatching from a tag still publishes — the retry path for a publish
+    that failed after the tag was pushed — while dispatching from a branch
+    skips. The guard's own scope is unchanged and remains narrow: it still
+    reads one file and three markers, and a publishing workflow added
+    elsewhere is still outside it. That half is open.
 
 ### F303 (Fixed — Unreleased) — the signing-isolation guard recognised one of three ways to grant a scope
 
@@ -1666,7 +1670,12 @@ undecided.
     step in them. Worth recording because the guard caught a defect in the
     commit that was hardening the same files.
 
-### F302 — decided and closed: publishing is a ref property, not a trigger property
+**F302 — decided and closed: publishing is a ref property, not a trigger
+property.** (Stated here rather than under a second `F302` heading: the
+first draft of this section repeated the ID as a heading, leaving the ledger
+asserting the same finding was both `Active` and closed. A findings ledger
+whose IDs are not unique cannot be read by ID, which is the only way anyone
+reads it.)
 
 The container workflow's tag rules are all release-shaped except `type=sha`,
 which matches any ref, so a dispatch from a branch built, pushed, tagged and
@@ -1735,4 +1744,38 @@ applies to its own gate.
     roughly eleven dispatchers; at one site it no longer carries its own
     weight.
 
-The next sweep re-opens at **F305**.
+### F305 (Fixed — Unreleased) — the bot-filter guard matched one spelling of a rule SQL gives four
+
+*   **Location**: `codelore-lib/tests/bot_filter_hygiene_test.rs`
+*   **Severity**: LOW · **Category**: test reach / correctness
+*   **Defect**: the guard forbids collapsing bot-ness per canonical identity
+    outside `query.rs`, and looked for two exact literals —
+    `BOOL_OR(is_bot)` and `HAVING NOT BOOL_OR` — case-sensitively. SQL is
+    case-insensitive and indifferent to whitespace, so `bool_or(is_bot)`,
+    `BOOL_OR( is_bot )` and `BOOL_OR(a.is_bot)` are the same query and the
+    same misclassification, and all three were invisible.
+*   **Found by**: the cycle-12 audit, against §12's own census — which had
+    missed this guard entirely. The census enumerated guards carrying
+    instance lists by looking for a `&[&str]` const; this guard holds its
+    instances as inline literals in a `contains()` call, so the search found
+    one *syntactic shape* of instance list rather than the class. Third
+    instance of the same defect this cycle, and the first one inside the
+    procedure built to detect it.
+*   **Scope**: the tree is clean — the only occurrences are `query.rs`'s
+    explanatory doc comment, which is the documented exemption. What was
+    missing was detection.
+*   **Fix**: matched against a normalised copy (lowercased, whitespace
+    removed) with the column qualifier stripped, so the guard tests the
+    query's meaning rather than its spelling.
+*   **Verified**: a comment reading `bool_or( a.is_bot )` — lowercase,
+    spaced and qualified at once — now fails the guard naming its file and
+    line, where the previous matcher saw nothing; the self-test pins all four
+    spellings and three non-collapses.
+*   **Refuted while checking, and recorded**: cycle-6's M17 also claimed
+    `pair_programming.rs` keeps a Rust-side bot filter the guard cannot see.
+    That file now carries an explicit rationale — it reads `commits` directly
+    rather than through `HUMAN_ALIASES_CTE`, so its `is_bot` checks are the
+    only thing keeping bots out of the pair counts. A documented design
+    decision, not an oversight.
+
+The next sweep re-opens at **F306**.

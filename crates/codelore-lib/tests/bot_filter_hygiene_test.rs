@@ -6,7 +6,7 @@
 //! collapsing it to a single `BOOL_OR` per canonical identity — a canonical
 //! with a mix of human and bot aliases is silently misclassified by the old
 //! per-canonical collapse. Nothing mechanical stops a future query from
-//! reintroducing that pattern, so this test fails the gate if the literal
+//! reintroducing that pattern, so this test fails the gate if the collapse
 //! reappears anywhere under `analyses/` except `query.rs` itself, which
 //! legitimately names the pattern in `HUMAN_ALIASES_CTE`'s explanatory doc
 //! comment.
@@ -61,7 +61,7 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
         }
         let text = std::fs::read_to_string(file).expect("read source file");
         for (line_idx, line) in text.lines().enumerate() {
-            if line.contains("BOOL_OR(is_bot)") || line.contains("HAVING NOT BOOL_OR") {
+            if collapses_bot_per_canonical(line) {
                 let rel = file.strip_prefix(&root).unwrap_or(file);
                 violations.push(format!(
                     "{}:{}: {}",
@@ -81,4 +81,65 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
         violations.len(),
         violations.join("\n"),
     );
+}
+
+/// True if `line` collapses bot-ness to one value per canonical identity.
+///
+/// Matched against a normalised copy — lowercased, whitespace removed —
+/// rather than as literal text. SQL is case-insensitive and indifferent to
+/// spacing, so `bool_or( a.is_bot )` is the same query as `BOOL_OR(is_bot)`
+/// and produces the same misclassification; an exact-literal match sees one
+/// spelling of a rule that has at least four. The column qualifier is
+/// stripped for the same reason: bare or table-qualified, the collapse is
+/// identical.
+fn collapses_bot_per_canonical(line: &str) -> bool {
+    let flat: String = line
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if flat.contains("havingnotbool_or") {
+        return true;
+    }
+    flat.match_indices("bool_or(").any(|(at, _)| {
+        let arg = &flat[at + "bool_or(".len()..];
+        let end = arg.find(')').unwrap_or(arg.len());
+        // `rsplit('.')` drops a table qualifier: `a.is_bot` and `is_bot` are
+        // the same column to the planner.
+        arg[..end].rsplit('.').next() == Some("is_bot")
+    })
+}
+
+#[test]
+fn the_guard_matches_the_spellings_sql_treats_as_equal() {
+    // The rule this guard enforces is about a query's meaning, and SQL gives
+    // that meaning several spellings. Pin the ones an exact-literal match
+    // misses — each is the same collapse, and each was invisible.
+    for line in [
+        "SELECT canonical, BOOL_OR(is_bot) FROM x GROUP BY canonical",
+        "select canonical, bool_or(is_bot) from x group by canonical",
+        "SELECT canonical, BOOL_OR( is_bot ) FROM x GROUP BY canonical",
+        "SELECT canonical, BOOL_OR(a.is_bot) FROM x GROUP BY canonical",
+        "... GROUP BY canonical HAVING NOT BOOL_OR(is_bot)",
+        "... group by canonical having not bool_or(a.is_bot)",
+    ] {
+        assert!(
+            collapses_bot_per_canonical(line),
+            "must flag a per-canonical collapse: {line:?}"
+        );
+    }
+
+    // Shapes that are not the collapse. `BOOL_OR` over anything else is an
+    // ordinary aggregate, and the per-alias resolution this guard steers
+    // toward must not flag itself.
+    for line in [
+        "SELECT BOOL_OR(is_merge) FROM commits",
+        "SELECT canonical, MAX(is_bot) FROM x GROUP BY canonical",
+        "LEFT JOIN human_aliases h ON h.alias = c.author",
+    ] {
+        assert!(
+            !collapses_bot_per_canonical(line),
+            "must not flag a non-collapse: {line:?}"
+        );
+    }
 }

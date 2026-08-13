@@ -285,6 +285,63 @@ fn no_widget_concatenates_repository_strings_into_markup_unescaped() {
 /// after `<`" rule would misread text as markup.
 const NON_TAG_PLACEHOLDERS: &[&str] = &["anonymous", "root"];
 
+/// Repository strings parked in a local by one statement and rendered by the
+/// next — the shape `unescaped_sinks` provably cannot reach, because it reads
+/// one statement at a time and the local carries no accessor to match.
+///
+/// Naming the two sites is an instance list, which is the thing this file
+/// spends its length avoiding. It earns the exception by covering a class the
+/// general rule cannot express rather than one nobody generalised: every
+/// accessor rule that catches a bare local also flags a comment, a `Path`
+/// column header, a truthiness test and the numeric local `activeAuthors` —
+/// four false positives on a clean tree, measured, not assumed.
+///
+/// `rowAuthor` is why this is worth an exception at all. It renders into
+/// `data-primary-author="…"`, an attribute, which is exactly where the
+/// quote-breakout vector lands — and a git author name takes a quote
+/// verbatim. Its apparent coverage was incidental: the guard caught it only
+/// because a `.path` sat in the same statement, and with that path left
+/// escaped the sink is invisible.
+const LOCAL_CARRIED_SINKS: &[(&str, &str)] = &[
+    ("12_drawer.js", "partnerAuthor"),
+    ("20_hotspots.js", "rowAuthor"),
+];
+
+#[test]
+fn repository_strings_parked_in_locals_are_escaped_where_they_render() {
+    let sources = widget_sources();
+    for (file, local) in LOCAL_CARRIED_SINKS {
+        let Some((_, src)) = sources.iter().find(|(name, _)| name == file) else {
+            panic!("{file} is no longer a widget source");
+        };
+
+        let rendered: Vec<_> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(local) && builds_markup(line))
+            .collect();
+
+        assert!(
+            !rendered.is_empty(),
+            "{file} no longer renders `{local}` into markup. Either the sink \
+             moved — re-point this entry at it — or it is gone and the entry \
+             should be. An instance list that describes code which has moved \
+             is worse than no list, because it reads as coverage."
+        );
+        for (idx, line) in rendered {
+            assert!(
+                line.contains(&format!("escapeHtml({local}")),
+                "{file}:{}: `{local}` reaches markup unescaped.\n  {}\n\n\
+                 This sink is invisible to the statement scan — the value is \
+                 a local, so there is no accessor to match — which is why it \
+                 is pinned by name here.",
+                idx + 1,
+                line.trim(),
+            );
+        }
+    }
+}
+
 #[test]
 fn every_tag_the_widgets_open_is_covered() {
     let mut missing = Vec::new();
