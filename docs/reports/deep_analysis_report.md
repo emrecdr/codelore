@@ -1835,4 +1835,57 @@ applies to its own gate.
     `actions/checkout` persisting credentials — and deserve their own pass
     rather than a blocking gate adopted in the same commit as the tool.
 
-The next sweep re-opens at **F307**.
+### F307 (Fixed — Unreleased) — the bot-filter matcher read one line at a time, and the codebase wraps long SQL
+
+*   **Location**: `codelore-lib/tests/bot_filter_hygiene_test.rs`
+*   **Severity**: LOW · **Category**: test reach / correctness
+*   **Defect**: F305 fixed the spelling axis — case, whitespace, table
+    qualifier — but normalised each line independently. A call wrapped across
+    lines is never assembled, so its argument is never seen. Confirmed by
+    planting `BOOL_OR(` with `a.is_bot` on the next line inside a SQL string
+    literal: the guard passed.
+*   **Not a hypothetical layout**: it is the house style in the very directory
+    the guard scans. `analyses/ownership.rs` writes `SUM(` on one line, its
+    argument on the next, and the closing paren on a third. A `BOOL_OR(` whose
+    argument grew long enough to wrap would be written the same way by the
+    same convention.
+*   **Fix**: normalise the whole file once and map matches back to a file line
+    by counting newlines in the prefix — the technique `spa_escaping_test`
+    already uses to report a file line from a statement offset.
+*   **A bug found while fixing it, worth recording because it is the same
+    class**: the first implementation indexed its offset table per *character*
+    while `match_indices` returns *byte* offsets, so the table drifted on any
+    file containing a multi-byte character — and these files contain them in
+    their prose. The guard detected the right thing and named the wrong line
+    (`soc.rs:142: _bot` instead of `soc.rs:141: BOOL_OR(`). A guard that names
+    the wrong line is a guard people stop trusting. Caught because the
+    regression test read the reported location rather than only the pass/fail.
+*   **Verified**: wrapped SQL now fails naming the construct's own line; all
+    four single-line spellings still caught; the tree is clean either way.
+
+### The Trusted Publishing deferral, corrected
+
+Cycle 13 tested the premise of §13's deferral and it does not hold as
+stated. The claim was that Trusted Publishing needs `id-token` on a job that
+runs `cargo publish`, which builds the crate and therefore executes
+`build.rs`. Only the *verification* step builds, and it is switchable:
+
+| command | `build.rs` executed |
+|---|---|
+| `cargo package --no-verify` | no |
+| `cargo package` | yes |
+
+Reproduced here independently on `cargo 1.97.1` (the cycle used 1.95.0), with
+the control that matters — a "no" with no corresponding "yes" would only mean
+the probe was broken.
+
+So the architecture is compatible: the build job keeps verification and runs
+repository code with no token, and a publish job holding `id-token` runs
+`cargo publish --no-verify`, executing none. **The deferral stands, but the
+reason was wrong.** The real blockers are that Trusted Publishing must be
+configured per-crate on crates.io — an action outside this repository — and
+that switching the workflow before that configuration exists breaks the next
+release. Sequencing, not incompatibility. Recorded so the next cycle does not
+re-derive a resolved argument.
+
+The next sweep re-opens at **F308**.
