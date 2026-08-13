@@ -1636,4 +1636,103 @@ confirms is not a check.
     the scan are in `CHANGELOG.md`, where historical numbers are correct by
     design. No live gap.
 
-The next sweep re-opens at **F304**.
+## 13. Backlog decisions, researched (F304)
+
+Every item that had been sitting as "open, user's call" was researched against
+current tooling and standards and decided. Three produced work; four are
+deferred with a stated reason rather than left ambiguous; one is closed.
+Deferral here means *decided not to do now, for this reason* — not
+undecided.
+
+### F304 (Fixed — Unreleased) — three workflow steps substituted a ref into a shell
+
+*   **Location**: `ci.yml` (PR diff summary), `release.yml` (tag resolution)
+*   **Severity**: MED · **Category**: injection / CI
+*   **Defect**: `github.base_ref`, `github.ref_name` and `github.ref_type`
+    were substituted directly into `run:` blocks. An expression is
+    substituted into the script *text* before bash parses it, so a shell
+    metacharacter in the value is executed rather than quoted.
+*   **Why the vector is real here**: `git check-ref-format` permits far more
+    than it appears to, and this repository already carries F296 — a `|` in a
+    tag name corrupting a Markdown table. The same permissiveness that
+    produced a broken table produces a shell injection when the value reaches
+    a `run:` block instead of a formatter.
+*   **Fix**: all three pass through `env:` and are read as quoted shell
+    variables. `zizmor` template-injection findings 3 → 0.
+*   **Caught by the tree's own guard, mid-fix**: the first draft explained the
+    change by writing the expression syntax literally in a comment.
+    `workflow_expression_test` failed it — GitHub's evaluator reads `#`
+    comments, so that would have made both files unloadable and skipped every
+    step in them. Worth recording because the guard caught a defect in the
+    commit that was hardening the same files.
+
+### F302 — decided and closed: publishing is a ref property, not a trigger property
+
+The container workflow's tag rules are all release-shaped except `type=sha`,
+which matches any ref, so a dispatch from a branch built, pushed, tagged and
+attested a genuine publicly-pullable image from unreleased code.
+
+A build-only dry run was considered and rejected: it breaks the
+digest → merge → attest chain and would need the three-job pipeline
+restructured, which cannot be exercised from a working copy. Every job now
+requires a tag ref. **Dispatching from a tag still publishes** — that is the
+retry path when a publish fails after the tag is pushed — and dispatching
+from a branch skips. The condition is repeated per job rather than inherited
+through `needs:`, on the same reasoning `release_publish_gate_test` already
+applies to its own gate.
+
+### Deferred, with reasons
+
+*   **crates.io Trusted Publishing — deferred, and not for effort.** It is GA,
+    with an official `rust-lang/crates-io-auth-action`, and `zizmor`
+    independently recommends it. It also requires `id-token: write` on the job
+    that runs `cargo publish` — and `cargo publish` builds the crate, which
+    executes `codelore-lib/build.rs`. Repository-authored code holding an OIDC
+    token can request *any* audience, sigstore included, which forges the
+    provenance this pipeline is built to make unforgeable. Minting the token
+    in a separate job does not help: job outputs are not masked, and the
+    action revokes the token when its own job ends. `cargo publish
+    --no-verify` would avoid executing repository code and make adoption
+    viable, at the cost of publish-time verification and a new distinction the
+    isolation guard would have to learn. **Adopting it as written would trade
+    Build L3 for the removal of one long-lived secret. Not a drop-in, and the
+    trade is the wrong way round.**
+*   **`zizmor` — adopt, in two stages; stage one landed.** It is the de facto
+    standard for Actions static analysis. Run against this tree it reports 65
+    findings: 34 `unpinned-uses`, 15 `artipacked`, 4 `excessive-permissions`,
+    3 `template-injection`, 2 `dangerous-triggers`, and one
+    `use-trusted-publishing`. The template-injection three are fixed above.
+    Gating CI on it needs a **policy decision that is genuinely the
+    maintainer's**: 34 of the findings are `actions/*` and
+    `dtolnay/rust-toolchain` referenced by tag, and the latter *must not* be
+    SHA-pinned — its tag names the toolchain, not the action version. Adopting
+    the gate means either SHA-pinning the `actions/*` set or configuring the
+    audit to accept them, and that choice belongs to whoever owns the
+    supply-chain policy. The `dangerous-triggers` pair is
+    `pull_request_target` + `workflow_run` in the Dependabot workflow, already
+    mitigated by never checking out PR code and documented as such.
+*   **Rust 1.97.1 — deferred to the next release cut, by the documented
+    convention.** Stable is 1.97.1 (2026-07-16); the pin is 1.96.0. The bump
+    is coordinated across four pin sites and a CHANGELOG entry at cut time,
+    and a toolchain bump lands new clippy lints against a `-D warnings` gate —
+    a mid-cycle bump would leave that work unreleased and the sites liable to
+    drift. Due, not urgent.
+*   **A hash-based CSP for the dashboard — still the open recommendation, and
+    the one item where a fact was worth re-checking.** The ledger's claim that
+    the template carries zero inline `on*=` handlers is **correct** — verified
+    directly, which matters because a first grep suggested ten and the pattern
+    was at fault, not the claim. So `'unsafe-hashes'` is genuinely not
+    required and the hash form is viable. It remains an emitter change: a
+    per-emit digest of each inline block, including the interpolated data.
+    With sink escaping now guarded on three axes, the marginal value is the
+    exfiltration half alone, which is real but no longer urgent.
+
+### Closed
+
+*   **F215 — closed, not fixed.** One `unreachable!` remains in the CLI, in
+    `analyze.rs`, carrying a message that states its own invariant. The
+    `enum Format` refactor was proposed when the same pattern appeared in
+    roughly eleven dispatchers; at one site it no longer carries its own
+    weight.
+
+The next sweep re-opens at **F305**.
