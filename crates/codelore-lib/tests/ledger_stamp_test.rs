@@ -132,9 +132,10 @@ fn the_guard_reads_the_changelog_shape_it_expects() {
          and a Status bullet; a shipped-version stamp does not"
     );
 
-    // Prose discussing the section is not a stamp. The previous rule matched
-    // anywhere in the document, so a sentence quoting a stamp would have
-    // counted as one.
+    // Prose discussing the section is not a stamp. Prophylactic rather than
+    // a fixed miscount: the previous rule scanned the whole document for two
+    // exact spellings, so a sentence quoting one verbatim would have counted
+    // — no such sentence existed, and scoping to stamp lines means none can.
     let prose = "The stamp read \"+ Unreleased\" for two releases after the \
                  work shipped, which is the rot this guard exists to catch.\n";
     assert_eq!(

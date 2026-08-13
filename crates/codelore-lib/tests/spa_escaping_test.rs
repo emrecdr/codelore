@@ -135,19 +135,27 @@ const HTML_MARKERS: &[&str] = &[
 /// check, the literal `'<anonymous>'` — the placeholder for an unnamed
 /// function in the X-ray widget — reads as an opening tag.
 fn builds_markup(stmt: &str) -> bool {
-    if HTML_MARKERS.iter().any(|m| stmt.contains(m)) {
-        return true;
-    }
-    stmt.match_indices('<').any(|(i, _)| {
-        if !stmt[..i].trim_end_matches(' ').ends_with(['\'', '"']) {
-            return false;
+    HTML_MARKERS.iter().any(|m| stmt.contains(m))
+        || literal_tags(stmt).any(|(_, tag)| HTML_TAGS.contains(&tag))
+}
+
+/// Every tag name opened inside a string literal in `s`, with its offset.
+///
+/// The literal anchor and the name extraction live here because two callers
+/// need the same answer: `builds_markup` asks whether any of them is a tag
+/// it knows, and `every_tag_the_widgets_open_is_covered` asks whether any of
+/// them is one it does not.
+fn literal_tags(s: &str) -> impl Iterator<Item = (usize, &str)> {
+    s.match_indices('<').filter_map(move |(i, _)| {
+        if !s[..i].trim_end_matches(' ').ends_with(['\'', '"']) {
+            return None;
         }
-        let rest = &stmt[i + 1..];
+        let rest = &s[i + 1..];
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         let len = rest
             .find(|c: char| !c.is_ascii_alphanumeric())
             .unwrap_or(rest.len());
-        HTML_TAGS.contains(&&rest[..len])
+        (len > 0).then(|| (i, &rest[..len]))
     })
 }
 
@@ -268,6 +276,42 @@ fn no_widget_concatenates_repository_strings_into_markup_unescaped() {
          already uses.",
         violations.len(),
         violations.join("\n"),
+    );
+}
+
+/// Literal-adjacent `<token>` strings in the widgets that are not markup:
+/// the X-ray widget's placeholder for an unnamed function, and the import
+/// graph's label for the tree root. Both are proof that a bare "any token
+/// after `<`" rule would misread text as markup.
+const NON_TAG_PLACEHOLDERS: &[&str] = &["anonymous", "root"];
+
+#[test]
+fn every_tag_the_widgets_open_is_covered() {
+    let mut missing = Vec::new();
+    for (name, src) in widget_sources() {
+        for (at, tag) in literal_tags(&src) {
+            if HTML_TAGS.contains(&tag) || NON_TAG_PLACEHOLDERS.contains(&tag) {
+                continue;
+            }
+            let line = src[..at].matches('\n').count() + 1;
+            missing.push(format!("  {name}:{line}: <{tag}"));
+        }
+    }
+    missing.sort();
+    missing.dedup();
+
+    assert!(
+        missing.is_empty(),
+        "{} tag(s) opened in widget markup are absent from `HTML_TAGS`:\n{}\n\n\
+         `builds_markup` examines a statement only when it recognises the \
+         markup, so a tag missing from that list silently takes every \
+         accessor in the statement out of coverage — no failure, no output, \
+         just a blind spot. That is the defect this guard was widened to \
+         close, and the list is the one place it can reopen.\n\n\
+         Add the tag, or if the token is not markup, add it to \
+         `NON_TAG_PLACEHOLDERS` with the reason.",
+        missing.len(),
+        missing.join("\n"),
     );
 }
 
