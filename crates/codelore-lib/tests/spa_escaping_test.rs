@@ -79,11 +79,12 @@ fn widget_sources() -> Vec<(String, String)> {
 ///
 /// Matching is by prefix, so `.entity` covers `.entity_a` and `.entity_b`:
 /// a suffixed variant lands at the same byte offset, is judged from that
-/// same offset, and so can only report the one defect twice.
-/// The `_`-prefixed entries cover qualifier-first compounds — `main_author`
-/// is a payload field rendered today, and `.author` does not occur in it
-/// because the character before `author` is `_`, not `.`. Suffix compounds
-/// need no entry: `.entity` already covers `.entity_a` and `.entity_b`.
+/// same offset, and so can only report the one defect twice. Suffix
+/// compounds therefore need no entry of their own.
+///
+/// The `_`-prefixed entries cover the opposite shape, a qualifier-first
+/// compound: `main_author` is a payload field rendered today, and `.author`
+/// does not occur in it because the character before `author` is `_`.
 const RAW_STRING_ACCESSORS: &[&str] = &[
     ".path",
     ".entity",
@@ -148,6 +149,7 @@ fn builds_markup(stmt: &str) -> bool {
 /// at `&rarr;` — severing it from the very marker that identifies it as
 /// markup, and hiding every accessor after the entity. So a `;` that closes
 /// an entity is not a statement boundary.
+///
 /// Each slice is paired with its byte offset in `src`, so a violation can
 /// name the line in the file rather than the line within the statement —
 /// the latter reads like a file line and points hundreds of lines away.
@@ -168,19 +170,31 @@ fn statements(src: &str) -> Vec<(usize, &str)> {
     out
 }
 
+/// Byte index where the identifier chain ending `s` begins.
+///
+/// Stepping back by the terminator's own width, rather than one byte, keeps
+/// the index on a character boundary: the widgets carry `—` and `·`, and a
+/// multi-byte terminator would otherwise split mid-character and panic the
+/// guard instead of reporting on the file. Both callers need that property,
+/// which is why the walk lives here instead of in each of them — a second
+/// copy is a second place for the boundary step to be got wrong.
+///
+/// `dotted` decides whether `.` continues the chain: a member expression is
+/// walked off whole (`p.data.source`), while a callee name stops at the dot
+/// so the function's own name stays isolated.
+fn ident_start(s: &str, dotted: bool) -> usize {
+    s.char_indices()
+        .rev()
+        .find(|(_, c)| {
+            !(c.is_ascii_alphanumeric() || *c == '_' || *c == '$' || (dotted && *c == '.'))
+        })
+        .map_or(0, |(i, c)| i + c.len_utf8())
+}
+
 /// What precedes the member expression containing `pos`, with the
 /// expression's own identifier chain walked off.
 fn preceding(stmt: &str, pos: usize) -> &str {
-    // Stepping by the terminator's own width, rather than one byte, keeps
-    // the slice on a character boundary: the widgets contain `—` and `·`,
-    // and a multi-byte terminator would otherwise split mid-character and
-    // panic the guard instead of reporting on the file.
-    let head = stmt[..pos]
-        .char_indices()
-        .rev()
-        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '$' || *c == '.'))
-        .map_or(0, |(i, c)| i + c.len_utf8());
-    stmt[..head].trim_end()
+    stmt[..ident_start(&stmt[..pos], true)].trim_end()
 }
 
 /// Whether the expression at `pos` sits inside an `escapeHtml(...)` call.
@@ -197,12 +211,9 @@ fn is_escaped(stmt: &str, pos: usize) -> bool {
             ')' => depth += 1,
             '(' if depth == 0 => {
                 let head = stmt[..i].trim_end();
-                let start = head
-                    .char_indices()
-                    .rev()
-                    .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '$'))
-                    .map_or(0, |(i, c)| i + c.len_utf8());
-                return &head[start..] == "escapeHtml";
+                // Not `dotted`: the callee's own name is wanted, so a
+                // qualified `a.escapeHtml(` must not read as `escapeHtml`.
+                return &head[ident_start(head, false)..] == "escapeHtml";
             }
             '(' => depth -= 1,
             _ => {}

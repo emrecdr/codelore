@@ -1,5 +1,5 @@
-//! Guard: a `Fixed (Unreleased)` ledger stamp must be backed by a non-empty
-//! `[Unreleased]` CHANGELOG section.
+//! Guard: a ledger stamp claiming unreleased work must be backed by a
+//! non-empty `[Unreleased]` CHANGELOG section.
 //!
 //! The stamp is a claim ABOUT that section — "this shipped, and the release
 //! notes for it are sitting in `[Unreleased]`". Cutting a release drains the
