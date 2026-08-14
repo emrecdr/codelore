@@ -60,16 +60,16 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
             continue;
         }
         let text = std::fs::read_to_string(file).expect("read source file");
-        for (line_idx, line) in text.lines().enumerate() {
-            if collapses_bot_per_canonical(line) {
-                let rel = file.strip_prefix(&root).unwrap_or(file);
-                violations.push(format!(
-                    "{}:{}: {}",
-                    rel.display(),
-                    line_idx + 1,
-                    line.trim()
-                ));
-            }
+        for at in collapse_offsets(&text) {
+            let rel = file.strip_prefix(&root).unwrap_or(file);
+            let line_idx = text[..at].matches('\n').count();
+            let line = text[at..].lines().next().unwrap_or_default();
+            violations.push(format!(
+                "{}:{}: {}",
+                rel.display(),
+                line_idx + 1,
+                line.trim()
+            ));
         }
     }
 
@@ -81,6 +81,53 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
         violations.len(),
         violations.join("\n"),
     );
+}
+
+/// Byte offsets in `text` where a per-canonical collapse begins.
+///
+/// The whole file is normalised once rather than line by line. SQL here is
+/// written to a house style that wraps a long call across lines — see the
+/// `SUM(` in `analyses/ownership.rs`, whose argument and closing paren sit on
+/// their own lines — so a `BOOL_OR(` whose argument grew long enough to wrap
+/// would be formatted the same way and never assembled by a per-line scan.
+/// Matching what the planner sees means ignoring layout as well as spelling.
+///
+/// Offsets are mapped back to a file line the way `spa_escaping_test` does
+/// it: count newlines in the prefix. Reporting the line within a normalised
+/// buffer would name a line that does not exist in the file.
+fn collapse_offsets(text: &str) -> Vec<usize> {
+    // Index from the normalised copy back to the original, so a match found
+    // without whitespace can still be reported where the reader will find it.
+    let mut flat = String::with_capacity(text.len());
+    let mut origin = Vec::with_capacity(text.len());
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() {
+            continue;
+        }
+        for lowered in c.to_lowercase() {
+            // One entry per BYTE of the lowered char, not per char:
+            // `match_indices` returns byte offsets into `flat`, so a
+            // char-indexed table drifts as soon as the file contains a
+            // multi-byte character — and these files do, in their prose.
+            let start = flat.len();
+            flat.push(lowered);
+            origin.resize(flat.len().max(start), i);
+        }
+    }
+    let mut out = Vec::new();
+    for (at, _) in flat.match_indices("bool_or(") {
+        let arg = &flat[at + "bool_or(".len()..];
+        let end = arg.find(')').unwrap_or(arg.len());
+        if arg[..end].rsplit('.').next() == Some("is_bot") {
+            out.push(origin[at]);
+        }
+    }
+    for (at, _) in flat.match_indices("havingnotbool_or") {
+        out.push(origin[at]);
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// True if `line` collapses bot-ness to one value per canonical identity.
