@@ -60,8 +60,8 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
             continue;
         }
         let text = std::fs::read_to_string(file).expect("read source file");
+        let rel = file.strip_prefix(&root).unwrap_or(file);
         for at in collapse_offsets(&text) {
-            let rel = file.strip_prefix(&root).unwrap_or(file);
             let line_idx = text[..at].matches('\n').count();
             let line = text[at..].lines().next().unwrap_or_default();
             violations.push(format!(
@@ -85,6 +85,14 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
 
 /// Byte offsets in `text` where a per-canonical collapse begins.
 ///
+/// Matching runs against a normalised copy — lowercased, whitespace removed —
+/// rather than literal text. SQL is case-insensitive and indifferent to
+/// spacing, so `bool_or( a.is_bot )` is the same query as `BOOL_OR(is_bot)`
+/// and produces the same misclassification; an exact-literal match sees one
+/// spelling of a rule that has at least four. The column qualifier is
+/// stripped for the same reason: bare or table-qualified, the collapse is
+/// identical to the planner.
+///
 /// The whole file is normalised once rather than line by line. SQL here is
 /// written to a house style that wraps a long call across lines — see the
 /// `SUM(` in `analyses/ownership.rs`, whose argument and closing paren sit on
@@ -96,6 +104,8 @@ fn no_canonical_level_bool_or_is_bot_outside_query_rs() {
 /// it: count newlines in the prefix. Reporting the line within a normalised
 /// buffer would name a line that does not exist in the file.
 fn collapse_offsets(text: &str) -> Vec<usize> {
+    const HAVING_NOT: &str = "havingnot";
+
     // Index from the normalised copy back to the original, so a match found
     // without whitespace can still be reported where the reader will find it.
     let mut flat = String::with_capacity(text.len());
@@ -109,9 +119,8 @@ fn collapse_offsets(text: &str) -> Vec<usize> {
             // `match_indices` returns byte offsets into `flat`, so a
             // char-indexed table drifts as soon as the file contains a
             // multi-byte character — and these files do, in their prose.
-            let start = flat.len();
             flat.push(lowered);
-            origin.resize(flat.len().max(start), i);
+            origin.resize(flat.len(), i);
         }
     }
     let mut out = Vec::new();
@@ -122,71 +131,88 @@ fn collapse_offsets(text: &str) -> Vec<usize> {
             out.push(origin[at]);
         }
     }
+    // `HAVING NOT BOOL_OR` is banned whatever it aggregates. Anchor it on the
+    // `BOOL_OR` token rather than on `HAVING`, because `bool_or(` is a
+    // substring of `havingnotbool_or(` — a construct matching both rules
+    // would otherwise be recorded at two offsets and counted twice.
     for (at, _) in flat.match_indices("havingnotbool_or") {
-        out.push(origin[at]);
+        out.push(origin[at + HAVING_NOT.len()]);
     }
     out.sort_unstable();
     out.dedup();
     out
 }
 
-/// True if `line` collapses bot-ness to one value per canonical identity.
-///
-/// Matched against a normalised copy — lowercased, whitespace removed —
-/// rather than as literal text. SQL is case-insensitive and indifferent to
-/// spacing, so `bool_or( a.is_bot )` is the same query as `BOOL_OR(is_bot)`
-/// and produces the same misclassification; an exact-literal match sees one
-/// spelling of a rule that has at least four. The column qualifier is
-/// stripped for the same reason: bare or table-qualified, the collapse is
-/// identical.
-fn collapses_bot_per_canonical(line: &str) -> bool {
-    let flat: String = line
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect();
-    if flat.contains("havingnotbool_or") {
-        return true;
-    }
-    flat.match_indices("bool_or(").any(|(at, _)| {
-        let arg = &flat[at + "bool_or(".len()..];
-        let end = arg.find(')').unwrap_or(arg.len());
-        // `rsplit('.')` drops a table qualifier: `a.is_bot` and `is_bot` are
-        // the same column to the planner.
-        arg[..end].rsplit('.').next() == Some("is_bot")
-    })
-}
-
 #[test]
-fn the_guard_matches_the_spellings_sql_treats_as_equal() {
+fn the_guard_matches_the_shapes_sql_treats_as_one_query() {
     // The rule this guard enforces is about a query's meaning, and SQL gives
-    // that meaning several spellings. Pin the ones an exact-literal match
+    // that meaning several shapes. Pin the ones an exact-literal match
     // misses — each is the same collapse, and each was invisible.
-    for line in [
+    for text in [
         "SELECT canonical, BOOL_OR(is_bot) FROM x GROUP BY canonical",
         "select canonical, bool_or(is_bot) from x group by canonical",
         "SELECT canonical, BOOL_OR( is_bot ) FROM x GROUP BY canonical",
         "SELECT canonical, BOOL_OR(a.is_bot) FROM x GROUP BY canonical",
         "... GROUP BY canonical HAVING NOT BOOL_OR(is_bot)",
         "... group by canonical having not bool_or(a.is_bot)",
+        // Layout, not spelling: the house style wraps a long call so the
+        // argument lands on its own line. A per-line scan never assembles
+        // it, which is the gap this matcher was widened to close.
+        "SELECT canonical, BOOL_OR(\n    a.is_bot\n) FROM x GROUP BY canonical",
     ] {
         assert!(
-            collapses_bot_per_canonical(line),
-            "must flag a per-canonical collapse: {line:?}"
+            !collapse_offsets(text).is_empty(),
+            "must flag a per-canonical collapse: {text:?}"
         );
     }
 
     // Shapes that are not the collapse. `BOOL_OR` over anything else is an
     // ordinary aggregate, and the per-alias resolution this guard steers
     // toward must not flag itself.
-    for line in [
+    for text in [
         "SELECT BOOL_OR(is_merge) FROM commits",
         "SELECT canonical, MAX(is_bot) FROM x GROUP BY canonical",
         "LEFT JOIN human_aliases h ON h.alias = c.author",
     ] {
         assert!(
-            !collapses_bot_per_canonical(line),
-            "must not flag a non-collapse: {line:?}"
+            collapse_offsets(text).is_empty(),
+            "must not flag a non-collapse: {text:?}"
         );
     }
+
+    // `HAVING NOT BOOL_OR(is_bot)` satisfies both banned shapes at once — the
+    // `HAVING NOT BOOL_OR` filter and the `BOOL_OR(is_bot)` collapse nested
+    // inside it, since one literal contains the other. It is a single
+    // construct and must be reported once, or the violation count overstates
+    // how much there is to fix.
+    assert_eq!(
+        collapse_offsets("... GROUP BY canonical HAVING NOT BOOL_OR(is_bot)").len(),
+        1,
+        "one construct must not be counted twice"
+    );
+}
+
+#[test]
+fn a_flagged_construct_reports_where_it_is_written() {
+    // Multi-byte prose ahead of the match is what separates a byte-indexed
+    // offset table from a char-indexed one — only the former still lands on
+    // the construct. These files carry exactly that in their doc comments,
+    // and a guard that names the wrong line is one people stop trusting.
+    let text = "// résumé, naïve — notes on bot heuristics\n\
+                SELECT canonical, BOOL_OR(\n\
+                a.is_bot\n\
+                ) FROM authors";
+
+    let offsets = collapse_offsets(text);
+    assert_eq!(offsets.len(), 1, "one construct, one offset: {offsets:?}");
+    assert!(
+        text[offsets[0]..].starts_with("BOOL_OR("),
+        "offset must land on the construct, not near it: {:?}",
+        &text[offsets[0]..],
+    );
+    assert_eq!(
+        text[..offsets[0]].matches('\n').count() + 1,
+        2,
+        "must name the line `BOOL_OR(` is written on"
+    );
 }
