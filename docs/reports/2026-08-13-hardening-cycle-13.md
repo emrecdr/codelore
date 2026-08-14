@@ -102,7 +102,13 @@ I want to be clear about what this is: applying §12's standard to the guard tha
 
 ## 6. Housekeeping
 
-- Branches: `main`, `gh-pages` (actively published), and **`docs/hardening-cycle-12` is still unmerged** — cycle 12's report has not landed on `main`, unlike cycles 9–11. Worth a PR or a deliberate decision to drop it; F304's numbering suggests the ledger already absorbed its content.
+- Branches: `main`, `gh-pages` (actively published). *(Corrected on landing:
+  this said `docs/hardening-cycle-12` was unmerged and cycle 12's report had
+  not landed. It had — `f678d2c` added it to `main`, swept in by a `git add
+  docs/reports/` in #271 rather than by its own PR, which is why it looked
+  unmerged from the audit side. No such branch exists on the remote. The
+  sweep was recorded as a process error at the time; this is the second
+  thing it caused.)*
 - `_to_delete/` now carries `cycle12/` and `cycle13/` (`cl276.tar`, `delta13.patch`). `rm -rf _to_delete` when convenient. `HANDOFF.md` remains yours.
 - **This report** is committed to branch `docs/hardening-cycle-13`, based on `main` (`67548c2`).
 
