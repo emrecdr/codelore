@@ -116,7 +116,7 @@ jobs:
       # this adds no new pin to maintain. Version-pinned so a new audit
       # landing upstream changes this job's verdict through a visible bump
       # rather than silently on someone else's pull request.
-      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+      - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
           tool: zizmor@1.29.0
       - run: zizmor --min-severity high --format plain .github/workflows/ action.yml
@@ -222,7 +222,7 @@ jobs:
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
       # --doc` separately.
-      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+      - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         if: matrix.run_tests
         with:
           tool: cargo-nextest
