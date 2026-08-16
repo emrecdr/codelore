@@ -75,6 +75,56 @@ The dangling references from Task 4's file drops were resolved by:
 
 **Files modified: 15 source files + Cargo.toml + UPSTREAM.md**
 
+## Unreachable-grammar excision
+
+**Option B again: fully excise Cpp, Kotlin, Ccomment and Preproc.**
+
+The product dispatches six parsers (`Rust`, `Python`, `Java`, `Javascript`,
+`Typescript`, `Tsx`) and resolves only their extensions. The other four
+grammars were compiled into every build and reachable from nothing:
+`bca-tree-sitter-mozcpp` and `tree-sitter-kotlin-ng` contributed ~46 MB of
+generated C, and `bca-tree-sitter-ccomment` / `bca-tree-sitter-preproc` were
+the crate's only source of C++ (two `scanner.cc` files, 4,839 B), which is
+what required a `musl-g++` cross-toolchain and cost the
+`x86_64-unknown-linux-musl` release target.
+
+The four could not be removed independently. `preproc.rs::preprocess` takes a
+`&PreprocParser`, and its `PreprocResults` was a parameter of
+`ParserTrait::new` consumed only by the `LANG::Cpp` arm of
+`get_fake_code` — so dropping the preprocessor while keeping C++ would have
+gutted C++ macro expansion, and dropping C++ while keeping the preprocessor
+would have left machinery with no consumer.
+
+- `src/langs.rs` — removed the four `mk_langs!` entries and the
+  `PreprocResults` import
+- `src/macros.rs` — removed the `get_language!(tree_sitter_cpp)` mozcpp
+  special-case; dropped the `pr` parameter from `action`, `get_function_spaces`
+  and `get_ops`, and the now-unused `path` parameter from `action`
+- `src/traits.rs`, `src/parser.rs` — `ParserTrait::new(code)` no longer takes
+  `path` or `Option<Arc<PreprocResults>>`; `get_fake_code` deleted
+- `src/checker.rs`, `src/getter.rs`, `src/alterator.rs` — removed the
+  `CppCode` / `KotlinCode` / `PreprocCode` / `CcommentCode` impls
+- `src/metrics/{cognitive,cyclomatic,exit,halstead,loc,mi,nargs,nom}.rs` —
+  removed the `CppCode` impls, the dead entries from `implement_metric_trait!`,
+  and the C++-only tests
+- `src/tools.rs` — `test_guess_language` re-pointed at Python/Rust
+- `src/spaces.rs` — deleted `c_scope_resolution_operator` (C++-only)
+- `src/comment_rm.rs` — `ccomment_remove_comments` re-pointed at `RustParser`
+  as `rust_remove_comments`; `rm_comments` itself is generic and unchanged
+- `src/ops.rs` — deleted the C++ operator tests
+- Deleted: `src/preproc.rs`, `src/c_macro.rs`, `src/c_langs_macros/`,
+  `src/languages/language_{cpp,kotlin,preproc,ccomment}.rs`
+- Doc examples across `spaces.rs`, `ops.rs` and `output/dump*.rs` rewritten
+  from C++ to Rust
+
+`petgraph` left with the excision: `preproc.rs` was its only consumer in the
+workspace. That retires its `dependabot.yml` ignore rule and unblocks
+`leiden-rs`'s `petgraph` feature, which had been switched off to avoid
+conflicting with the pinned 0.6.
+
+Removing public API (`LANG` variants, parser types, and the `ParserTrait::new`
+signature) is a breaking change for this crate.
+
 ### Tree-sitter grammar version notes
 
 The `language_*.rs` enum files were generated from specific grammar versions. Using mismatched

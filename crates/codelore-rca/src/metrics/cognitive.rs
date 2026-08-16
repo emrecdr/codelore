@@ -5,7 +5,6 @@ use serde::ser::{SerializeStruct, Serializer};
 use std::fmt;
 
 use crate::checker::Checker;
-use crate::macros::implement_metric_trait;
 use crate::*;
 
 // TODO: Find a way to increment the cognitive complexity value
@@ -418,51 +417,6 @@ impl Cognitive for RustCode {
     }
 }
 
-impl Cognitive for CppCode {
-    fn compute(
-        node: &Node,
-        stats: &mut Stats,
-        nesting_map: &mut HashMap<usize, (usize, usize, usize)>,
-    ) {
-        use Cpp::*;
-
-        //TODO: Implement macros
-        let (mut nesting, depth, mut lambda) = get_nesting_from_map(node, nesting_map);
-
-        match node.kind_id().into() {
-            IfStatement => {
-                if !Self::is_else_if(node) {
-                    increase_nesting(stats,&mut nesting, depth, lambda);
-                }
-            }
-            ForStatement | WhileStatement | DoStatement | SwitchStatement | CatchClause => {
-                increase_nesting(stats,&mut nesting, depth, lambda);
-            }
-            GotoStatement => {
-                increment_by_one(stats);
-            }
-            Else /* else-if also */ => {
-                increment_by_one(stats);
-                // An else-if condition starts a fresh boolean sequence, so its
-                // operators must not merge with the preceding branch
-                // condition's. Reset at the `else` boundary.
-                stats.boolean_seq.reset();
-            }
-            UnaryExpression2 => {
-                stats.boolean_seq.not_operator(node.kind_id());
-            }
-            BinaryExpression2 => {
-                compute_booleans::<language_cpp::Cpp>(node, stats, AMPAMP, PIPEPIPE);
-            }
-            LambdaExpression => {
-                lambda += 1;
-            }
-            _ => {}
-        }
-        nesting_map.insert(node.id(), (nesting, depth, lambda));
-    }
-}
-
 macro_rules! js_cognitive {
     ($lang:ident) => {
         fn compute(node: &Node, stats: &mut Stats, nesting_map: &mut HashMap<usize, (usize, usize, usize)>) {
@@ -566,8 +520,6 @@ impl Cognitive for JavaCode {
     }
 }
 
-implement_metric_trait!(Cognitive, PreprocCode, CcommentCode, KotlinCode);
-
 #[cfg(test)]
 mod tests {
     use crate::tools::check_metrics;
@@ -593,22 +545,6 @@ mod tests {
     #[test]
     fn rust_no_cognitive() {
         check_metrics::<RustParser>("let a = 42;", "foo.rs", |metric| {
-            insta::assert_json_snapshot!(
-                metric.cognitive,
-                @r###"
-                    {
-                      "sum": 0.0,
-                      "average": null,
-                      "min": 0.0,
-                      "max": 0.0
-                    }"###
-            );
-        });
-    }
-
-    #[test]
-    fn c_no_cognitive() {
-        check_metrics::<CppParser>("int a = 42;", "foo.c", |metric| {
             insta::assert_json_snapshot!(
                 metric.cognitive,
                 @r###"
@@ -790,33 +726,6 @@ mod tests {
     }
 
     #[test]
-    fn c_simple_function() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (a && b) { // +2 (+1 &&)
-                     printf(\"test\");
-                 }
-                 if (c && d) { // +2 (+1 &&)
-                     printf(\"test\");
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 4.0,
-                      "average": 4.0,
-                      "min": 0.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
     fn mozjs_simple_function() {
         check_metrics::<JavascriptParser>(
             "function f() {
@@ -895,51 +804,6 @@ mod tests {
                  }
              }",
             "foo.rs",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 2.0,
-                      "average": 2.0,
-                      "min": 0.0,
-                      "max": 2.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_sequence_same_booleans() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (a && b && 1 == 1) { // +2 (+1 sequence of &&)
-                     printf(\"test\");
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 2.0,
-                      "average": 2.0,
-                      "min": 0.0,
-                      "max": 2.0
-                    }"###
-                );
-            },
-        );
-
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (a || b || c || d) { // +2 (+1 sequence of ||)
-                     printf(\"test\");
-                 }
-             }",
-            "foo.c",
             |metric| {
                 insta::assert_json_snapshot!(
                     metric.cognitive,
@@ -1067,51 +931,6 @@ mod tests {
     }
 
     #[test]
-    fn c_not_booleans() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (a && !(b && c)) { // +3 (+1 &&, +1 &&)
-                     printf(\"test\");
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 3.0,
-                      "average": 3.0,
-                      "min": 0.0,
-                      "max": 3.0
-                    }"###
-                );
-            },
-        );
-
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (!(a || b) && !(c || d)) { // +4 (+1 ||, +1 &&, +1 ||)
-                     printf(\"test\");
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 4.0,
-                      "average": 4.0,
-                      "min": 0.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
     fn mozjs_not_booleans() {
         check_metrics::<JavascriptParser>(
             "function f() {
@@ -1187,30 +1006,6 @@ mod tests {
                  }
              }",
             "foo.rs",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 3.0,
-                      "average": 3.0,
-                      "min": 0.0,
-                      "max": 3.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_sequence_different_booleans() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (a && b || 1 == 1) { // +3 (+1 &&, +1 ||)
-                     printf(\"test\");
-                 }
-             }",
-            "foo.c",
             |metric| {
                 insta::assert_json_snapshot!(
                     metric.cognitive,
@@ -1350,40 +1145,6 @@ mod tests {
                       "average": 3.0,
                       "min": 0.0,
                       "max": 3.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_1_level_nesting() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (1 == 1) { // +1
-                     if (1 == 1) { // +2 (nesting = 1)
-                         printf(\"test\");
-                     } else if (1 == 1) { // +1
-                         if (1 == 1) { // +3 (nesting = 2)
-                             printf(\"test\");
-                         }
-                     } else { // +1
-                         if (1 == 1) { // +3 (nesting = 2)
-                             printf(\"test\");
-                         }
-                     }
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 11.0,
-                      "average": 11.0,
-                      "min": 0.0,
-                      "max": 11.0
                     }"###
                 );
             },
@@ -1564,69 +1325,6 @@ mod tests {
                       "average": 11.0,
                       "min": 0.0,
                       "max": 11.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_goto() {
-        check_metrics::<CppParser>(
-            "void f() {
-             OUT: for (int i = 1; i <= max; ++i) { // +1
-                      for (int j = 2; j < i; ++j) { // +2 (nesting = 1)
-                          if (i % j == 0) { // +3 (nesting = 2)
-                              goto OUT; // +1
-                          }
-                      }
-                  }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 7.0,
-                      "average": 7.0,
-                      "min": 0.0,
-                      "max": 7.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_switch() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 switch (1) { // +1
-                     case 1:
-                         printf(\"one\");
-                         break;
-                     case 2:
-                         printf(\"two\");
-                         break;
-                     case 3:
-                         printf(\"three\");
-                         break;
-                     default:
-                         printf(\"all\");
-                         break;
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 1.0,
-                      "average": 1.0,
-                      "min": 0.0,
-                      "max": 1.0
                     }"###
                 );
             },
@@ -2231,32 +1929,6 @@ mod tests {
                  }
              }",
             "foo.rs",
-            |metric| {
-                insta::assert_json_snapshot!(
-                    metric.cognitive,
-                    @r###"
-                    {
-                      "sum": 4.0,
-                      "average": 4.0,
-                      "min": 0.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_boolean_sequence_across_else_if() {
-        check_metrics::<CppParser>(
-            "void f() {
-                 if (a && b) { // +2 (+1 if, +1 &&)
-                     g();
-                 } else if (c && d) { // +2 (+1 else, +1 &&)
-                     h();
-                 }
-             }",
-            "foo.c",
             |metric| {
                 insta::assert_json_snapshot!(
                     metric.cognitive,

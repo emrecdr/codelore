@@ -16,16 +16,16 @@ use crate::traits::*;
 /// ```
 /// use std::path::PathBuf;
 ///
-/// use rust_code_analysis::{dump_node, CppParser, ParserTrait};
+/// use rust_code_analysis::{dump_node, RustParser, ParserTrait};
 ///
-/// let source_code = "int a = 42;";
+/// let source_code = "let a = 42;";
 ///
 /// // The path to a dummy file used to contain the source code
-/// let path = PathBuf::from("foo.c");
+/// let path = PathBuf::from("foo.rs");
 /// let source_as_vec = source_code.as_bytes().to_vec();
 ///
-/// // The parser of the code, in this case a CPP parser
-/// let parser = CppParser::new(source_as_vec.clone(), &path, None);
+/// // The parser of the code, in this case a Rust parser
+/// let parser = RustParser::new(source_as_vec.clone());
 ///
 /// // The root of the AST
 /// let root = parser.get_root();

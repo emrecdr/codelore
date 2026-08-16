@@ -30,14 +30,6 @@ tree-sitter-typescript  = "=0.23.1"   # language_typescript.rs: Program=166 / la
 tree-sitter-python      = "=0.23.6"   # language_python.rs: Module=108
 tree-sitter-java        = "=0.23.5"   # language_java.rs: Program=138
 tree-sitter-rust        = "=0.23.2"   # language_rust.rs: SourceFile=155
-tree-sitter-kotlin-ng   = "1.1.0"     # language_kotlin.rs: SourceFile=142
-# C++ uses the mozcpp grammar: language_cpp.rs node IDs were generated from it (TranslationUnit=308).
-# Standard tree-sitter-cpp has different node IDs and would break the enum.
-tree-sitter-mozcpp      = { package = "bca-tree-sitter-mozcpp", version = "1.1.0" }
-# Mozilla custom grammars — bca forks that support tree-sitter 0.25.x LANGUAGE API
-# Aliased to keep the upstream tree_sitter_ccomment/tree_sitter_preproc identifiers unchanged.
-tree-sitter-ccomment = { package = "bca-tree-sitter-ccomment", version = "1.1.0" }
-tree-sitter-preproc  = { package = "bca-tree-sitter-preproc",  version = "1.1.0" }
 
 # Standard RCA dependencies
 serde       = { version = "1", features = ["derive"] }
@@ -46,9 +38,7 @@ crossbeam   = "0.8"
 walkdir     = "2"
 regex       = "1"
 globset     = "0.4"
-petgraph    = "0.6"
 termcolor   = "1"
-aho-corasick = "1"
 num-format  = "0.4"
 num         = { version = "0.4", features = ["std"] }
 num-derive  = "0.5"

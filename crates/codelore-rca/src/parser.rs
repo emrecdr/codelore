@@ -1,6 +1,4 @@
 use std::marker::PhantomData;
-use std::path::Path;
-use std::sync::Arc;
 
 use crate::checker::Checker;
 use crate::cognitive::Cognitive;
@@ -15,10 +13,8 @@ use crate::nom::Nom;
 use crate::alterator::Alterator;
 use crate::getter::Getter;
 
-use crate::c_macro;
 use crate::langs::*;
 use crate::node::{Node, Tree};
-use crate::preproc::{PreprocResults, get_macros};
 use crate::traits::*;
 
 #[derive(Debug)]
@@ -67,25 +63,6 @@ impl Filter {
     }
 }
 
-#[inline(always)]
-fn get_fake_code<T: LanguageInfo>(
-    code: &[u8],
-    path: &Path,
-    pr: Option<Arc<PreprocResults>>,
-) -> Option<Vec<u8>> {
-    if let Some(pr) = pr {
-        match T::get_lang() {
-            LANG::Cpp => {
-                let macros = get_macros(path, &pr.files);
-                c_macro::replace(code, &macros)
-            }
-            _ => None,
-        }
-    } else {
-        None
-    }
-}
-
 impl<
     T: 'static
         + LanguageInfo
@@ -113,14 +90,7 @@ impl<
     type NArgs = T;
     type Exit = T;
 
-    fn new(code: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>) -> Self {
-        let fake_code = get_fake_code::<T>(&code, path, pr);
-        let code = if let Some(fake) = fake_code {
-            fake
-        } else {
-            code
-        };
-
+    fn new(code: Vec<u8>) -> Self {
         let tree = Tree::new::<T>(&code);
 
         Self {

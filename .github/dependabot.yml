@@ -48,23 +48,16 @@ updates:
       - dependencies
       - rust
     # tree-sitter ecosystem: the language grammars (`tree-sitter-{rust,python,
-    # javascript,typescript,java,kotlin-ng,mozcpp,...}`) compile against a
-    # specific `tree-sitter` core ABI, and `codelore-rca`'s `language_*.rs`
-    # node-ID enum tables are generated against specific grammar versions.
-    # Bumping ANY single grammar without coordinating the core + all peers
-    # would either fail to load grammars (ABI mismatch) or silently produce
-    # wrong complexity metrics (renumbered node IDs). PRs #2-4, #6 were all
-    # closed for this reason. The coordinated bump is a deliberate multi-day
+    # javascript,typescript,java}`) compile against a specific `tree-sitter`
+    # core ABI, and `codelore-rca`'s `language_*.rs` node-ID enum tables are
+    # generated against specific grammar versions. Bumping ANY single grammar
+    # without coordinating the core + all peers would either fail to load
+    # grammars (ABI mismatch) or silently produce wrong complexity metrics
+    # (renumbered node IDs). The coordinated bump is a deliberate multi-day
     # effort, not weekly Dependabot churn.
-    #
-    # petgraph: 0.6 → 0.8 is a 2-major bump with known API breaks in the
-    # call-sites we exercise (clone-coupling graph algorithms). Deliberate
-    # manual bump only.
     ignore:
       - dependency-name: "tree-sitter"
       - dependency-name: "tree-sitter-*"
-      - dependency-name: "bca-tree-sitter-*"
-      - dependency-name: "petgraph"
 
   # Docker / container-image digests are handled by Renovate (not
   # Dependabot) because Dependabot's `docker` ecosystem only detects

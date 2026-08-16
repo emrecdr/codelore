@@ -1,8 +1,4 @@
 macro_rules! get_language {
-    // language_cpp.rs was generated from mozcpp grammar; node IDs differ from standard tree-sitter-cpp.
-    (tree_sitter_cpp) => {
-        tree_sitter_mozcpp::LANGUAGE.into()
-    };
     (tree_sitter_typescript) => {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     };
@@ -122,11 +118,11 @@ macro_rules! mk_action {
         ///
         /// use rust_code_analysis::{action, Callback, LANG, Metrics, MetricsCfg};
         ///
-        /// let source_code = "int a = 42;";
-        /// let language = LANG::Cpp;
+        /// let source_code = "let a = 42;";
+        /// let language = LANG::Rust;
         ///
         /// // The path to a dummy file used to contain the source code
-        /// let path = PathBuf::from("foo.c");
+        /// let path = PathBuf::from("foo.rs");
         /// let source_as_vec = source_code.as_bytes().to_vec();
         ///
         /// // Configuration options used by the function which computes the metrics
@@ -134,16 +130,16 @@ macro_rules! mk_action {
         ///     path,
         /// };
         ///
-        /// action::<Metrics>(&language, source_as_vec, &cfg.path.clone(), None, cfg);
+        /// action::<Metrics>(&language, source_as_vec, cfg);
         /// ```
         ///
         /// [`Callback`]: trait.Callback.html
         #[inline(always)]
-        pub fn action<T: Callback>(lang: &LANG, source: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>, cfg: T::Cfg) -> T::Res {
+        pub fn action<T: Callback>(lang: &LANG, source: Vec<u8>, cfg: T::Cfg) -> T::Res {
             match lang {
                 $(
                     LANG::$camel => {
-                        let parser = $parser::new(source, path, pr);
+                        let parser = $parser::new(source);
                         T::call(cfg, &parser)
                     },
                 )*
@@ -159,21 +155,21 @@ macro_rules! mk_action {
         ///
         /// use rust_code_analysis::{get_function_spaces, LANG};
         ///
-        /// let source_code = "int a = 42;";
-        /// let language = LANG::Cpp;
+        /// let source_code = "let a = 42;";
+        /// let language = LANG::Rust;
         ///
         /// // The path to a dummy file used to contain the source code
-        /// let path = PathBuf::from("foo.c");
+        /// let path = PathBuf::from("foo.rs");
         /// let source_as_vec = source_code.as_bytes().to_vec();
         ///
-        /// get_function_spaces(&language, source_as_vec, &path, None).unwrap();
+        /// get_function_spaces(&language, source_as_vec, &path).unwrap();
         /// ```
         #[inline(always)]
-        pub fn get_function_spaces(lang: &LANG, source: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>) -> Option<FuncSpace> {
+        pub fn get_function_spaces(lang: &LANG, source: Vec<u8>, path: &Path) -> Option<FuncSpace> {
             match lang {
                 $(
                     LANG::$camel => {
-                        let parser = $parser::new(source, &path, pr);
+                        let parser = $parser::new(source);
                         metrics(&parser, &path)
                     },
                 )*
@@ -190,22 +186,22 @@ macro_rules! mk_action {
         /// use rust_code_analysis::{get_ops, LANG};
         ///
         /// # fn main() {
-        /// let source_code = "int a = 42;";
-        /// let language = LANG::Cpp;
+        /// let source_code = "let a = 42;";
+        /// let language = LANG::Rust;
         ///
         /// // The path to a dummy file used to contain the source code
-        /// let path = PathBuf::from("foo.c");
+        /// let path = PathBuf::from("foo.rs");
         /// let source_as_vec = source_code.as_bytes().to_vec();
         ///
-        /// get_ops(&language, source_as_vec, &path, None).unwrap();
+        /// get_ops(&language, source_as_vec, &path).unwrap();
         /// # }
         /// ```
         #[inline(always)]
-        pub fn get_ops(lang: &LANG, source: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>) -> Option<Ops> {
+        pub fn get_ops(lang: &LANG, source: Vec<u8>, path: &Path) -> Option<Ops> {
             match lang {
                 $(
                     LANG::$camel => {
-                        let parser = $parser::new(source, &path, pr);
+                        let parser = $parser::new(source);
                         operands_and_operators(&parser, &path)
                     },
                 )*

@@ -56,10 +56,12 @@ percent-encoding = "2"
 # we feed edges directly as Vec<(u32, u32, f64)>), and `rayon`. We
 # opt back into `rayon` only — the parallel Leiden iterations are
 # meaningfully faster on linux-kernel-scale coupling graphs
-# (~70k nodes). The `petgraph` feature is intentionally left off so
-# leiden-rs's optional petgraph 0.8 dep doesn't conflict with
-# codelore-rca's pinned 0.6 (CLAUDE.md documents why the 0.6 → 0.8
-# bump is held).
+# (~70k nodes). The `petgraph` feature stays off because we feed
+# edges directly and don't need the graph type; it previously ALSO
+# had to stay off to avoid colliding with codelore-rca's pinned
+# petgraph 0.6, but that pin left the workspace with the unreachable
+# grammars, so this is now a plain "we don't use it" rather than a
+# constraint.
 leiden-rs = { version = "0.8", default-features = false, features = ["rayon"] }
 # Headless Chrome driver, opt-in via the `browser-tests` feature.
 # Used only by `tests/spa_browser_test.rs` to drive the rendered SPA

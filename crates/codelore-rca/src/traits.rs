@@ -1,6 +1,3 @@
-use std::path::Path;
-use std::sync::Arc;
-
 use crate::alterator::Alterator;
 use crate::checker::Checker;
 use crate::cognitive::Cognitive;
@@ -15,7 +12,6 @@ use crate::nargs::NArgs;
 use crate::node::Node;
 use crate::nom::Nom;
 use crate::parser::Filter;
-use crate::preproc::PreprocResults;
 
 /// A trait for callback functions.
 ///
@@ -51,7 +47,7 @@ pub trait ParserTrait {
     type NArgs: NArgs;
     type Exit: Exit;
 
-    fn new(code: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>) -> Self;
+    fn new(code: Vec<u8>) -> Self;
     fn get_language(&self) -> LANG;
     fn get_root(&self) -> Node<'_>;
     fn get_code(&self) -> &[u8];
@@ -59,8 +55,6 @@ pub trait ParserTrait {
 }
 
 pub(crate) trait Search<'a> {
-    fn first_occurrence(&self, pred: fn(u16) -> bool) -> Option<Node<'a>>;
     fn act_on_node(&self, pred: &mut dyn FnMut(&Node<'a>));
-    fn first_child(&self, pred: fn(u16) -> bool) -> Option<Node<'a>>;
     fn act_on_child(&self, action: &mut dyn FnMut(&Node<'a>));
 }

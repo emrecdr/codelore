@@ -1,8 +1,6 @@
-use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::bytes::Regex;
@@ -194,10 +192,10 @@ fn get_emacs_mode(buf: &[u8]) -> Option<String> {
 ///
 /// use rust_code_analysis::guess_language;
 ///
-/// let source_code = "int a = 42;";
+/// let source_code = "let a = 42;";
 ///
 /// // The path to a dummy file used to contain the source code
-/// let path = PathBuf::from("foo.c");
+/// let path = PathBuf::from("foo.rs");
 /// let source_slice = source_code.as_bytes();
 ///
 /// // Guess the language of a code
@@ -258,116 +256,6 @@ pub(crate) fn remove_blank_lines(data: &mut Vec<u8>) {
     data.push(b'\n');
 }
 
-pub(crate) fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
-    // Copied from Cargo sources: https://github.com/rust-lang/cargo/blob/master/src/cargo/util/paths.rs#L65
-    let mut components = path.as_ref().components().peekable();
-    let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
-        components.next();
-        PathBuf::from(c.as_os_str())
-    } else {
-        PathBuf::new()
-    };
-
-    for component in components {
-        match component {
-            Component::Prefix(..) => unreachable!(),
-            Component::RootDir => {
-                ret.push(component.as_os_str());
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                ret.pop();
-            }
-            Component::Normal(c) => {
-                ret.push(c);
-            }
-        }
-    }
-    ret
-}
-
-pub(crate) fn get_paths_dist(path1: &Path, path2: &Path) -> Option<usize> {
-    for ancestor in path1.ancestors() {
-        if path2.starts_with(ancestor) && !ancestor.as_os_str().is_empty() {
-            let path1 = path1.strip_prefix(ancestor).unwrap();
-            let path2 = path2.strip_prefix(ancestor).unwrap();
-            return Some(path1.components().count() + path2.components().count());
-        }
-    }
-    None
-}
-
-pub(crate) fn guess_file<S: ::std::hash::BuildHasher>(
-    current_path: &Path,
-    include_path: &str,
-    all_files: &HashMap<String, Vec<PathBuf>, S>,
-) -> Vec<PathBuf> {
-    let include_path = if let Some(end) = include_path.strip_prefix("mozilla/") {
-        end
-    } else {
-        include_path
-    };
-    let include_path = normalize_path(include_path);
-    if let Some(possibilities) = all_files.get(include_path.file_name().unwrap().to_str().unwrap())
-    {
-        if possibilities.len() == 1 {
-            // Only one file with this name
-            return possibilities.clone();
-        }
-
-        let mut new_possibilities = Vec::new();
-        for p in possibilities.iter() {
-            if p.ends_with(&include_path) && current_path != p {
-                new_possibilities.push(p.clone());
-            }
-        }
-        if new_possibilities.len() == 1 {
-            // Only one path is finishing with "foo/Bar.h"
-            return new_possibilities;
-        }
-        new_possibilities.clear();
-
-        if let Some(parent) = current_path.parent() {
-            for p in possibilities.iter() {
-                if p.starts_with(parent) && current_path != p {
-                    new_possibilities.push(p.clone());
-                }
-            }
-            if new_possibilities.len() == 1 {
-                // Only one path in the current working directory (current_path)
-                return new_possibilities;
-            }
-            new_possibilities.clear();
-        }
-
-        let mut dist_min = usize::MAX;
-        let mut path_min = Vec::new();
-        for p in possibilities.iter() {
-            if current_path == p {
-                continue;
-            }
-            if let Some(dist) = get_paths_dist(current_path, p) {
-                match dist.cmp(&dist_min) {
-                    Ordering::Less => {
-                        dist_min = dist;
-                        path_min.clear();
-                        path_min.push(p);
-                    }
-                    Ordering::Equal => {
-                        path_min.push(p);
-                    }
-                    Ordering::Greater => {}
-                }
-            }
-        }
-
-        let path_min: Vec<_> = path_min.drain(..).map(|p| p.to_path_buf()).collect();
-        return path_min;
-    }
-
-    vec![]
-}
-
 #[inline(always)]
 pub(crate) fn color(stdout: &mut StandardStreamLock, color: Color) -> std::io::Result<()> {
     stdout.set_color(ColorSpec::new().set_fg(Some(color)))
@@ -387,7 +275,7 @@ pub(crate) fn check_func_space<T: crate::ParserTrait, F: Fn(crate::FuncSpace)>(
     let path = std::path::PathBuf::from(filename);
     let mut trimmed_bytes = source.trim_end().trim_matches('\n').as_bytes().to_vec();
     trimmed_bytes.push(b'\n');
-    let parser = T::new(trimmed_bytes, &path, None);
+    let parser = T::new(trimmed_bytes);
     let func_space = crate::metrics(&parser, &path).unwrap();
 
     check(func_space)
@@ -430,31 +318,25 @@ mod tests {
 
     #[test]
     fn test_guess_language() {
-        let buf = b"// -*- foo: bar; mode: c++; hello: world\n";
-        assert_eq!(guess_language(buf, "foo.cpp"), (Some(LANG::Cpp), "c/c++"));
+        // An emacs mode line wins over the extension.
+        let buf = b"// -*- foo: bar; mode: python; hello: world\n";
+        assert_eq!(
+            guess_language(buf, "foo.txt"),
+            (Some(LANG::Python), "python")
+        );
 
-        let buf = b"// -*- c++ -*-\n";
-        assert_eq!(guess_language(buf, "foo.cpp"), (Some(LANG::Cpp), "c/c++"));
-
-        let buf = b"// -*- foo: bar; bar-mode: c++; hello: world\n";
+        // A `-mode` suffix is not a mode declaration, so the extension decides.
+        let buf = b"// -*- foo: bar; bar-mode: python; hello: world\n";
         assert_eq!(
             guess_language(buf, "foo.py"),
             (Some(LANG::Python), "python")
         );
 
+        // No mode line: fall back to the extension.
         let buf = b"/* hello world */\n";
-        assert_eq!(guess_language(buf, "foo.cpp"), (Some(LANG::Cpp), "c/c++"));
-
-        let buf = b"\n\n\n\n\n\n\n\n\n// vim: set ts=4 ft=c++\n\n\n";
-        assert_eq!(guess_language(buf, "foo.c"), (Some(LANG::Cpp), "c/c++"));
+        assert_eq!(guess_language(buf, "foo.rs"), (Some(LANG::Rust), "rust"));
 
         let buf = b"\n\n\n\n\n\n\n\n\n\n\n\n";
         assert_eq!(guess_language(buf, "foo.txt"), (None, ""));
-
-        let buf = b"// -*- foo: bar; mode: Objective-C++; hello: world\n";
-        assert_eq!(
-            guess_language(buf, "foo.mm"),
-            (Some(LANG::Cpp), "obj-c/c++")
-        );
     }
 }

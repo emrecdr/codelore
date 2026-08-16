@@ -109,11 +109,7 @@ implement_metric_trait!(
     TypescriptCode,
     TsxCode,
     RustCode,
-    CppCode,
-    PreprocCode,
-    CcommentCode,
-    JavaCode,
-    KotlinCode
+    JavaCode
 );
 
 #[cfg(test)]
