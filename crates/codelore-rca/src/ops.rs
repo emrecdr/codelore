@@ -139,17 +139,17 @@ fn finalize<T: ParserTrait>(state_stack: &mut Vec<State>, diff_level: usize) {
 /// ```
 /// use std::path::PathBuf;
 ///
-/// use rust_code_analysis::{operands_and_operators, CppParser, ParserTrait};
+/// use rust_code_analysis::{operands_and_operators, RustParser, ParserTrait};
 ///
 /// # fn main() {
-/// let source_code = "int a = 42;";
+/// let source_code = "let a = 42;";
 ///
 /// // The path to a dummy file used to contain the source code
-/// let path = PathBuf::from("foo.c");
+/// let path = PathBuf::from("foo.rs");
 /// let source_as_vec = source_code.as_bytes().to_vec();
 ///
-/// // The parser of the code, in this case a CPP parser
-/// let parser = CppParser::new(source_as_vec, &path, None);
+/// // The parser of the code, in this case a Rust parser
+/// let parser = RustParser::new(source_as_vec);
 ///
 /// // Returns the operands and operators of each space in a code.
 /// operands_and_operators(&parser, &path).unwrap();
@@ -263,7 +263,7 @@ mod tests {
         let path = PathBuf::from(file);
         let mut trimmed_bytes = source.trim_end().trim_matches('\n').as_bytes().to_vec();
         trimmed_bytes.push(b'\n');
-        let ops = get_ops(&lang, trimmed_bytes, &path, None).unwrap();
+        let ops = get_ops(&lang, trimmed_bytes, &path).unwrap();
 
         let mut operators_str: Vec<&str> = ops.operators.iter().map(AsRef::as_ref).collect();
         let mut operands_str: Vec<&str> = ops.operands.iter().map(AsRef::as_ref).collect();
@@ -306,47 +306,6 @@ mod tests {
             "foo.py",
             &mut ["def", "=", "+"],
             &mut ["foo", "bar", "toto", "a", "b", "c", "1", "2", "3"],
-        );
-    }
-
-    #[test]
-    fn cpp_ops() {
-        check_ops(
-            LANG::Cpp,
-            "int a, b, c;
-             float avg;
-             avg = (a + b + c) / 3;",
-            "foo.c",
-            &mut ["int", "float", "()", "=", "+", "/", ",", ";"],
-            &mut ["a", "b", "c", "avg", "3"],
-        );
-    }
-
-    #[test]
-    fn cpp_function_ops() {
-        check_ops(
-            LANG::Cpp,
-            "main()
-            {
-              int a, b, c, avg;
-              scanf(\"%d %d %d\", &a, &b, &c);
-              avg = (a + b + c) / 3;
-              printf(\"avg = %d\", avg);
-            }",
-            "foo.c",
-            &mut ["()", "{}", "int", "&", "=", "+", "/", ",", ";"],
-            &mut [
-                "main",
-                "a",
-                "b",
-                "c",
-                "avg",
-                "scanf",
-                "\"%d %d %d\"",
-                "3",
-                "printf",
-                "\"avg = %d\"",
-            ],
         );
     }
 

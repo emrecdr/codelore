@@ -235,16 +235,16 @@ struct State<'a> {
 /// ```
 /// use std::path::Path;
 ///
-/// use rust_code_analysis::{CppParser, metrics, ParserTrait};
+/// use rust_code_analysis::{RustParser, metrics, ParserTrait};
 ///
-/// let source_code = "int a = 42;";
+/// let source_code = "let a = 42;";
 ///
 /// // The path to a dummy file used to contain the source code
-/// let path = Path::new("foo.c");
+/// let path = Path::new("foo.rs");
 /// let source_as_vec = source_code.as_bytes().to_vec();
 ///
-/// // The parser of the code, in this case a CPP parser
-/// let parser = CppParser::new(source_as_vec, &path, None);
+/// // The parser of the code, in this case a Rust parser
+/// let parser = RustParser::new(source_as_vec);
 ///
 /// // Gets all function spaces data of the code contained in foo.c
 /// metrics(&parser, &path).unwrap();
@@ -340,26 +340,5 @@ impl Callback for Metrics {
             Some(space) => dump_root(&space),
             _ => Ok(()),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{CppParser, check_func_space};
-
-    #[test]
-    fn c_scope_resolution_operator() {
-        check_func_space::<CppParser, _>(
-            "void Foo::bar(){
-                return;
-            }",
-            "foo.c",
-            |func_space| {
-                insta::assert_json_snapshot!(
-                    func_space.spaces[0].name,
-                    @r###""Foo::bar""###
-                );
-            },
-        );
     }
 }

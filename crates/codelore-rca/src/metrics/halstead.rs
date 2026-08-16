@@ -6,7 +6,6 @@ use std::fmt;
 
 use crate::checker::Checker;
 use crate::getter::Getter;
-use crate::macros::implement_metric_trait;
 
 use crate::*;
 
@@ -310,19 +309,11 @@ impl Halstead for RustCode {
     }
 }
 
-impl Halstead for CppCode {
-    fn compute<'a>(node: &Node<'a>, code: &'a [u8], halstead_maps: &mut HalsteadMaps<'a>) {
-        compute_halstead::<Self>(node, code, halstead_maps);
-    }
-}
-
 impl Halstead for JavaCode {
     fn compute<'a>(node: &Node<'a>, code: &'a [u8], halstead_maps: &mut HalsteadMaps<'a>) {
         compute_halstead::<Self>(node, code, halstead_maps);
     }
 }
-
-implement_metric_trait!(Halstead, KotlinCode, PreprocCode, CcommentCode);
 
 #[cfg(test)]
 mod tests {
@@ -363,50 +354,6 @@ mod tests {
                       "effort": 150.56842503028855,
                       "time": 8.364912501682698,
                       "bugs": 0.0094341190071077
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn cpp_operators_and_operands() {
-        // Define operators and operands for C/C++ grammar according to this specification:
-        // https://www.verifysoft.com/en_halstead_metrics.html
-        // The only difference with the specification above is that
-        // primitive types are treated as operators, since the definition of a
-        // primitive type can be seen as the creation of a slot of a certain size.
-        // i.e. The `int a;` definition creates a n-bytes slot.
-        check_metrics::<CppParser>(
-            "main()
-            {
-              int a, b, c, avg;
-              scanf(\"%d %d %d\", &a, &b, &c);
-              avg = (a + b + c) / 3;
-              printf(\"avg = %d\", avg);
-            }",
-            "foo.c",
-            |metric| {
-                // unique operators: (), {}, int, &, =, +, /, ,, ;
-                // unique operands: main, a, b, c, avg, scanf, "%d %d %d", 3, printf, "avg = %d"
-                insta::assert_json_snapshot!(
-                    metric.halstead,
-                    @r###"
-                    {
-                      "n1": 9.0,
-                      "N1": 24.0,
-                      "n2": 10.0,
-                      "N2": 18.0,
-                      "length": 42.0,
-                      "estimated_program_length": 61.74860596185444,
-                      "purity_ratio": 1.470204903853677,
-                      "vocabulary": 19.0,
-                      "volume": 178.41295556463058,
-                      "difficulty": 8.1,
-                      "level": 0.1234567901234568,
-                      "effort": 1445.1449400735075,
-                      "time": 80.28583000408375,
-                      "bugs": 0.04260752914034329
                     }"###
                 );
             },

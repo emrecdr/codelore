@@ -4,7 +4,7 @@
 //! API used:
 //!   - `codelore_rca::{RustParser, JavaParser, PythonParser, TypescriptParser, JavascriptParser}` — typed
 //!     parser structs (public via the `mk_code!` macro in langs.rs)
-//!   - `codelore_rca::ParserTrait::new(code, path, None)` — construct a parser from source bytes
+//!   - `codelore_rca::ParserTrait::new(code)` — construct a parser from source bytes
 //!   - `codelore_rca::metrics(&parser, path)` — returns `Option<FuncSpace>` (spaces.rs)
 //!   - `func_space.metrics.cyclomatic.cyclomatic()` / `.cognitive.cognitive()` — per-unit totals
 
@@ -23,7 +23,7 @@ fn run_metrics<T: ParserTrait>(source: &[u8], filename: &str) -> codelore_rca::F
     let mut code = source.trim_ascii_end().to_vec();
     code.push(b'\n');
     let path = Path::new(filename);
-    let parser = T::new(code, path, None);
+    let parser = T::new(code);
     metrics(&parser, path).expect("metrics() returned None — parse likely failed")
 }
 

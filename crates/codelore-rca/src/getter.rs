@@ -1,7 +1,6 @@
 use crate::metrics::halstead::HalsteadType;
 
 use crate::spaces::SpaceKind;
-use crate::traits::Search;
 
 use crate::*;
 
@@ -361,95 +360,6 @@ impl Getter for RustCode {
     get_operator!(Rust);
 }
 
-impl Getter for CppCode {
-    fn get_func_space_name<'a>(node: &Node, code: &'a [u8]) -> Option<&'a str> {
-        match node.kind_id().into() {
-            Cpp::FunctionDefinition | Cpp::FunctionDefinition2 | Cpp::FunctionDefinition3 => {
-                if let Some(op_cast) = node.first_child(|id| Cpp::OperatorCast == id) {
-                    let code = &code[op_cast.start_byte()..op_cast.end_byte()];
-                    return std::str::from_utf8(code).ok();
-                }
-                // we're in a function_definition so need to get the declarator
-                if let Some(declarator) = node.child_by_field_name("declarator") {
-                    let declarator_node = declarator;
-                    if let Some(fd) = declarator_node.first_occurrence(|id| {
-                        Cpp::FunctionDeclarator == id
-                            || Cpp::FunctionDeclarator2 == id
-                            || Cpp::FunctionDeclarator3 == id
-                    }) && let Some(first) = fd.child(0)
-                    {
-                        match first.kind_id().into() {
-                            Cpp::TypeIdentifier
-                            | Cpp::Identifier
-                            | Cpp::FieldIdentifier
-                            | Cpp::DestructorName
-                            | Cpp::OperatorName
-                            | Cpp::QualifiedIdentifier
-                            | Cpp::QualifiedIdentifier2
-                            | Cpp::QualifiedIdentifier3
-                            | Cpp::QualifiedIdentifier4
-                            | Cpp::TemplateFunction
-                            | Cpp::TemplateMethod => {
-                                let code = &code[first.start_byte()..first.end_byte()];
-                                return std::str::from_utf8(code).ok();
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            _ => {
-                if let Some(name) = node.child_by_field_name("name") {
-                    let code = &code[name.start_byte()..name.end_byte()];
-                    return std::str::from_utf8(code).ok();
-                }
-            }
-        }
-        None
-    }
-
-    fn get_space_kind(node: &Node) -> SpaceKind {
-        use Cpp::*;
-
-        match node.kind_id().into() {
-            FunctionDefinition | FunctionDefinition2 | FunctionDefinition3 => SpaceKind::Function,
-            StructSpecifier => SpaceKind::Struct,
-            ClassSpecifier => SpaceKind::Class,
-            NamespaceDefinition => SpaceKind::Namespace,
-            TranslationUnit => SpaceKind::Unit,
-            _ => SpaceKind::Unknown,
-        }
-    }
-
-    fn get_op_type(node: &Node) -> HalsteadType {
-        use Cpp::*;
-
-        match node.kind_id().into() {
-            DOT | LPAREN | LPAREN2 | COMMA | STAR | GTGT | COLON | SEMI | Return | Break
-            | Continue | If | Else | Switch | Case | Default | For | While | Goto | Do | Delete
-            | New | Try | Try2 | Catch | Throw | EQ | AMPAMP | PIPEPIPE | DASH | DASHDASH
-            | DASHGT | PLUS | PLUSPLUS | SLASH | PERCENT | PIPE | AMP | LTLT | TILDE | LT
-            | LTEQ | EQEQ | BANGEQ | GTEQ | GT | GT2 | PLUSEQ | BANG | STAREQ | SLASHEQ
-            | PERCENTEQ | GTGTEQ | LTLTEQ | AMPEQ | CARET | CARETEQ | PIPEEQ | LBRACK | LBRACE
-            | QMARK | COLONCOLON | PrimitiveType | TypeSpecifier | Sizeof => HalsteadType::Operator,
-            Identifier | TypeIdentifier | FieldIdentifier | RawStringLiteral | StringLiteral
-            | NumberLiteral | True | False | Null | DOTDOTDOT => HalsteadType::Operand,
-            NamespaceIdentifier => match node.parent() {
-                Some(parent) if matches!(parent.kind_id().into(), NamespaceDefinition) => {
-                    HalsteadType::Operand
-                }
-                _ => HalsteadType::Unknown,
-            },
-            _ => HalsteadType::Unknown,
-        }
-    }
-
-    get_operator!(Cpp);
-}
-
-impl Getter for PreprocCode {}
-impl Getter for CcommentCode {}
-
 impl Getter for JavaCode {
     fn get_space_kind(node: &Node) -> SpaceKind {
         use Java::*;
@@ -506,5 +416,3 @@ impl Getter for JavaCode {
         }
     }
 }
-
-impl Getter for KotlinCode {}

@@ -207,12 +207,8 @@ implement_metric_trait!(
     JavascriptCode,
     TypescriptCode,
     TsxCode,
-    CppCode,
     RustCode,
-    PreprocCode,
-    CcommentCode,
-    JavaCode,
-    KotlinCode
+    JavaCode
 );
 
 #[cfg(test)]
@@ -261,68 +257,6 @@ mod tests {
              mod B { fn foo() {}}
              let closure = |i: i32| -> i32 { i + 42 };",
             "foo.rs",
-            |metric| {
-                // Number of spaces = 4
-                insta::assert_json_snapshot!(
-                    metric.nom,
-                    @r###"
-                    {
-                      "functions": 2.0,
-                      "closures": 1.0,
-                      "functions_average": 0.5,
-                      "closures_average": 0.25,
-                      "total": 3.0,
-                      "average": 0.75,
-                      "functions_min": 0.0,
-                      "functions_max": 1.0,
-                      "closures_min": 0.0,
-                      "closures_max": 1.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_nom() {
-        check_metrics::<CppParser>(
-            "int foo();
-
-             int foo() {
-                 return 0;
-             }",
-            "foo.c",
-            |metric| {
-                // Number of spaces = 2
-                insta::assert_json_snapshot!(
-                    metric.nom,
-                    @r###"
-                    {
-                      "functions": 1.0,
-                      "closures": 0.0,
-                      "functions_average": 0.5,
-                      "closures_average": 0.0,
-                      "total": 1.0,
-                      "average": 0.5,
-                      "functions_min": 0.0,
-                      "functions_max": 1.0,
-                      "closures_min": 0.0,
-                      "closures_max": 0.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn cpp_nom() {
-        check_metrics::<CppParser>(
-            "struct A {
-                 void foo(int) {}
-                 void foo(double) {}
-             };
-             int b = [](int x) -> int { return x + 42; };",
-            "foo.cpp",
             |metric| {
                 // Number of spaces = 4
                 insta::assert_json_snapshot!(

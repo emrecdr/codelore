@@ -1,11 +1,9 @@
 use std::path::Path;
-use std::sync::Arc;
 use tree_sitter::Language;
 
 use crate::macros::{
     get_language, mk_action, mk_code, mk_emacs_mode, mk_extensions, mk_lang, mk_langs,
 };
-use crate::preproc::PreprocResults;
 use crate::*;
 
 mk_langs!(
@@ -39,16 +37,6 @@ mk_langs!(
         ["java"]
     ),
     (
-        Kotlin,
-        "The `Kotlin` language",
-        "kotlin",
-        KotlinCode,
-        KotlinParser,
-        tree_sitter_kotlin_ng,
-        [kt, kts],
-        ["kotlin"]
-    ),
-    (
         Rust,
         "The `Rust` language",
         "rust",
@@ -57,16 +45,6 @@ mk_langs!(
         tree_sitter_rust,
         [rs],
         ["rust"]
-    ),
-    (
-        Cpp,
-        "The `C/C++` language",
-        "c/c++",
-        CppCode,
-        CppParser,
-        tree_sitter_cpp,
-        [cpp, cxx, cc, hxx, hpp, c, h, hh, inc, mm, m],
-        ["c++", "c", "objc", "objc++", "objective-c++", "objective-c"]
     ),
     (
         Python,
@@ -97,26 +75,6 @@ mk_langs!(
         tree_sitter_typescript,
         [ts, jsw, jsmw],
         ["typescript"]
-    ),
-    (
-        Ccomment,
-        "The `Ccomment` language is a variant of the `C` language focused on comments",
-        "ccomment",
-        CcommentCode,
-        CcommentParser,
-        tree_sitter_ccomment,
-        [],
-        []
-    ),
-    (
-        Preproc,
-        "The `PreProc` language is a variant of the `C/C++` language focused on macros",
-        "preproc",
-        PreprocCode,
-        PreprocParser,
-        tree_sitter_preproc,
-        [],
-        []
     )
 );
 

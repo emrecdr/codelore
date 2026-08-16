@@ -1,11 +1,9 @@
 use std::sync::OnceLock;
 
-use aho_corasick::AhoCorasick;
 use regex::bytes::Regex;
 
 use crate::*;
 
-static AHO_CORASICK: OnceLock<AhoCorasick> = OnceLock::new();
 static RE: OnceLock<Regex> = OnceLock::new();
 
 macro_rules! check_if_func {
@@ -86,13 +84,6 @@ macro_rules! is_js_func_and_closure_checker {
     };
 }
 
-#[inline(always)]
-fn get_aho_corasick_match(code: &[u8]) -> bool {
-    AHO_CORASICK
-        .get_or_init(|| AhoCorasick::new(vec![b"<div rustbindgen"]).unwrap())
-        .is_match(code)
-}
-
 pub trait Checker {
     fn is_comment(_: &Node) -> bool;
     fn is_useful_comment(_: &Node, _: &[u8]) -> bool;
@@ -107,160 +98,6 @@ pub trait Checker {
 
     fn is_error(node: &Node) -> bool {
         node.has_error()
-    }
-}
-
-impl Checker for PreprocCode {
-    fn is_comment(node: &Node) -> bool {
-        node.kind_id() == Preproc::Comment
-    }
-
-    fn is_useful_comment(_: &Node, _: &[u8]) -> bool {
-        false
-    }
-
-    fn is_func_space(_: &Node) -> bool {
-        false
-    }
-
-    fn is_func(_: &Node) -> bool {
-        false
-    }
-
-    fn is_closure(_: &Node) -> bool {
-        false
-    }
-
-    fn is_call(_: &Node) -> bool {
-        false
-    }
-
-    fn is_non_arg(_: &Node) -> bool {
-        false
-    }
-
-    fn is_string(node: &Node) -> bool {
-        node.kind_id() == Preproc::StringLiteral || node.kind_id() == Preproc::RawStringLiteral
-    }
-
-    fn is_else_if(_: &Node) -> bool {
-        false
-    }
-
-    fn is_primitive(_id: u16) -> bool {
-        false
-    }
-}
-
-impl Checker for CcommentCode {
-    fn is_comment(node: &Node) -> bool {
-        node.kind_id() == Ccomment::Comment
-    }
-
-    fn is_useful_comment(node: &Node, code: &[u8]) -> bool {
-        get_aho_corasick_match(&code[node.start_byte()..node.end_byte()])
-    }
-
-    fn is_func_space(_: &Node) -> bool {
-        false
-    }
-
-    fn is_func(_: &Node) -> bool {
-        false
-    }
-
-    fn is_closure(_: &Node) -> bool {
-        false
-    }
-
-    fn is_call(_: &Node) -> bool {
-        false
-    }
-
-    fn is_non_arg(_: &Node) -> bool {
-        false
-    }
-
-    fn is_string(node: &Node) -> bool {
-        node.kind_id() == Ccomment::StringLiteral || node.kind_id() == Ccomment::RawStringLiteral
-    }
-
-    fn is_else_if(_: &Node) -> bool {
-        false
-    }
-
-    fn is_primitive(_id: u16) -> bool {
-        false
-    }
-}
-
-impl Checker for CppCode {
-    fn is_comment(node: &Node) -> bool {
-        node.kind_id() == Cpp::Comment
-    }
-
-    fn is_useful_comment(node: &Node, code: &[u8]) -> bool {
-        get_aho_corasick_match(&code[node.start_byte()..node.end_byte()])
-    }
-
-    fn is_func_space(node: &Node) -> bool {
-        matches!(
-            node.kind_id().into(),
-            Cpp::TranslationUnit
-                | Cpp::FunctionDefinition
-                | Cpp::FunctionDefinition2
-                | Cpp::FunctionDefinition3
-                | Cpp::StructSpecifier
-                | Cpp::ClassSpecifier
-                | Cpp::NamespaceDefinition
-        )
-    }
-
-    fn is_func(node: &Node) -> bool {
-        matches!(
-            node.kind_id().into(),
-            Cpp::FunctionDefinition
-                | Cpp::FunctionDefinition2
-                | Cpp::FunctionDefinition3
-                | Cpp::FunctionDefinition4
-        )
-    }
-
-    fn is_closure(node: &Node) -> bool {
-        node.kind_id() == Cpp::LambdaExpression
-    }
-
-    fn is_call(node: &Node) -> bool {
-        node.kind_id() == Cpp::CallExpression
-    }
-
-    fn is_non_arg(node: &Node) -> bool {
-        matches!(
-            node.kind_id().into(),
-            Cpp::LPAREN | Cpp::LPAREN2 | Cpp::COMMA | Cpp::RPAREN
-        )
-    }
-
-    fn is_string(node: &Node) -> bool {
-        matches!(
-            node.kind_id().into(),
-            Cpp::StringLiteral | Cpp::ConcatenatedString | Cpp::RawStringLiteral
-        )
-    }
-
-    fn is_else_if(node: &Node) -> bool {
-        if node.kind_id() != Cpp::IfStatement {
-            return false;
-        }
-        if let Some(parent) = node.parent() {
-            return parent.kind_id() == Cpp::ElseClause;
-        }
-        false
-    }
-
-    #[inline(always)]
-    fn is_primitive(id: u16) -> bool {
-        id == Cpp::PrimitiveType
     }
 }
 
@@ -614,47 +451,5 @@ impl Checker for RustCode {
     #[inline(always)]
     fn is_primitive(id: u16) -> bool {
         id == Rust::PrimitiveType
-    }
-}
-
-impl Checker for KotlinCode {
-    fn is_comment(_: &Node) -> bool {
-        false
-    }
-
-    fn is_useful_comment(_: &Node, _: &[u8]) -> bool {
-        false
-    }
-
-    fn is_func_space(_: &Node) -> bool {
-        false
-    }
-
-    fn is_func(_: &Node) -> bool {
-        false
-    }
-
-    fn is_closure(_: &Node) -> bool {
-        false
-    }
-
-    fn is_call(_: &Node) -> bool {
-        false
-    }
-
-    fn is_non_arg(_: &Node) -> bool {
-        false
-    }
-
-    fn is_string(_: &Node) -> bool {
-        false
-    }
-
-    fn is_else_if(_: &Node) -> bool {
-        false
-    }
-
-    fn is_primitive(_id: u16) -> bool {
-        false
     }
 }

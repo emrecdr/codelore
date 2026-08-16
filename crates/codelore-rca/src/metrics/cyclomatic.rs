@@ -3,7 +3,6 @@ use serde::ser::{SerializeStruct, Serializer};
 use std::fmt;
 
 use crate::checker::Checker;
-use crate::macros::implement_metric_trait;
 use crate::*;
 
 /// The `Cyclomatic` metric.
@@ -182,19 +181,6 @@ impl Cyclomatic for RustCode {
     }
 }
 
-impl Cyclomatic for CppCode {
-    fn compute(node: &Node, stats: &mut Stats) {
-        use Cpp::*;
-
-        match node.kind_id().into() {
-            If | For | While | Case | Catch | ConditionalExpression | AMPAMP | PIPEPIPE => {
-                stats.cyclomatic += 1.;
-            }
-            _ => {}
-        }
-    }
-}
-
 impl Cyclomatic for JavaCode {
     fn compute(node: &Node, stats: &mut Stats) {
         use Java::*;
@@ -207,8 +193,6 @@ impl Cyclomatic for JavaCode {
         }
     }
 }
-
-implement_metric_trait!(Cyclomatic, KotlinCode, PreprocCode, CcommentCode);
 
 #[cfg(test)]
 mod tests {
@@ -293,162 +277,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn c_switch() {
-        check_metrics::<CppParser>(
-            "void f() { // +2 (+1 unit space)
-                 switch (1) {
-                     case 1: // +1
-                         printf(\"one\");
-                         break;
-                     case 2: // +1
-                         printf(\"two\");
-                         break;
-                     case 3: // +1
-                         printf(\"three\");
-                         break;
-                     default:
-                         printf(\"all\");
-                         break;
-                 }
-             }",
-            "foo.c",
-            |metric| {
-                // nspace = 2 (func and unit)
-                insta::assert_json_snapshot!(
-                    metric.cyclomatic,
-                    @r###"
-                    {
-                      "sum": 5.0,
-                      "average": 2.5,
-                      "min": 1.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_real_function() {
-        check_metrics::<CppParser>(
-            "int sumOfPrimes(int max) { // +2 (+1 unit space)
-                 int total = 0;
-                 OUT: for (int i = 1; i <= max; ++i) { // +1
-                   for (int j = 2; j < i; ++j) { // +1
-                       if (i % j == 0) { // +1
-                          continue OUT;
-                       }
-                   }
-                   total += i;
-                 }
-                 return total;
-            }",
-            "foo.c",
-            |metric| {
-                // nspace = 2 (func and unit)
-                insta::assert_json_snapshot!(
-                    metric.cyclomatic,
-                    @r###"
-                    {
-                      "sum": 5.0,
-                      "average": 2.5,
-                      "min": 1.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn c_unit_before() {
-        check_metrics::<CppParser>(
-            "
-            int a=42;
-            if(a==42) //+2(+1 unit space)
-            {
-
-            }
-            if(a==34) //+1
-            {
-
-            }
-            int sumOfPrimes(int max) { // +1
-                 int total = 0;
-                 OUT: for (int i = 1; i <= max; ++i) { // +1
-                   for (int j = 2; j < i; ++j) { // +1
-                       if (i % j == 0) { // +1
-                          continue OUT;
-                       }
-                   }
-                   total += i;
-                 }
-                 return total;
-            }",
-            "foo.c",
-            |metric| {
-                // nspace = 2 (func and unit)
-                insta::assert_json_snapshot!(
-                    metric.cyclomatic,
-                    @r###"
-                    {
-                      "sum": 7.0,
-                      "average": 3.5,
-                      "min": 3.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
     /// Test to handle the case of min and max when merge happen before the final value of one module are set.
     /// In this case the min value should be 3 because the unit space has 2 branches and a complexity of 3
     /// while the function sumOfPrimes has a complexity of 4.
-    #[test]
-    fn c_unit_after() {
-        check_metrics::<CppParser>(
-            "
-            int sumOfPrimes(int max) { // +1
-                 int total = 0;
-                 OUT: for (int i = 1; i <= max; ++i) { // +1
-                   for (int j = 2; j < i; ++j) { // +1
-                       if (i % j == 0) { // +1
-                          continue OUT;
-                       }
-                   }
-                   total += i;
-                 }
-                 return total;
-            }
-
-            int a=42;
-            if(a==42) //+2(+1 unit space)
-            {
-
-            }
-            if(a==34) //+1
-            {
-
-            }",
-            "foo.c",
-            |metric| {
-                // nspace = 2 (func and unit)
-                insta::assert_json_snapshot!(
-                    metric.cyclomatic,
-                    @r###"
-                    {
-                      "sum": 7.0,
-                      "average": 3.5,
-                      "min": 3.0,
-                      "max": 4.0
-                    }"###
-                );
-            },
-        );
-    }
-
     #[test]
     fn java_simple_class() {
         check_metrics::<JavaParser>(

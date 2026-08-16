@@ -577,37 +577,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
 
 [[package]]
-name = "bca-tree-sitter-ccomment"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c18ef9b01a6ae0f52ebf997860d104b7e0feef37f4e6f323d9f2232390e7366"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "bca-tree-sitter-mozcpp"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acaf6ffe6250995b95bef4e5ba9e195807e68b2382fb8ff9b0d3c3985f607e0a"
-dependencies = [
- "cc",
- "tree-sitter-cpp",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "bca-tree-sitter-preproc"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc8642c4926192c0695b58fdd5fd3aac710da57f79f544a034a1249aeffd9174"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "bisync"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -894,10 +863,6 @@ dependencies = [
 name = "codelore-rca"
 version = "0.27.4"
 dependencies = [
- "aho-corasick",
- "bca-tree-sitter-ccomment",
- "bca-tree-sitter-mozcpp",
- "bca-tree-sitter-preproc",
  "crossbeam",
  "globset",
  "insta",
@@ -905,7 +870,6 @@ dependencies = [
  "num-derive",
  "num-format",
  "num-traits",
- "petgraph",
  "pretty_assertions",
  "rayon",
  "regex",
@@ -915,7 +879,6 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-java",
  "tree-sitter-javascript",
- "tree-sitter-kotlin-ng",
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
@@ -1541,12 +1504,6 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
-
-[[package]]
-name = "fixedbitset"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flatbuffers"
@@ -3458,16 +3415,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "petgraph"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
-dependencies = [
- "fixedbitset",
- "indexmap",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4494,16 +4441,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-cpp"
-version = "0.23.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-java"
 version = "0.23.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4518,16 +4455,6 @@ name = "tree-sitter-javascript"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf40bf599e0416c16c125c3cec10ee5ddc7d1bb8b0c60fa5c4de249ad34dc1b1"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-kotlin-ng"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e800ebbda938acfbf224f4d2c34947a31994b1295ee6e819b65226c7b51b4450"
 dependencies = [
  "cc",
  "tree-sitter-language",

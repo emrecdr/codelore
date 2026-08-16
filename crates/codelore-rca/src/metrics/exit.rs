@@ -3,7 +3,6 @@ use serde::ser::{SerializeStruct, Serializer};
 use std::fmt;
 
 use crate::checker::Checker;
-use crate::macros::implement_metric_trait;
 use crate::*;
 
 /// The `NExit` metric.
@@ -158,14 +157,6 @@ impl Exit for RustCode {
     }
 }
 
-impl Exit for CppCode {
-    fn compute(node: &Node, stats: &mut Stats) {
-        if matches!(node.kind_id().into(), Cpp::ReturnStatement) {
-            stats.exit += 1;
-        }
-    }
-}
-
 impl Exit for JavaCode {
     fn compute(node: &Node, stats: &mut Stats) {
         if matches!(node.kind_id().into(), Java::ReturnStatement) {
@@ -173,8 +164,6 @@ impl Exit for JavaCode {
         }
     }
 }
-
-implement_metric_trait!(Exit, KotlinCode, PreprocCode, CcommentCode);
 
 #[cfg(test)]
 mod tests {
@@ -228,23 +217,6 @@ mod tests {
                       "average": null,
                       "min": 3.0,
                       "max": 3.0
-                    }"###
-            );
-        });
-    }
-
-    #[test]
-    fn c_no_exit() {
-        check_metrics::<CppParser>("int a = 42;", "foo.c", |metric| {
-            // 0 functions
-            insta::assert_json_snapshot!(
-                metric.nexits,
-                @r###"
-                    {
-                      "sum": 0.0,
-                      "average": null,
-                      "min": 0.0,
-                      "max": 0.0
                     }"###
             );
         });

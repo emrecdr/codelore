@@ -52,8 +52,6 @@
 
 #![allow(clippy::upper_case_acronyms)]
 
-mod c_langs_macros;
-mod c_macro;
 mod getter;
 mod macros;
 
@@ -92,9 +90,6 @@ pub use crate::ast::*;
 
 mod count;
 pub use crate::count::*;
-
-mod preproc;
-pub use crate::preproc::*;
 
 mod langs;
 pub use crate::langs::*;

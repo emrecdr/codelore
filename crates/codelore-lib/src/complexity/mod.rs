@@ -173,7 +173,7 @@ fn collect_entities(space: &FuncSpace, path: &str, out: &mut Vec<ComplexityEntit
 /// fires anyway. `-v` (or `RUST_LOG`) still surfaces it for anyone
 /// investigating a genuinely suspect file.
 fn metrics_with_guard<T: ParserTrait>(source: Vec<u8>, path: &Path) -> Option<FuncSpace> {
-    let parser = T::new(source, path, None);
+    let parser = T::new(source);
     if parser.get_root().has_error() {
         tracing::debug!(
             "complexity: parse errors in {} — metrics computed on a partial tree",
@@ -186,7 +186,7 @@ fn metrics_with_guard<T: ParserTrait>(source: Vec<u8>, path: &Path) -> Option<Fu
 /// Compute complexity entities for a Tier-1 source file.
 ///
 /// `source` is taken by value because every `codelore-rca` parser constructor
-/// consumes the byte buffer (`*Parser::new(Vec<u8>, &Path, Option<…>)`). The
+/// consumes the byte buffer (`*Parser::new(Vec<u8>)`). The
 /// caller in `facts/ingest.rs::ingest_complexity_at_head` already owns a
 /// fresh `Vec<u8>` from `Repo::read_blob_at_head`, so the move is free; a
 /// `&[u8]` parameter would force a redundant `.to_vec()` per file (one
