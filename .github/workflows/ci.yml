@@ -17,12 +17,32 @@ on:
   # because of the `paths-ignore` filter above.
   workflow_dispatch:
 
-# Cancel superseded runs for the same ref. For PRs this means each new push
-# cancels the in-flight CI for the previous push. For main, sequential
-# commits would also cancel each other, but main commits rarely arrive that
-# fast and the more recent commit is what callers care about anyway.
+# Cancel superseded runs for the same ref — but never let one main commit's
+# CI cancel another's.
+#
+# On a PR, a new push makes the previous run worthless, so grouping by ref
+# and cancelling is right: it saves runner minutes and the older result is
+# not wanted. On main the opposite holds. Every commit there is a permanent,
+# releasable point that `self-gate` stamps and `dogfood` publishes from, and
+# a commit whose CI was cancelled is unverified forever — there is no later
+# run that covers it.
+#
+# Main commits do arrive back-to-back, because `merge-on-green` must
+# re-dispatch main's CI after each auto-merge (a GITHUB_TOKEN push does not
+# fire `on: push`). Three merges landing together therefore had each
+# dispatch cancel the previous commit's still-running matrix.
+#
+# Grouping main by SHA rather than by ref is what fixes it: each commit gets
+# its own group, so nothing contends and nothing is dropped. Note that
+# `cancel-in-progress: false` would NOT have been enough — GitHub keeps at
+# most one running and one *pending* run per group and cancels the older
+# pending one, so the middle commit of three would still have lost its run.
+# `cancel-in-progress` stays `true` because it remains correct within a
+# group: on a PR it cancels the superseded push, and on main it only ever
+# sees a deliberate re-dispatch of the same SHA, where replacing the stale
+# run is exactly what is wanted.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
 
 # Read-only by default for the whole workflow. Only the `dogfood` job
