@@ -1383,7 +1383,7 @@ finding — an audit that cannot execute what it audits will produce
 plausible mechanisms, and plausible mechanisms produce fixes that pass
 review and change nothing.
 
-### F297 (Fixed — Unreleased) — the escaping guard could not see the markup its widgets most often build
+### F297 (Fixed — v0.28.0) — the escaping guard could not see the markup its widgets most often build
 
 *   **Location**: `codelore-lib/tests/spa_escaping_test.rs` — `HTML_MARKERS`,
     `RAW_STRING_ACCESSORS`, `is_escaped`
@@ -1427,7 +1427,7 @@ review and change nothing.
     across-statement limit the guard's own doc states, now stated explicitly
     rather than by implication.
 
-### F298 (Fixed — Unreleased) — `preceding` could panic on a multi-byte terminator
+### F298 (Fixed — v0.28.0) — `preceding` could panic on a multi-byte terminator
 
 *   **Location**: `codelore-lib/tests/spa_escaping_test.rs` — `preceding`
 *   **Severity**: LOW · **Category**: correctness (test infrastructure)
@@ -1442,7 +1442,7 @@ review and change nothing.
     merely recorded, because widening markup detection (F297) increases the
     number of statements walked, and therefore its exposure.
 
-### F299 (Fixed — Unreleased) — the comment-hygiene guard could not see hyphen-joined phase markers
+### F299 (Fixed — v0.28.0) — the comment-hygiene guard could not see hyphen-joined phase markers
 
 *   **Location**: `codelore-lib/tests/comment_hygiene_test.rs` — `line_has_keyword_number`, `line_has_plan_marker`
 *   **Severity**: LOW · **Category**: test reach / convention enforcement
@@ -1505,7 +1505,7 @@ missing two produced.
 The refutation matters as much as the confirmations: a check that only ever
 confirms is not a check.
 
-### F300 (Fixed — Unreleased) — the escaping guard did not cover function names
+### F300 (Fixed — v0.28.0) — the escaping guard did not cover function names
 
 *   **Location**: `codelore-lib/tests/spa_escaping_test.rs` — `RAW_STRING_ACCESSORS`
 *   **Severity**: LOW · **Category**: test reach / regression detection
@@ -1532,7 +1532,7 @@ confirms is not a check.
     swallow `.author`, `.added` and `.arch_band` — so they are unguarded should
     they ever be rendered rather than used as lookup keys, as they are today.
 
-### F301 (Fixed — Unreleased) — the ledger-stamp guard could not see a compound stamp
+### F301 (Fixed — v0.28.0) — the ledger-stamp guard could not see a compound stamp
 
 *   **Location**: `codelore-lib/tests/ledger_stamp_test.rs` — `UNRELEASED_MARKS`
 *   **Severity**: LOW · **Category**: test reach / ledger integrity
@@ -1549,7 +1549,7 @@ confirms is not a check.
     spellings. Scoping to stamp lines keeps prose discussing the section from
     counting; the self-test pins both directions.
 
-### F302 (Fixed — Unreleased) — the release publish gate reads one file and three markers
+### F302 (Fixed — v0.28.0) — the release publish gate reads one file and three markers
 
 *   **Location**: `codelore-lib/tests/release_publish_gate_test.rs`
 *   **Severity**: MED · **Category**: CI safety / guard scope
@@ -1579,7 +1579,7 @@ confirms is not a check.
     reads one file and three markers, and a publishing workflow added
     elsewhere is still outside it. That half is open.
 
-### F303 (Fixed — Unreleased) — the signing-isolation guard recognised one of three ways to grant a scope
+### F303 (Fixed — v0.28.0) — the signing-isolation guard recognised one of three ways to grant a scope
 
 *   **Location**: `codelore-lib/tests/workflow_signing_isolation_test.rs` — `parse`
 *   **Severity**: MED · **Category**: CI safety / guard reach
@@ -1648,7 +1648,7 @@ deferred with a stated reason rather than left ambiguous; one is closed.
 Deferral here means *decided not to do now, for this reason* — not
 undecided.
 
-### F304 (Fixed — Unreleased) — three workflow steps substituted a ref into a shell
+### F304 (Fixed — v0.28.0) — three workflow steps substituted a ref into a shell
 
 *   **Location**: `ci.yml` (PR diff summary), `release.yml` (tag resolution)
 *   **Severity**: MED · **Category**: injection / CI
@@ -1744,7 +1744,7 @@ applies to its own gate.
     roughly eleven dispatchers; at one site it no longer carries its own
     weight.
 
-### F305 (Fixed — Unreleased) — the bot-filter guard matched one spelling of a rule SQL gives four
+### F305 (Fixed — v0.28.0) — the bot-filter guard matched one spelling of a rule SQL gives four
 
 *   **Location**: `codelore-lib/tests/bot_filter_hygiene_test.rs`
 *   **Severity**: LOW · **Category**: test reach / correctness
@@ -1778,7 +1778,7 @@ applies to its own gate.
     only thing keeping bots out of the pair counts. A documented design
     decision, not an oversight.
 
-### F306 (Fixed — Unreleased) — zizmor adopted, and the seven findings it still reports
+### F306 (Fixed — v0.28.0) — zizmor adopted, and the seven findings it still reports
 
 *   **Location**: `.github/zizmor.yml`, `ci.yml`
 *   **Severity**: MED · **Category**: CI coverage / supply chain
@@ -1835,7 +1835,7 @@ applies to its own gate.
     `actions/checkout` persisting credentials — and deserve their own pass
     rather than a blocking gate adopted in the same commit as the tool.
 
-### F307 (Fixed — Unreleased) — the bot-filter matcher read one line at a time, and the codebase wraps long SQL
+### F307 (Fixed — v0.28.0) — the bot-filter matcher read one line at a time, and the codebase wraps long SQL
 
 *   **Location**: `codelore-lib/tests/bot_filter_hygiene_test.rs`
 *   **Severity**: LOW · **Category**: test reach / correctness
