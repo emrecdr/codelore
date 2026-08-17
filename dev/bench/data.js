@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786349786834,
+  "lastUpdate": 1786951814516,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -419,6 +419,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 90779667,
             "range": "± 457495",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "13beb6c80c519b1bd05fbebe2a0023da8e085271",
+          "message": "docs(reports): land cycle 15 with competitor figures corrected (#282)\n\nProduct/competitive analysis, revised after an independent validation\npass. The codebase claims were re-checked against source and held; the\ncompetitor figures did not.\n\nCorrected against the vendors' own pages:\n\n- repowise: ~3.6k stars -> ~5.9k; 9 MCP tools -> 10 (a count they\n  describe as a deliberate ceiling); 15 languages -> 19 parsed to AST,\n  13 at a framework-aware \"Full\" tier. The release version is dropped\n  rather than restated: it is not shown on the page, and the draft's\n  \"v0.31.0 July 2026\" would only rot again.\n- CodeScene: the free/standalone MCP tier is not \"single-file static\n  Code Health only\" -- it also performs delta reviews and business-case\n  calculations locally. Seat pricing is EUR 18 Standard / EUR 27 Pro;\n  the quoted MCP add-on price could not be confirmed and is now marked\n  unverified.\n- P3 enumerated nine of the eleven MCP tools while asserting a property\n  of all eleven. The list is now taken from source: `repo_overview` and\n  `gate_changes` were missing.\n- The depth claim compared CodeLore's 57 analyses against repowise's\n  tool count. Like for like the agent surfaces are close, 11 against\n  10; the asymmetry is behind the surface, not on it.\n\nTwo premises weakened and are marked inline rather than re-ranked:\nCodeScene ships an AGENTS.md and free-tier delta reviews (narrowing\nP2's headroom), and repowise ships cycle detection and architecture\nsummaries over MCP (so P3's gap is the narrower \"nobody exposes\n*quantified* architecture metrics\", not an empty surface).\n\nThe P1-P6 ranking is deliberately unchanged. It is a product judgement\nfor the maintainer, and this pass corrected facts rather than making\nthat call.\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-08-16T22:25:22Z",
+          "url": "https://github.com/emrecdr/codelore/commit/13beb6c80c519b1bd05fbebe2a0023da8e085271"
+        },
+        "date": 1786951811423,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 56454609,
+            "range": "± 3224567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 103737216,
+            "range": "± 1300217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 98126540,
+            "range": "± 1663624",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 98615773,
+            "range": "± 1974438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 101337381,
+            "range": "± 1494399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 96819243,
+            "range": "± 1471361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 95315848,
+            "range": "± 2108809",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 94728980,
+            "range": "± 1822800",
             "unit": "ns/iter"
           }
         ]
