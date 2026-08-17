@@ -6,6 +6,15 @@ Audited from `git archive main` read-only; `main` = `origin/main` = `9811bd8`; t
 
 This cycle audits an implementation of my own finding, so the standard has to be higher than usual, not lower. Cycle 16's F1 shipped as **#278, a breaking change**, and three of my reports landed with independent validation corrections attached. Both directions are adjudicated below, and the corrections land harder than the finding did.
 
+> **Revised after an independent validation pass.** Every structural claim was
+> re-derived from source, including at the pre-change commit: the six `LANG`
+> variants, the zero-residual identifier sweep, the trait signature, the
+> `21`/`7` counts in §2 (both correct — the first collapses numbered node
+> variants, the second counts module dependents), and the verbatim CHANGELOG
+> quotation. Three things did not survive and are corrected in place: the
+> `aho-corasick` lockfile claim (§1.2), the C++-dependency enumeration behind
+> the new finding (§3, conclusion unaffected), and the `gh-pages` figure (§6).
+
 ---
 
 ## 1. The excision, validated — and it went past my finding in four places
@@ -17,7 +26,9 @@ This cycle audits an implementation of my own finding, so the standard has to be
 **Four things the implementation found that my finding did not:**
 
 1. **The four could not be separated** — which makes my cycle-16 addendum's central recommendation wrong. I proposed two independently shippable steps, `ccomment`+`preproc` first as "smallest change, largest structural payoff." Verified against the pre-change source: `ParserTrait::new(code: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>)` — `PreprocResults` was **a parameter of the crate's central trait**, consumed by exactly one arm (`LANG::Cpp`) in `get_fake_code`. Dropping preproc first would have gutted macro expansion for a language still shipped. Preproc was the *most* invasive of the four, not the least. My sequencing was exactly backwards.
-2. **Two more dead dependencies**: `petgraph` (whose only workspace consumer was `preproc.rs`) and `aho-corasick` (whose only use was a Mozilla bindgen marker in the C++ checker). Both now absent from `Cargo.lock`. My cycle-16 §1.4 sweep missed them because — as I wrote at the time — I swept "`codelore-lib` and `codelore-cli`." I did not sweep `codelore-rca`, the one crate the entire finding was about.
+2. **Two more dead dependencies**: `petgraph` (whose only workspace consumer was `preproc.rs`) and `aho-corasick` (whose only use was a Mozilla bindgen marker in the C++ checker). My cycle-16 §1.4 sweep missed them because — as I wrote at the time — I swept "`codelore-lib` and `codelore-cli`." I did not sweep `codelore-rca`, the one crate the entire finding was about.
+
+   *(Corrected after validation: only **`petgraph`** actually left the dependency graph — zero entries in `Cargo.lock`. **`aho-corasick` is still there**, one entry, pulled transitively by `globset`, `regex` and `regex-automata`. Dropping it from `codelore-rca`'s manifest removed a direct dependency that was no longer used; it did not remove the crate from the build, and its compile cost is unchanged. I wrote "both now absent from `Cargo.lock`" without opening the lockfile — the same defect class this report spends §2 adjudicating, committed in the paragraph claiming credit for finding dead dependencies.)*
 3. **Downstream consumers I never traced**: the Dependabot ignore rule for petgraph is retired, the deferred `0.6 → 0.8` bump is closed, and `leiden-rs`'s `petgraph` feature is no longer *constrained* — handled correctly by leaving the feature off but rewriting the comment to say it is now "a plain 'we don't use it' rather than a constraint." Enabling an unused feature would have added a dependency for nothing; reclassifying the reason is the right call.
 4. **`ParserTrait::new` simplified further** to `fn new(code: Vec<u8>)`, dropping the `path` argument that only `get_fake_code` needed. `metrics_with_guard` still takes `path` — for the diagnostic log line, where it is genuinely used. Dropped exactly where unused, kept exactly where used.
 
@@ -60,7 +71,9 @@ I note that #282 left the P1–P6 ranking deliberately unchanged, on the grounds
 - `:119` — **Bundled-DuckDB compile dominator**: `libduckdb-sys` `bundled` compiles ~6000 `.cpp` files every run (~5–7 min). Options offered: better sccache hit rate, switch to `dynamic` + ship pre-built DuckDB, or a build-once-and-cache job.
 - `:121` — **Re-add the musl release target**: blocked, now solely, by DuckDB's `.cpp` needing a C++ cross-toolchain.
 
-Before #278 these were genuinely separate — the grammars contributed C++ to the musl problem but nothing to the compile dominator. **The excision merged them.** I verified `libduckdb-sys` is now the only C++-compiling dependency in the lockfile (`ring` compiles C; the remaining `*-sys` crates are bindings). One dependency, one `bundled` feature, both rows.
+Before #278 these were genuinely separate — the grammars contributed C++ to the musl problem but nothing to the compile dominator. **The excision merged them.** `libduckdb-sys` is now the only C++-compiling dependency that builds on any target this project ships (`ring` compiles C; the remaining `*-sys` crates are bindings). One dependency, one `bundled` feature, both rows.
+
+*(Precision added after validation: one other lockfile crate does ship a C++ source — `iana-time-zone-haiku`'s `implementation.cc` — but it sits behind `[target.'cfg(target_os = "haiku")'.dependencies]` and therefore compiles on no target this project builds for, musl included. The enumeration above was incomplete; the conclusion it supports is unaffected.)*
 
 That matters because the three options at `:119` are not equivalent once the rows are joined:
 
@@ -88,13 +101,14 @@ Severity **Low**: it changes planning, not behaviour.
 - **My dependency sweep covered two of the three workspace crates**, omitting the one the finding was about. I stated the scope accurately in cycle 16 ("`codelore-lib` and `codelore-cli`"), which is how the gap is visible now — but stating a scope accurately is not the same as choosing the right one, and `petgraph` and `aho-corasick` were sitting in the crate I skipped.
 - **The misquote (§2) is the worst error in this engagement's history**, and it is worse than a wrong number because it was load-bearing for a design recommendation.
 - **I nearly repeated the substring error inside this report** (§1), one cycle after being corrected for it. Caught, and recorded.
+- **And I did repeat the underlying error, in the paragraph claiming credit for catching dead dependencies.** §1.2 asserted `petgraph` and `aho-corasick` were "both now absent from `Cargo.lock`" without opening the lockfile. Only `petgraph` left; `aho-corasick` is still pulled by `globset`, `regex` and `regex-automata`, so its compile cost never went away. The validation pass caught it. Two sections later I was adjudicating exactly this defect class in my own prior reports — a claim inherited from a plausible mental model rather than re-derived from the artifact it names. Proximity to the lesson is evidently no protection against it.
 - **Limits.** Nothing compiled from this workspace. The excision's correctness is established structurally — by identifier sweeps, the `LANG` variant list, the trait signature, and the call-site dispatch — not by running the test suite. The claim that no *supported* language's behaviour changed rests on the same structural argument the commit message makes (no impl for a supported `*Code` type touched, `get_fake_code` returned `None` for every language except C++), which I verified is consistent with the surviving source but did not execute.
 
 ---
 
 ## 6. Housekeeping
 
-- **All prior report branches have landed.** `docs/hardening-cycle-12`, `-14`, `-16` and `cycle-15-product` are merged and deleted; the branch list is `main` + `gh-pages` (13 behind locally, which is the publishing job).
+- **All prior report branches have landed.** `docs/hardening-cycle-12`, `-14`, `-16` and `cycle-15-product` are merged and deleted; the branch list is `main` + `gh-pages`. *(Corrected: I described `gh-pages` as "13 behind". It is an **orphan** branch with no common ancestor with `main` — the publishing job commits generated output onto an unrelated history — so "behind" is not a meaningful measure of it at all. The raw counts are 805 one way and 168 the other.)*
 - `_to_delete/` carries this cycle's artifacts. `HANDOFF.md` remains yours.
 - **This report** is committed to branch `docs/hardening-cycle-17`, based on `main` (`9811bd8`).
 
