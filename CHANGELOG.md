@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **`codelore-rca` no longer declares `serde_json` and `rayon`, which nothing in it uses.** They are residue from upstream `rust-code-analysis`, which used them for JSON output and parallel walking; the vendored subset that survives here does neither. Nothing about the build changes — both remain in the graph as direct dependencies of `codelore-lib` (and `serde_json` of `codelore-cli` too), so this is manifest hygiene rather than a supply-chain or compile-time reduction. The value is that a vendored crate's manifest should describe what the vendored code actually needs; overstating it misleads the next person trying to work out what the fork still depends on. **`num-traits` was in the same candidate list and is deliberately kept**, because it is required and only *looks* unused: `codelore-rca` derives `FromPrimitive` in six generated `language_*.rs` files, and `num-derive`'s macros expand to bare `num_traits::` paths that must resolve in this crate's own extern prelude — the crate does not use the `#[num_traits = "…"]` helper that would let a transitive copy serve. Removing it fails to compile with `error[E0463]: can't find crate for num_traits`. That distinction is why the removals here were confirmed by building without them rather than by searching for them: "absent from the source text" and "safe to remove" are different predicates, and a text-based unused-dependency scanner reports the first while implying the second.
+
 ## [0.28.0] - 2026-08-17
 
 ### Fixed

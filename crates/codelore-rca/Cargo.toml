@@ -33,7 +33,6 @@ tree-sitter-rust        = "=0.23.2"   # language_rust.rs: SourceFile=155
 
 # Standard RCA dependencies
 serde       = { version = "1", features = ["derive"] }
-serde_json  = "1"
 crossbeam   = "0.8"
 walkdir     = "2"
 regex       = "1"
@@ -43,7 +42,6 @@ num-format  = "0.4"
 num         = { version = "0.4", features = ["std"] }
 num-derive  = "0.5"
 num-traits  = "0.2"
-rayon       = "1"
 
 [features]
 default = []
