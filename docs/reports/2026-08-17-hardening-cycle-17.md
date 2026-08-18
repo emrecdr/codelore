@@ -11,9 +11,12 @@ This cycle audits an implementation of my own finding, so the standard has to be
 > variants, the zero-residual identifier sweep, the trait signature, the
 > `21`/`7` counts in §2 (both correct — the first collapses numbered node
 > variants, the second counts module dependents), and the verbatim CHANGELOG
-> quotation. Three things did not survive and are corrected in place: the
-> `aho-corasick` lockfile claim (§1.2), the C++-dependency enumeration behind
-> the new finding (§3, conclusion unaffected), and the `gh-pages` figure (§6).
+> quotation. Two things did not survive and are corrected in place: the
+> `aho-corasick` lockfile claim (§1.2) and the C++-dependency enumeration
+> behind the new finding (§3, conclusion unaffected). A third correction was
+> made to the `gh-pages` figure in §6 and has since been **withdrawn** — the
+> original figure was right and the correction was not; see the retraction at
+> §6 and the evidence in cycle 18 §2.3.
 
 ---
 
