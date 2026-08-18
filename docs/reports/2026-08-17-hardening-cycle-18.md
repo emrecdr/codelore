@@ -6,6 +6,14 @@ Audited from `git archive main` read-only; `main` = `origin/main` = `19a00ec`; t
 
 Both commits in this delta are consequences of cycle 17: my roadmap finding implemented (#284), and three more corrections to that report (#283). This cycle validates the first, adjudicates the second — **accepting two corrections and rejecting one, with evidence** — and then finally runs the dependency sweep properly, which is where the new finding comes from.
 
+> **Revised after an independent validation pass.** The rejection in §2.3 was
+> upheld: `git branch -vv` prints `[origin/gh-pages: behind 13]`, the local ref
+> tracks `origin/gh-pages`, and the count was 13 when written — so the retracted
+> correction has itself been retracted, in this PR. §3 did **not** survive
+> intact: `num-traits` is required via derive expansion, proven by a build that
+> fails without it, so the finding is two removable dependencies rather than
+> three and its "no build change" bound was wrong. Corrections are inline.
+
 ---
 
 ## 1. #284 — the roadmap merge, validated
@@ -47,29 +55,65 @@ I am recording this as rejected rather than quietly accepting it, because a revi
 
 ## 3. New finding
 
-### F — LOW (new) — `codelore-rca` declares three more dependencies it does not use, and this time the sweep was run properly
+### F — LOW (new) — `codelore-rca` declares two more dependencies it does not use, and a third that only looks unused
 
 Cycle 16 swept `codelore-lib` and `codelore-cli` with a crude method and skipped `codelore-rca` — the crate the whole finding concerned — which is how `petgraph` and `aho-corasick` were missed. This cycle ran the sweep it should have run: **all three crates**, all dependency tables (`dependencies`, `dev-dependencies`, `build-dependencies`), all source roots (`src/`, `tests/`, `benches/`, `examples/`, `build.rs`), with `-`→`_` normalisation.
 
 Result:
 
-| Crate | Declared | Unreferenced |
-|---|---|---|
-| `codelore-rca` | 18 + 2 dev | **`serde_json`, `num-traits`, `rayon`** |
-| `codelore-lib` | 32 + 1 dev + 3 build | none |
-| `codelore-cli` | 14 + 5 dev | none |
+| Crate | Declared | Unreferenced in source | Actually removable |
+|---|---|---|---|
+| `codelore-rca` | 18 + 2 dev | `serde_json`, `num-traits`, `rayon` | **`serde_json`, `rayon`** — `num-traits` is required via derive expansion (see below) |
+| `codelore-lib` | 32 + 1 dev + 3 build | none | — |
+| `codelore-cli` | 14 + 5 dev | none | — |
 
-All three have **zero** occurrences anywhere in `codelore-rca/src/` — not in code, not in comments, and the crate contains no aliased imports (`use … as …`) that could hide them. They are the same residue class as `petgraph` and `aho-corasick`: upstream `rust-code-analysis` used them for JSON output, numeric generics and parallel walking; this fork's surviving subset does not.
+The two columns differ, and that gap is the finding's real lesson: "absent from the source text" and "safe to remove" are not the same predicate, and only the second one is checkable by building.
 
-**And now the bound that §2.1 taught me to state before claiming anything.** Removing all three changes the build by **nothing**:
+All three have **zero** occurrences anywhere in `codelore-rca/src/` — not in code, not in comments, and the crate contains no aliased imports (`use … as …`) that could hide them.
+
+> **Corrected after validation: `num-traits` is required, and the text-search method above is exactly why I missed it.**
+>
+> Removing it does not compile:
+>
+> ```
+> error[E0463]: can't find crate for `num_traits`
+>  --> crates/codelore-rca/src/languages/language_java.rs:5:39
+>   |
+> 5 | #[derive(Clone, Debug, PartialEq, Eq, FromPrimitive)]
+>   |                                       ^^^^^^^^^^^^^ can't find crate
+> ```
+>
+> `codelore-rca` derives `FromPrimitive` in six generated `language_*.rs`
+> files, and `num-derive`'s documentation is explicit that its macros "assume
+> that the `num_traits` crate is a **direct dependency**" unless the
+> `#[num_traits = "…"]` helper attribute names another path — which this crate
+> does not use. The derive expands to bare `num_traits::` paths that must
+> resolve in this crate's own extern prelude, so a transitive copy does not
+> help. `num-traits` therefore stays.
+>
+> I checked for aliased imports as the way a dependency could hide, and missed
+> the mechanism that was actually hiding one: a proc-macro emitting a path that
+> appears nowhere in the source. That is the *converse* of the blind spot this
+> very section cites two paragraphs down — and I cited it while walking into it.
+
+`serde_json` and `rayon` are genuinely unused — verified by removing both and
+running `cargo check -p codelore-rca --all-targets`, which passes with zero
+errors. They are the same residue class as `petgraph` and `aho-corasick`:
+upstream `rust-code-analysis` used them for JSON output and parallel walking;
+this fork's surviving subset does not.
+
+**The bound, restated correctly.** Removing the two genuinely-unused crates changes the build by **nothing**:
 
 - `serde_json` — also a direct dependency of `codelore-lib` *and* `codelore-cli`.
 - `rayon` — also a direct dependency of `codelore-lib`.
-- `num-traits` — pulled by the entire arrow stack, `chrono`, `criterion`, `plotters` and the `num-*` family.
 
 So this is **manifest hygiene only, with zero build-time or supply-chain reduction** — explicitly not the kind of win #278 delivered. Its value is that a vendored crate's manifest currently overstates what the vendored code needs, which misleads exactly the person trying to work out what the fork still depends on. That person, twice recently, was me.
 
-**Complementary tooling note.** #278's CHANGELOG observes that "unused-dependency tooling would not have found any of this: the grammars were referenced, from inside the `mk_langs!` invocation, and merely unreachable." That is right about the grammars and worth pairing with its converse: `cargo-machete` or `cargo-udeps` **would** find these three, because they are genuinely unreferenced. The two classes are disjoint — unreferenced-declared (tooling catches, humans miss) versus referenced-but-unreachable (tooling misses, reachability analysis catches) — and the project has now hit one of each. A `cargo-machete` step is cheap, and given this repository's habit of converting a class into a guard, it is the natural home for the first class.
+**Complementary tooling note — and a third class the first draft of this note missed.** #278's CHANGELOG observes that "unused-dependency tooling would not have found any of this: the grammars were referenced, from inside the `mk_langs!` invocation, and merely unreachable." That is right about the grammars, and I paired it with its converse: `cargo-machete` or `cargo-udeps` would find genuinely-unreferenced declarations that humans miss. Both halves hold for `serde_json` and `rayon`.
+
+But there is a third class, and this crate contains a live specimen of it: **required-but-invisible**. `num-traits` appears nowhere in the source and is load-bearing anyway, because a derive macro expands to it. `cargo-machete` is a text-based scanner and would flag it; acting on that flag breaks the build. `cargo-shear`'s own documentation concedes the same limit — it "cannot detect hidden imports from macro expansions" without a nightly `--expand`.
+
+So the recommendation needs a qualifier it did not have: a `cargo-machete` step is still worth wiring, but it must land **with `num-traits` in `package.metadata.cargo-machete.ignored`**, and its output has to be treated as a candidate list rather than a verdict. A gate that is wrong about this crate on day one, and whose wrongness compiles cleanly right up until someone acts on it, is worse than no gate — it manufactures exactly the confident-and-wrong claim the last three cycles have been about.
 
 ---
 
@@ -84,7 +128,8 @@ Unchanged: the gitlink differential fixture (still the only item with no decisio
 ## 5. Honesty ledger
 
 - **The sweep in §3 is the one I should have run in cycle 16.** Two cycles and two corrections later, running it across all three crates with a real method took one command. The finding it produced is small; the fact that it exists at all is the point.
-- **I stated the "no build change" bound before claiming the finding**, which is the direct application of §2.1's correction. That is the intended use of a correction — changing the next piece of work, not just the previous report.
+- **I stated the "no build change" bound before claiming the finding — and the bound was wrong.** Applying §2.1's lesson, I checked the lockfile to confirm each crate was still pulled elsewhere, and concluded removal was free. It was free for two of three. The check I ran answers "does this crate survive in the graph", which is not the question; the question is "does *this* crate still compile without the declaration", and only a build answers it. Reaching for the lockfile a second time felt like applying the correction. It was applying its form to a different question.
+- **The dependency I got wrong was hidden by the exact mechanism I cited in the same section.** §3's tooling note quotes #278 on macro-referenced-but-unreachable grammars, then misses macro-required-but-unreferenced `num-traits` two paragraphs above it. I checked for aliased imports as the hiding mechanism and did not consider proc-macro expansion, which is the one that was operating.
 - **I reject one correction and accept two.** The rejection is evidenced with the commands that settle it. If the counter-argument is that `[behind N]` is a confusing figure to cite at all, I agree, and the underlying point survives.
 - **Limits.** Nothing compiled. The three unused dependencies are established by exhaustive text search over the crate's sources plus the absence of aliasing; a `cargo-machete` run would confirm independently and is the natural check. The "no build change" claim rests on lockfile consumer analysis, not on two builds compared.
 
