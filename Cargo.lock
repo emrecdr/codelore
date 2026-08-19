@@ -806,7 +806,6 @@ dependencies = [
  "clap",
  "clap_complete",
  "codelore-lib",
- "dirs",
  "predicates",
  "rmcp",
  "schemars",
