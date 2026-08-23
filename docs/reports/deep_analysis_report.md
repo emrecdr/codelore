@@ -1888,4 +1888,77 @@ that switching the workflow before that configuration exists breaks the next
 release. Sequencing, not incompatibility. Recorded so the next cycle does not
 re-derive a resolved argument.
 
-The next sweep re-opens at **F308**.
+### F308 (Active) — the comment-hygiene guard cannot see manifests, and phase markers live there
+
+Found while validating cycle 19, whose §3 concerns a scanner that is blind to
+one syntactic form. The same shape appears one layer over: the comment-hygiene
+guard forbids phase markers and audit IDs, and enforces it across `.rs`/`.sql`
+under `crates/codelore-(lib|cli)/(src|tests)`. `Cargo.toml` is not in that set —
+neither by extension nor by path, since manifests sit at crate root rather than
+under `src`/`tests`.
+
+Manifests carry prose comments of exactly the kind the guard exists to police,
+and two markers survive there:
+
+| file | marker |
+|---|---|
+| `crates/codelore-lib/Cargo.toml:77` | a plan-number reference on the tree-sitter grammar block |
+| `crates/codelore-cli/Cargo.toml:33` | a finding ID plus a tier/day marker on `clap_complete` |
+
+A third, on the `diff`-support dependency block, was removed in the cycle-19
+landing because that comment had to be rewritten anyway — it still named a
+dependency the manifest no longer declares.
+
+*   **Impact**: documentation-only. Nothing is misbuilt; the markers rot exactly
+    as the guard's own module doc describes, and mean nothing to a reader
+    without the report they came from.
+*   **Class**: this is the guard-narrower-than-its-class defect the SPA
+    escaping guard, the bot-filter guard, and the ledger-stamp guard each
+    exhibited — a guard reports clean because the rule is narrower than the
+    convention it claims to enforce, and the gap is only visible from outside
+    the rule.
+*   **Fix**: extend the walk to `Cargo.toml` and add the manifests as scan
+    targets, then clear the two markers. The guard's self-test convention
+    applies — pin the widened matcher against a manifest-shaped marker the
+    previous scope missed, so the extension is proved rather than asserted.
+*   **Caveat for the fix**: `codelore-rca` is deliberately out of scope as a
+    vendored MPL fork, and its manifest carries grammar-pinning comments that
+    reference upstream issue numbers. Any extension must keep that exclusion or
+    it will fail on hands-off code.
+
+Recorded rather than fixed inline, per the standing rule that latent findings
+spotted during unrelated work land as findings.
+
+### F309 (Active) — the vendored fork's public surface still describes languages it no longer parses
+
+Found in the same validation pass as F308, and deliberately not fixed: both sites
+are in `codelore-rca`, which is hands-off as a vendored MPL fork, and one of them
+would be a breaking API change.
+
+*   **`src/spaces.rs`** — `SpaceKind::Namespace` (documented as "A `C/C++`
+    namespace") and `SpaceKind::Struct` lost their only producers when the C++
+    `Getter` impl was removed with the grammar excision. No `Getter` impl in the
+    tree emits either variant now; the only surviving references are their own
+    arms in the `Display` impl. They are unreachable as produced values, and the
+    first names a language the crate cannot parse.
+*   **`src/lib.rs`** — the crate rustdoc's "Supported Languages" list names C++,
+    C#, CSS, Go, HTML, and a Firefox-internal JavaScript dialect. This is
+    published on docs.rs. Note the list was **already** wrong before the excision:
+    most of those were never vendored, so this is upstream residue rather than a
+    regression the excision introduced — C++ is one more stale entry on a page
+    that was misleading beforehand.
+
+*   **Impact**: documentation and dead public API. Nothing miscomputes — an
+    unreachable enum variant costs a `Display` arm, and the rustdoc list misleads
+    a reader evaluating the crate standalone.
+*   **Why deferred rather than fixed**: removing enum variants is a breaking
+    change to `codelore-rca`'s published API, and the crate's stated policy is to
+    minimise upstream diff so merges stay cheap. Correcting the rustdoc means
+    diverging from an upstream file for a cosmetic gain. Both are defensible
+    changes, but they are a decision about the fork's divergence budget rather
+    than a defect fix, and that decision belongs to a cycle that is looking at
+    the fork rather than one that arrived here chasing a manifest comment.
+*   **If taken**: pair it with the language list in the crate rustdoc *and* the
+    supported-extension set, so the two cannot disagree again.
+
+The next sweep re-opens at **F310**.

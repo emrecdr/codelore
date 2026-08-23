@@ -347,7 +347,7 @@ fn run_profile_cmd() -> Result<()> {
     )?;
     writeln!(
         out,
-        "**Pinned third-party**:\n  - gix {gix}\n  - DuckDB {duckdb}\n  - tree-sitter 0.25.x (Rust/Python/Java/JS/TS/TSX/C++)",
+        "**Pinned third-party**:\n  - gix {gix}\n  - DuckDB {duckdb}\n  - tree-sitter 0.25.x (Rust/Python/Java/JS/TS/TSX)",
         gix = codelore_lib::cli_api::provenance::GIX_VERSION,
         duckdb = codelore_lib::cli_api::provenance::DUCKDB_VERSION,
     )?;
