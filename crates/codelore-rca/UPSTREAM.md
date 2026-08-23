@@ -19,9 +19,10 @@ The upstream repository is structured as a Cargo workspace:
 - `tree-sitter-ccomment/` / `tree-sitter-preproc/` — custom grammars (NOT vendored; external deps)
 
 Note: `src/languages/language_mozcpp.rs` does NOT exist in this upstream revision.
-The mozcpp grammar lives in the `tree-sitter-mozcpp/` top-level crate and is accessed
-via `macros.rs` referencing `tree_sitter_mozcpp::LANGUAGE`. That external dep reference
-in `src/macros.rs` is kept as-is and will be resolved in Task 5 (Cargo.toml).
+Upstream reaches the mozcpp grammar from the `tree-sitter-mozcpp/` top-level crate,
+via `macros.rs` referencing `tree_sitter_mozcpp::LANGUAGE`. That reference is gone
+from this fork — the C++ grammar was excised along with the other three the product
+could not reach, so `src/macros.rs` names only the grammars still declared.
 
 ## Modifications from upstream
 
@@ -138,14 +139,13 @@ by checking root node kind_id against enum constants:
 | tree-sitter-python | =0.23.6 | module id=108 |
 | tree-sitter-java | =0.23.5 | program id=138 |
 | tree-sitter-rust | =0.23.2 | source_file id=155 |
-| tree-sitter-kotlin-ng | 1.1.0 | source_file id=142 |
-| bca-tree-sitter-mozcpp | 1.1.0 | translation_unit id=308 |
-| bca-tree-sitter-ccomment | 1.1.0 | (aliased as tree-sitter-ccomment) |
-| bca-tree-sitter-preproc | 1.1.0 | (aliased as tree-sitter-preproc) |
 
-C++ uses `bca-tree-sitter-mozcpp` (aliased as `tree-sitter-mozcpp`) because `language_cpp.rs`
-was generated from the mozcpp grammar. The `get_language!(tree_sitter_cpp)` macro arm routes
-to `tree_sitter_mozcpp::LANGUAGE`.
+These five are the whole set. Kotlin, C++ and the two Mozilla helper grammars
+(`ccomment`, `preproc`) were removed once it was established that nothing in the
+product could reach them; see "Unreachable-grammar excision" above. `language_cpp.rs`
+and the `get_language!(tree_sitter_cpp)` macro arm went with them, so no grammar
+here is aliased and none is reached through a special case except TypeScript, which
+serves both `LANGUAGE_TYPESCRIPT` and `LANGUAGE_TSX` from one crate.
 
 When upgrading grammar versions in future, verify node IDs by running:
 ```

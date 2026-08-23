@@ -39,6 +39,19 @@ regex       = "1"
 globset     = "0.4"
 termcolor   = "1"
 num-format  = "0.4"
+# Three num-family crates serve three different consumers in the generated
+# `language_*.rs` enums, and only two of them can be found by searching:
+#   `num`        — the call sites, `num::FromPrimitive::from_u16(x)`.
+#   `num-derive` — the `#[derive(FromPrimitive)]` attribute itself.
+#   `num-traits` — required by that derive's *expansion*, which emits
+#                  `extern crate num_traits as _num_traits;`. An `extern
+#                  crate` item resolves only against this crate's own extern
+#                  prelude, so a transitive copy cannot satisfy it and the
+#                  dependency has to stay direct. It appears nowhere in the
+#                  source text, so unused-dependency scanners report it as
+#                  removable; removing it fails the build with
+#                  `error[E0463]: can't find crate for num_traits`.
+#                  Do not act on that report.
 num         = { version = "0.4", features = ["std"] }
 num-derive  = "0.5"
 num-traits  = "0.2"

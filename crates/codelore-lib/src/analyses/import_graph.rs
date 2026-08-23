@@ -9,8 +9,8 @@
 //! Iterative, not recursive, because a long import chain (a 50k-file
 //! monorepo can have deep transitive `use` paths) would overflow the
 //! call stack with the recursive formulation. The analysis crate
-//! deliberately avoids `petgraph` (its optional 0.8 dep conflicts with
-//! `leiden-rs`), and `unsafe` is forbidden workspace-wide — so this is
+//! does not reach for a graph library — the walk needs adjacency and
+//! nothing else — and `unsafe` is forbidden workspace-wide, so this is
 //! a plain `Vec`-based adjacency walk.
 
 use std::collections::{HashMap, HashSet};
