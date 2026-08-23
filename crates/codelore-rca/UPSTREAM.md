@@ -120,8 +120,9 @@ would have left machinery with no consumer.
 
 `petgraph` left with the excision: `preproc.rs` was its only consumer in the
 workspace. That retires its `dependabot.yml` ignore rule and unblocks
-`leiden-rs`'s `petgraph` feature, which had been switched off to avoid
-conflicting with the pinned 0.6.
+`leiden-rs`'s `petgraph` feature — which had two reasons to stay off, and only
+one survives. The version collision is gone with the pin; what remains is that
+we feed edges directly and do not need the graph type.
 
 Removing public API (`LANG` variants, parser types, and the `ParserTrait::new`
 signature) is a breaking change for this crate.

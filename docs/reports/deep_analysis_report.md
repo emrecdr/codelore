@@ -1917,10 +1917,22 @@ dependency the manifest no longer declares.
     exhibited — a guard reports clean because the rule is narrower than the
     convention it claims to enforce, and the gap is only visible from outside
     the rule.
-*   **Fix**: extend the walk to `Cargo.toml` and add the manifests as scan
-    targets, then clear the two markers. The guard's self-test convention
-    applies — pin the widened matcher against a manifest-shaped marker the
-    previous scope missed, so the extension is proved rather than asserted.
+*   **Fix**: scope alone is not enough, and writing the finding scope-first
+    nearly hid that. Extending the walk to `Cargo.toml` catches the plan-number
+    marker and **not** the other one, because the matcher cannot express it
+    either:
+    - **Scope** — add manifests as scan targets.
+    - **Vocabulary** — `PHASE_KEYWORDS` carries `Plan`, `Task`, `DEEP`; the
+      surviving marker spells its phase with two words that are in neither the
+      keyword list nor any other predicate.
+    - **ID shape** — the finding ID is hyphenated with a letter between the
+      prefix and the digits, so the token scan splits it into a bare
+      single-letter token and a letter-led token, and the whole-token ID rule
+      rejects both on length and on prefix.
+
+    The guard's self-test convention applies — pin the widened matcher against
+    each of the three shapes the previous rule missed, calling the guard's own
+    matcher rather than a copy, so the extension is proved rather than asserted.
 *   **Caveat for the fix**: `codelore-rca` is deliberately out of scope as a
     vendored MPL fork, and its manifest carries grammar-pinning comments that
     reference upstream issue numbers. Any extension must keep that exclusion or
@@ -1961,4 +1973,76 @@ would be a breaking API change.
 *   **If taken**: pair it with the language list in the crate rustdoc *and* the
     supported-extension set, so the two cannot disagree again.
 
-The next sweep re-opens at **F310**.
+### F310 (Active) — the supported-language set and the grammar pins are hand-copied across many sites, and the one guard-shaped mechanism this repo favours is not applied to either
+
+Surfaced by a cleanup review of the stale-claim fix. That fix repaired seven
+prose assertions by hand and shipped no mechanism, which is one altitude too low
+for a repo carrying fifteen convention-scanning guard tests.
+
+**The language set** is written out by hand in six places — the `profile`
+command's pinned-third-party line, an MCP tool description, the complexity
+module's rustdoc, the `UPSTREAM.md` grammar table, `codelore-rca`'s crate
+rustdoc, and the advanced-usage docs. None is compiler-checked and none is
+tested. Two were stale before the fix; a third (`codelore-rca`'s rustdoc) is
+still stale and tracked as [F309].
+
+**The grammar pins** are written out in four places — `codelore-rca`'s manifest,
+`codelore-lib`'s manifest (declared to exist "for parser-ABI compat", so the two
+*must* agree), `provenance::grammar_pins()`, and the `UPSTREAM.md` table. All
+four agree today and nothing checks that they continue to.
+
+*   **Why this is worse than ordinary duplication**: a grammar-version mismatch
+    does not fail loudly. The node-ID tables in the generated enums are keyed to
+    exact grammar versions, so a partial bump yields *silently wrong complexity
+    metrics*. And `grammar_pins()` is serialised into every provenance manifest,
+    so the same drift ships a provenance receipt that misreports what produced
+    the numbers.
+*   **The asymmetry that makes the case**: in the profile command's own output
+    line, the `gix` and DuckDB versions come from constants that
+    `dep_versions_drift_test.rs` checks against `Cargo.lock`, and the analysis
+    count and format list on adjacent lines both derive from code. The
+    tree-sitter version and the language list on that same line are the only
+    hand-written facts in the function — and they are the ones that went stale.
+*   **Highest-value fix, smallest**: extend `dep_versions_drift_test.rs` to
+    value-check `grammar_pins()` against the lockfile. The existing test file
+    already has the helper; the current provenance test asserts only that the
+    keys are present and non-empty, explicitly declining to check values.
+*   **Fuller fix**: a pin-agreement guard on the `rust_version_pins_test.rs`
+    template — that test guards the same shape (one fact, several independent
+    pin sites, no single source of truth) and carries the anti-vacuity assertion
+    such a guard needs. It should assert the two manifests name the same grammar
+    set at the same versions, and that the published table has exactly one row
+    per declared grammar. A self-test must reject an *extra* table row naming a
+    dropped grammar, since that is the defect that actually occurred.
+*   **On deriving the language list**: `Tier1Language` is already imported in
+    `codelore-cli`, so no new dependency is needed — but it exposes no `ALL`, and
+    its `as_str` deliberately collapses `Tsx` onto the TypeScript label (pinned
+    by a test), so deriving needs a display name distinct from the grouping
+    label. That is a public-API addition and a user-visible output change, not a
+    cleanup, which is why it is recorded here rather than done in passing.
+
+### F311 (Active) — three extension tables claim to mirror each other and do not
+
+Found while assessing [F310]. `Tier1Language`, `CloneLanguage` and
+`ImportLanguage` each map a file extension to a language, and the latter two
+carry comments stating they match the first. Two real divergences:
+
+| | `.pyi` | extension case |
+|---|---|---|
+| complexity | accepted | lowercased before matching |
+| imports | accepted | matched raw |
+| clones | **not accepted** | matched raw |
+
+*   **Effect**: a `.pyi` stub is complexity-scanned and import-scanned but never
+    clone-scanned; a file named with an upper-case extension is
+    complexity-scanned but skipped by both clones and imports. Both failures are
+    silent — each table returns `None` and its pass moves on.
+*   **Impact**: low in practice, since upper-case source extensions are rare and
+    `.pyi` stubs carry little clonable body. It is recorded because the comments
+    assert an equivalence that does not hold, which is the same defect class as
+    [F310] one layer down: a claim of correspondence with nothing checking it.
+*   **Fix**: one shared extension→language mapping, or a test asserting the three
+    tables accept identical extension sets. Pre-existing; not introduced by the
+    work that found it.
+
+The next sweep re-opens at **F312**.
