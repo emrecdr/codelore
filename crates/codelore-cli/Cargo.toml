@@ -39,8 +39,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # `diff` (PR mode) support: serde/serde_json serialize `DiffOutput` and the
 # `--base-cache` payload; tempfile backs the throwaway worktree checkouts.
-# The worktree cache root resolves through `codelore-lib`'s
-# `default_cache_root`, which is why no directory-lookup crate is declared here.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

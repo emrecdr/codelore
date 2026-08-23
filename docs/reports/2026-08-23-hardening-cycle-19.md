@@ -6,6 +6,19 @@ Audited from the live repository read-only; `main` = `origin/main` = `e01df10`; 
 
 All three commits are consequences of cycle 18. One upholds my rejection of a correction. One corrects my finding. One **empirically refutes my recommendation** and, in doing so, finds a real defect my sweep missed. The second and third are the substance of this cycle, and both land against me.
 
+> **Revised after an independent validation pass.** The headline finding survived
+> a harder test than the one it applied: a census of every declaration in all four
+> manifests, across normal, dev and build sections, confirms `num-traits` is the
+> only text-invisible dependency. The `extern crate` mechanism was read out of
+> num-derive's own source, and `cargo-machete` was run directly — five findings,
+> matching this report's six minus the one already removed. Four claims did not
+> survive and are corrected in place: the grammar table's java row (§3, a
+> substring double-count), the census table's omission of `num` (§4, the most
+> relevant comparator), two comment-length figures (§4), and the branch status
+> (§7 — this report was **not** landed when it claimed to be). Corrections are
+> inline. §4 also gained a second finding: the stale-comment defect turned out to
+> be a class of seven, two of them user-facing.
+
 ---
 
 ## 1. The rejection was upheld
@@ -116,11 +129,14 @@ Added by the validation pass rather than the audit. It began as the small findin
 | forward reference | `UPSTREAM.md` layout notes | a `macros.rs` mozcpp reference that is gone, and work "to be resolved" that was | doc |
 | stale rationale | `codelore-lib/src/analyses/import_graph.rs` | avoids `petgraph` because of a version conflict that no longer exists | comment |
 | self-contradiction | `docs/roadmap-v1.x-and-beyond.md` | says the `leiden-rs` `petgraph` feature is off *solely* over that conflict — contradicting the manifest comment the same commit wrote saying the opposite | doc |
+| the same attribution again | `UPSTREAM.md` excision narrative | repeats that *solely*-over-the-conflict claim, twenty lines from a paragraph this pass rewrote | **published** |
 | the original | `codelore-cli/Cargo.toml` | documents a dependency the manifest no longer declares | comment |
 
 The first two matter most and are the ones no comment-hygiene process would have caught. `codelore profile` is the command a user runs to find out what the tool is built from, and it names a language the binary cannot parse. `UPSTREAM.md` is set as `readme` in `codelore-rca`'s manifest, so its grammar table *is* the crates.io page — telling anyone evaluating the crate that it pins four grammars it does not have, in a section written as present-tense operating guidance for the next person upgrading them.
 
-All six are fixed in the landing commit. Two further instances in the vendored fork — an orphaned `SpaceKind` variant documented as C/C++, and a crate rustdoc listing six languages that were never vendored — are recorded rather than fixed, because one is a breaking API change and the other means diverging from upstream for cosmetic gain.
+All seven are fixed in the landing commit. Two further instances in the vendored fork — an orphaned `SpaceKind` variant documented as C/C++, and a crate rustdoc listing six languages that were never vendored — are recorded rather than fixed, because one is a breaking API change and the other means diverging from upstream for cosmetic gain.
+
+The seventh is worth its own sentence, because of how it was found. The first six came from a sweep. The seventh came from a **cleanup review of the fix for the first six**, and it sat twenty lines above a paragraph that fix had already rewritten — in the published README, carrying the exact attribution the roadmap row was corrected for. A table that enumerated six and declared them complete was wrong at the moment it was written. That is the class defending itself: a sweep bounded by what its author thought to look for is not a sweep either, and the only thing that caught the remainder was a second pass with a different brief.
 
 **What this says about the excision.** #278 was a large, careful, well-reasoned change, and its own narrative in `UPSTREAM.md` is accurate. What it did not do was sweep for *other* text asserting the state it had just changed. The removals were verified by building, and every one of these survives a build.
 
@@ -151,7 +167,7 @@ Unchanged: the gitlink differential fixture (still the only item with no decisio
 
 *(Two residuals were spot-checked during validation rather than carried forward unverified. **zizmor**: confirmed open — `protect-main` requires nine contexts (`cargo-deny`, `clippy`, `dogfood`, `rustfmt`, `self-gate`, `spa-browser`, and the three `test` matrix legs) and zizmor is not among them. **`outputSchema`**: the "1 of 11" figure looks overstated — there are eleven `#[tool(` declarations in `mcp.rs` and no occurrence of `output_schema`, `outputSchema`, or structured-content plumbing anywhere in the CLI crate, so the honest reading is zero of eleven. Flagged rather than rewritten, because the figure predates this cycle and the residual is open either way.)*
 
-**Closed this cycle:** the unused-declared-dependency thread. Two deps removed from `codelore-rca` (#286), one from `codelore-cli` (#287), `num-traits` correctly retained, and the automation option evaluated and rejected with evidence rather than left open. That thread is done; §4 is its last loose end.
+**Closed this cycle:** the unused-declared-dependency thread. Two deps removed from `codelore-rca` (#286), one from `codelore-cli` (#287), `num-traits` correctly retained, and the automation option evaluated and rejected with evidence rather than left open. That thread is done — §4's first finding was its last loose end, closed by the comment the landing commit adds. §4's second finding belongs to a different thread.
 
 **Currency:** not re-verified; nothing dependency-related moved beyond the removals above.
 

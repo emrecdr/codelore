@@ -39,7 +39,7 @@ regex       = "1"
 globset     = "0.4"
 termcolor   = "1"
 num-format  = "0.4"
-# Three num-family crates serve three different consumers in the generated
+# The three crates below serve three different consumers in the generated
 # `language_*.rs` enums, and only two of them can be found by searching:
 #   `num`        — the call sites, `num::FromPrimitive::from_u16(x)`.
 #   `num-derive` — the `#[derive(FromPrimitive)]` attribute itself.
