@@ -6,6 +6,26 @@ Audited from the live repository read-only; `main` = `origin/main` = `d3ff722b`;
 
 All three commits come from validating cycle 19, and all three found things that cycle missed. The corrections are in §1; the new finding in §3 concerns the one item #288 explicitly deferred, which I think was deferred for a reason that only applies to half of it.
 
+> **Revised after an independent validation pass.** §3's finding holds and its
+> recommendation has been taken: the rustdoc correction shipped, with the
+> divergence recorded in `UPSTREAM.md` as the fork's own discipline requires.
+> Three claims are corrected in place. §3 treats `SpaceKind::Namespace` alone,
+> but `SpaceKind::Struct` was killed by the same deletion — one `impl Getter for
+> CppCode` produced both — so the dead-arm count is **four, not two**, and half
+> of them are in the product. §3's premise quotes #288's summary line rather
+> than the ledger entry #290 had already corrected inside this report's own
+> delta, so part of its argument had been won before it was made. And its two
+> quotations of #288 are not verbatim: neither string exists in the repository,
+> and both sources already distinguished the halves the report describes as
+> bundled.
+>
+> One residual this report carries forward is **right, and the challenge to it
+> was wrong.** `outputSchema` really is 1 of 11. Cycle 19 §5 refuted that figure
+> by searching for a literal that `rmcp`'s `#[tool]` macro derives from a
+> `Json<T>` return type — the same macro-opacity mechanism cycle 19 §3
+> establishes against `cargo-machete`, committed two sections later against its
+> own residual. That refutation is retracted at its source.
+
 ---
 
 ## 1. Corrections to cycle 19, verified
@@ -48,7 +68,7 @@ The manifest marker sweep (#290) covers seven sites across four manifests plus `
 
 ### F — LOW (new) — The deferred `codelore-rca` public-surface item bundles a free documentation fix with an expensive API change, and only the second deserves the deferral
 
-#288 records, rather than fixes, that *"codelore-rca's public surface still describes languages it cannot parse — an orphaned `SpaceKind` variant and a crate rustdoc listing six languages never vendored"*, and classifies it as *"a breaking API change and an upstream divergence, which is a decision about the fork's budget rather than a defect fix."*
+#288 records, rather than fixes, that `codelore-rca`'s public surface still describes languages it cannot parse — an orphaned `SpaceKind` variant and a crate rustdoc listing languages the fork never had — and defers both, *"because one is a breaking API change and the other means diverging from upstream for cosmetic gain."*
 
 That classification is right for one of the two items and wrong for the other, and bundling them blocks a free fix behind a budget decision it does not need.
 
@@ -65,14 +85,22 @@ So the split is four never-present plus two removed, not "six never vendored" �
 
 Fixing this is a **doc-comment edit**. It changes no type, no signature, no behaviour; it is not a breaking change and the "upstream divergence" it creates is a comment that describes this fork instead of a different codebase. Meanwhile it is live right now on the docs.rs page for `codelore-rca 0.28.0`, telling anyone who lands there that the crate handles C++, C#, CSS, Go and HTML. Of everything in this repository, a published package page advertising six capabilities that do not exist is the item with the widest audience and the lowest fix cost.
 
-**The `SpaceKind` variant** is the genuinely expensive one, and more entangled than #288's phrasing suggests. `SpaceKind::Namespace` — "A `C/C++` namespace" — can no longer be constructed, but it is still *matched* in two places, and one of them is in the product, not the vendored crate:
+**The `SpaceKind` variants** are the genuinely expensive half — and more entangled than #288's phrasing suggested, or than mine did. There are **two** dead variants, not one. `impl Getter for CppCode` mapped `StructSpecifier => SpaceKind::Struct` and `NamespaceDefinition => SpaceKind::Namespace`, and its deletion in #278 orphaned both together. Neither can be constructed: `SpaceKind` derives `Serialize` but not `Deserialize`, so no runtime value comes from data; it has no `FromPrimitive` and no conversion impls; `Default` yields `Unknown`; and the union over all six `Getter` impls is `{Unknown, Function, Class, Unit, Interface, Trait, Impl}`.
 
-- `codelore-rca/src/spaces.rs:58` — its own `Display`
-- `codelore-lib/src/complexity/mod.rs:60` — `space_kind_str`, mapping it to `"namespace"`
+They are still matched in **four** places, half of them in the product rather than the vendored crate:
 
-So the product carries a live match arm for a variant nothing can produce. Removing the variant is a breaking change to a published enum *and* touches the product's dispatch; that genuinely is a fork-budget decision, and deferring it is reasonable.
+| file | variant |
+|---|---|
+| `codelore-rca/src/spaces.rs:54` | `Struct` |
+| `codelore-rca/src/spaces.rs:58` | `Namespace` |
+| `codelore-lib/src/complexity/mod.rs:56` | `Struct` |
+| `codelore-lib/src/complexity/mod.rs:60` | `Namespace` |
 
-**Recommendation:** split the item. Ship the rustdoc correction now — it is minutes of work, needs no API decision, and is the only part with a public audience. Keep the `SpaceKind` removal deferred on its own merits, and while it waits, note the dead arm at `complexity/mod.rs:60` so the next reader knows it is unreachable rather than merely rare.
+So `space_kind_str` carries two arms for values its own dependency can no longer hand it. Removing the variants is semver-breaking on a published enum *and* touches the product's dispatch, so deferring remains reasonable — but two costs assumed large are not. `codelore-rca` has exactly one reverse dependency on crates.io, and it is `codelore-lib`, this same workspace. And `#[deprecated]` — the obvious graceful middle path, and a minor change under the Cargo semver rules — is unavailable here: the lint fires on *pattern* matches, the product has two, and CI runs `-D warnings`. The choice is removal or documentation, with nothing in between.
+
+**Recommendation:** split the item. Ship the rustdoc correction now — it is minutes of work, needs no API decision, and is the only part with a public audience. Keep the `SpaceKind` removal deferred on its own merits, and while it waits record all four dead arms rather than one, so the next reader knows they are unreachable rather than merely rare.
+
+*(Taken. The rustdoc correction ships with this report, and the divergence is recorded in `UPSTREAM.md` — a fork that documents every other deviation from upstream should not make this one silently. The removal stays deferred, upgraded in the ledger with the reverse-dependency count, the deprecation constraint, and all four arms.)*
 
 **Severity Low.** Nothing computes a wrong number and no exit code moves. It is documentation — but documentation on a published package page, which is the same class as F287 (the `@v1` ref the docs promised and nothing provided), and that one was rated by its audience rather than its mechanism.
 
@@ -84,7 +112,7 @@ So the product carries a live match arm for a variant nothing can produce. Remov
 
 Unchanged: the gitlink differential fixture (still the only item with no decision recorded against it, since cycle 6); `outputSchema` at 1 of 11 MCP tools; M8 cancellation; zizmor not yet a required context. From cycle 13: the `cargo publish --no-verify` split. From cycle 15: P1–P6, with P1 (AI attribution) still the highest-value open item.
 
-**Newly open:** the `SpaceKind::Namespace` removal (§3), deferred on its own merits, with a dead match arm in the product while it waits.
+**Newly open:** the `SpaceKind::Namespace` *and* `SpaceKind::Struct` removal (§3), deferred on its own merits, with two dead match arms in the product while it waits. Also newly open: `unsafe_code = "forbid"` is declared workspace-wide but `codelore-rca`'s empty `[lints]` table declines it along with the clippy block, so the crate CLAUDE.md describes as covered is the one crate where the lint does not run. Nothing is wrong today — the tree has no executable `unsafe` — but "CI rejects additions" is false for a third of the workspace.
 
 **Currency:** not re-verified; the delta is documentation and manifest metadata.
 
@@ -96,7 +124,7 @@ Unchanged: the gitlink differential fixture (still the only item with no decisio
 - **My mechanism description was imprecise and propagated.** "Bare `num_traits::` paths" was close enough to be adopted and wrong enough to need superseding, and it reached a CHANGELOG before it was corrected. Getting a mechanism *approximately* right is worse than saying it is unverified, because approximations get quoted.
 - **I quoted the stale rustdoc and did not see it** (§3). Cycle 16 had the evidence in the report; cycle 17 declared the surface clean using a method that could not have seen it. The lesson is the same one the project extracted for itself in #289 — a sweep is bounded by what its author thought to look for — and identifier sweeps are bounded, by construction, to identifiers.
 - **The project's self-correction is now finding more than my audits are.** #288, #289 and #290 each found real defects, including one that invalidated the previous commit's own completeness claim. That is the right direction for this engagement to be heading, and worth saying rather than competing with.
-- **Limits.** Nothing compiled. §3's claims are established from source: the rustdoc block, the `SpaceKind` enum, its two match sites, and `UPSTREAM.md`'s silence on C#/CSS/Go/HTML. The claim that `SpaceKind::Namespace` cannot be constructed rests on the C++ getter having been removed in #278 and no remaining site producing it — a reachability argument of exactly the kind #285 showed can fail when macros are involved, so it should be confirmed by removing the variant and building before anyone acts on it.
+- **Limits.** Nothing compiled. §3's claims are established from source: the rustdoc block, the `SpaceKind` enum, its four match sites, and `UPSTREAM.md`'s silence on C#/CSS/Go/HTML. The claim that the variants cannot be constructed rests on the C++ getter having been removed in #278 and no remaining site producing them — a reachability argument of exactly the kind #285 showed can fail when macros are involved. Validation hardened it rather than accepting it: the derive list was read directly (`Serialize` without `Deserialize`, no `FromPrimitive`, no conversion impls, `Default` → `Unknown`), every macro in `macros.rs` was checked for `SpaceKind` in its expansion, and all six `Getter` impls were enumerated. That closes the specific route #285 exposed, since the failure there was a derive *expansion* emitting a path absent from source and here the derive lists contain no such derive. It should still be confirmed by removing the variants and building before anyone acts on it.
 
 ---
 
@@ -104,7 +132,7 @@ Unchanged: the gitlink differential fixture (still the only item with no decisio
 
 - Branches: `main` + `gh-pages`. Cycle 19 landed via #288.
 - `_to_delete/` carries prior artifacts; `rm -rf _to_delete` when convenient. `HANDOFF.md` remains yours.
-- **This report** is written to `docs/reports/2026-08-24-hardening-cycle-20.md` and committed to a local branch `docs/hardening-cycle-20` based on `main` (`d3ff722b`). Per §1.4, that is a local ref only — it needs a push and a PR to land.
+- **This report** is written to `docs/reports/2026-08-24-hardening-cycle-20.md` on branch `docs/hardening-cycle-20`, based on `main` (`d3ff722b`). Per §1.4, a local ref is not a landed report — this one is pushed and carried by a pull request, together with the §3 fix it recommends and the corrections from the validation pass.
 
 ---
 

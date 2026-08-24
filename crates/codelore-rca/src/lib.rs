@@ -4,27 +4,28 @@
 // Rust toolchain bumps that the upstream code happens to trigger.
 #![allow(clippy::collapsible_match)]
 
-//! rust-code-analysis is a library to analyze and extract information
-//! from source codes written in many different programming languages.
+//! `codelore-rca` analyzes source code and extracts complexity metrics and
+//! structural information. It is a maintained fork of Mozilla's
+//! <a href="https://github.com/mozilla/rust-code-analysis/" target="_blank">rust-code-analysis</a>,
+//! reduced to the languages the CodeLore product dispatches. `UPSTREAM.md`
+//! records the vendoring baseline and every divergence from upstream.
 //!
-//! You can find the source code of this software on
-//! <a href="https://github.com/mozilla/rust-code-analysis/" target="_blank">GitHub</a>,
-//! while issues and feature requests can be posted on the respective
-//! <a href="https://github.com/mozilla/rust-code-analysis/issues/" target="_blank">GitHub Issue Tracker</a>.
+//! Source, issues and feature requests for this fork belong on
+//! <a href="https://github.com/emrecdr/codelore" target="_blank">its own GitHub repository</a>,
+//! not upstream's.
 //!
 //! ## Supported Languages
 //!
-//! - C++
-//! - C#
-//! - CSS
-//! - Go
-//! - HTML
 //! - Java
 //! - JavaScript
-//! - The JavaScript used in Firefox internal
 //! - Python
 //! - Rust
-//! - Typescript
+//! - TypeScript, including TSX
+//!
+//! Upstream additionally lists C++, C#, CSS, Go, HTML and a Firefox-internal
+//! JavaScript dialect. None of those applies here: C# / CSS / Go / HTML were
+//! never vendored into this fork, and the C++ and Mozilla-JavaScript grammars
+//! were removed once it was established the product could not reach them.
 //!
 //! ## Supported Metrics
 //!
