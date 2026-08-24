@@ -61,11 +61,10 @@ codegen-units = 1
 strip = true
 panic = "unwind"
 
-# PGO scaffolding (spec §6.5: campaign deferred to v1.1).
-# Run `scripts/pgo.sh` against a representative workload (Linux kernel snapshot)
-# to produce a PGO-optimized binary. v1.0 ships the regular release profile;
-# v1.1 will flip the release pipeline to use this profile after the benchmark
-# suite is stable enough to validate the gains.
+# PGO scaffolding. Run `scripts/pgo.sh` against a representative workload
+# (Linux kernel snapshot) to produce a PGO-optimized binary. The release
+# pipeline ships the regular release profile; switching it over waits on a
+# benchmark suite stable enough to validate the gains.
 [profile.release-pgo]
 inherits = "release"
 lto = "fat"

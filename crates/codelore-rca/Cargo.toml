@@ -19,7 +19,8 @@ categories.workspace = true
 [lints]
 
 [dependencies]
-# Tree-sitter core — pinned workspace-wide per spec §2.2
+# Tree-sitter core — pinned workspace-wide; the grammars below are pinned to
+# versions whose generated node IDs match this core.
 tree-sitter = "=0.25.3"
 
 # Per-language tree-sitter grammars.
@@ -50,11 +51,21 @@ num-format  = "0.4"
 #                  dependency has to stay direct. It appears nowhere in the
 #                  source text, so unused-dependency scanners report it as
 #                  removable; removing it fails the build with
-#                  `error[E0463]: can't find crate for num_traits`.
-#                  Do not act on that report.
+#                  `error[E0463]: can't find crate for num_traits`. The
+#                  metadata table below says so to the scanner directly — a
+#                  comment only reaches someone who opens this file, and the
+#                  report is read as tool output.
 num         = { version = "0.4", features = ["std"] }
 num-derive  = "0.5"
 num-traits  = "0.2"
+
+# A derive expansion is an opaque token stream to a text-based scanner, so
+# `num-traits` is unreachable by the analysis `cargo machete` performs and it
+# is reported as removable on every run. Suppressing the one false positive
+# here keeps the remaining findings worth reading; it is not a gate, and the
+# grammar false positives are deliberately left visible.
+[package.metadata.cargo-machete]
+ignored = ["num-traits"]
 
 [features]
 default = []

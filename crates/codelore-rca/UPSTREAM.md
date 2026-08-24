@@ -39,11 +39,11 @@ The following were REMOVED from the vendored tree:
   The `pub mod abc`, `pub mod wmc`, `pub mod npa`, `pub mod npm` declarations in
   `src/metrics/mod.rs` were removed.
 
-## Task 5 excision (completed 2026-06-06)
+## Mozjs and dropped-metrics excision (2026-06-06)
 
 **Option B chosen: fully excise Mozjs and dropped metrics.**
 
-The dangling references from Task 4's file drops were resolved by:
+The dangling references left by the file drops above were resolved by:
 
 ### Mozjs excision
 - `src/langs.rs` — removed Mozjs entry from `mk_langs!`; moved js/jsm/mjs/jsx extensions to Javascript
@@ -119,10 +119,8 @@ would have left machinery with no consumer.
   from C++ to Rust
 
 `petgraph` left with the excision: `preproc.rs` was its only consumer in the
-workspace. That retires its `dependabot.yml` ignore rule and unblocks
-`leiden-rs`'s `petgraph` feature — which had two reasons to stay off, and only
-one survives. The version collision is gone with the pin; what remains is that
-we feed edges directly and do not need the graph type.
+workspace, so its `dependabot.yml` ignore rule is retired. What that unblocks
+elsewhere in the workspace is recorded beside the dependency it affects.
 
 Removing public API (`LANG` variants, parser types, and the `ParserTrait::new`
 signature) is a breaking change for this crate.
@@ -198,4 +196,4 @@ To pull upstream fixes:
 3. Update this file with the new SHA + date.
 4. Run `cargo test -p codelore-rca` to verify.
 
-Year-1 maintenance budget: ~8 days (see spec §4.1).
+Year-1 maintenance budget: ~8 days.

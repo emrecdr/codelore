@@ -43,10 +43,7 @@ num-traits removed          ->  error[E0463]: can't find crate for `num_traits`
 
 The mechanism, which I verified directly:
 
-| | |
-|---|---|
-| Files importing `num_derive` | **6** (`use num_derive::FromPrimitive;`) |
-| Files naming `num_traits` | **0** |
+Six generated files carry `use num_derive::FromPrimitive;`; none names `num_traits` anywhere.
 
 `num-derive`'s `FromPrimitive` expansion emits `extern crate num_traits as _num_traits;` — verified in the proc-macro's own source, which documents that the macros assume `num_traits` is a direct dependency unless the `#[num_traits = "…"]` helper names another ident, a helper this crate does not use. An `extern crate` item resolves only against *this crate's* extern prelude, which is why a transitive copy cannot serve and why the failure surfaces as `E0463` — a crate-resolution error rather than a path error. The crate is required while being entirely absent from the source text.
 
@@ -81,7 +78,7 @@ Cycle 18 recommended `cargo-machete` as a guard for the unused-declared class. #
 
 The only grammar cargo-machete does *not* flag is the only one named outside the macro — it appears in the `get_language!` special case in `macros.rs`. Four named only inside `mk_langs!` are flagged; the one named outside is clean. cargo-machete is a text scanner and macro invocations are opaque to it; cargo-shear concedes the same limit, liftable only with a nightly `--expand`.
 
-Reaching green would take five ignore entries, at which point the gate suppresses more than it reports and each entry is a standing invitation to remove the wrong one. #287 also grounds the rejection in this repo's own precedent: it fails the bar set when zizmor was adopted, where an advisory version was written and discarded because *"a check that is red for the wrong reason teaches people to ignore red checks."*
+Reaching green would take five ignore entries, at which point the gate suppresses more than it reports and each entry is a standing invitation to remove the wrong one. #287 also grounds the rejection in this repo's own precedent: it fails the bar set when zizmor was adopted, where an advisory version was written and discarded because *"a check that is red on every pull request teaches people to ignore red checks, which is worse than not running the tool."* A machete gate fails that bar on its own terms — five false positives make it red on every pull request until they are suppressed.
 
 **Why this refutation should have been mine.** Cycle 18 §3 quoted #278's CHANGELOG — *"the grammars were referenced, from inside the `mk_langs!` invocation, and merely unreachable"* — and then, two paragraphs later, recommended a text scanner as a guard. The same macro opacity that makes the grammars invisible to reachability analysis makes them **false positives** to text analysis. I had the disqualifying fact in my own report and drew the opposite conclusion from it. That is a worse error than the num-traits miss, because it required no new information to avoid.
 
@@ -136,6 +133,8 @@ The first two matter most and are the ones no comment-hygiene process would have
 
 All seven are fixed in the landing commit. Two further instances in the vendored fork — an orphaned `SpaceKind` variant documented as C/C++, and a crate rustdoc listing six languages that were never vendored — are recorded rather than fixed, because one is a breaking API change and the other means diverging from upstream for cosmetic gain.
 
+An eighth is excluded on purpose, and naming the reason is what actually closes this class. `CHANGELOG.md`'s released `[0.28.0]` section carries the same *solely* attribution the roadmap row and `UPSTREAM.md` were corrected for. It stays. A released changelog section records what was believed when it shipped, and the `[Unreleased]` entry directly above it already discloses the correction — rewriting the released text would delete that disclosure rather than add to it. The criterion this table should have carried from the start is therefore not a count but a boundary: **prose giving present-tense guidance** gets swept, **prose recording what was believed at a point in time** does not. Manifests, module rustdocs, published READMEs and the roadmap are the first kind; dated audit reports and released changelog sections are the second. Seven was never a property of the codebase — it was a property of where the author looked. Stating the rule closes the class; counting instances only ever closes the instances someone thought to count.
+
 The seventh is worth its own sentence, because of how it was found. The first six came from a sweep. The seventh came from a **cleanup review of the fix for the first six**, and it sat twenty lines above a paragraph that fix had already rewritten — in the published README, carrying the exact attribution the roadmap row was corrected for. A table that enumerated six and declared them complete was wrong at the moment it was written. That is the class defending itself: a sweep bounded by what its author thought to look for is not a sweep either, and the only thing that caught the remainder was a second pass with a different brief.
 
 **What this says about the excision.** #278 was a large, careful, well-reasoned change, and its own narrative in `UPSTREAM.md` is accurate. What it did not do was sweep for *other* text asserting the state it had just changed. The removals were verified by building, and every one of these survives a build.
@@ -167,7 +166,7 @@ Unchanged: the gitlink differential fixture (still the only item with no decisio
 
 *(Two residuals were spot-checked during validation rather than carried forward unverified. **zizmor**: confirmed open — `protect-main` requires nine contexts (`cargo-deny`, `clippy`, `dogfood`, `rustfmt`, `self-gate`, `spa-browser`, and the three `test` matrix legs) and zizmor is not among them. **`outputSchema`**: the "1 of 11" figure looks overstated — there are eleven `#[tool(` declarations in `mcp.rs` and no occurrence of `output_schema`, `outputSchema`, or structured-content plumbing anywhere in the CLI crate, so the honest reading is zero of eleven. Flagged rather than rewritten, because the figure predates this cycle and the residual is open either way.)*
 
-**Closed this cycle:** the unused-declared-dependency thread. Two deps removed from `codelore-rca` (#286), one from `codelore-cli` (#287), `num-traits` correctly retained, and the automation option evaluated and rejected with evidence rather than left open. That thread is done — §4's first finding was its last loose end, closed by the comment the landing commit adds. §4's second finding belongs to a different thread.
+**Closed this cycle:** the unused-declared-dependency thread. Two deps removed from `codelore-rca` (#286), one from `codelore-cli` (#287), `num-traits` correctly retained, and the automation option evaluated and rejected with evidence rather than left open. That thread is done — §4's first finding was its last loose end, closed by the comment the landing commit adds and by the `[package.metadata.cargo-machete] ignored` entry a later cleanup pass put beside it. That entry is the half of the fix a scanner can act on, and cycle 18 §3 had already prescribed it; rejecting the *gate* here silently took the non-gate declaration with it, which is how the comment came to ship alone. §4's second finding belongs to a different thread.
 
 **Currency:** not re-verified; nothing dependency-related moved beyond the removals above.
 

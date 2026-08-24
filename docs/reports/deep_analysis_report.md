@@ -1898,16 +1898,30 @@ neither by extension nor by path, since manifests sit at crate root rather than
 under `src`/`tests`.
 
 Manifests carry prose comments of exactly the kind the guard exists to police,
-and two markers survive there:
+and so does the markdown this project publishes. A census across every manifest
+and the published markdown found seven marker sites, all since fixed by hand:
 
 | file | marker |
 |---|---|
-| `crates/codelore-lib/Cargo.toml:77` | a plan-number reference on the tree-sitter grammar block |
-| `crates/codelore-cli/Cargo.toml:33` | a finding ID plus a tier/day marker on `clap_complete` |
+| `Cargo.toml` | a spec-section reference, plus three version numbers, on the PGO profile |
+| `crates/codelore-lib/Cargo.toml` | a plan-number reference on the tree-sitter grammar block |
+| `crates/codelore-cli/Cargo.toml` | a finding ID plus a tier/day marker on `clap_complete` |
+| `crates/codelore-rca/Cargo.toml` | a spec-section reference on the tree-sitter core pin |
+| `crates/codelore-rca/UPSTREAM.md` | a section *titled* after a plan step, a second plan-step reference, and a spec-section reference |
 
-A third, on the `diff`-support dependency block, was removed in the cycle-19
+An eighth, on the `diff`-support dependency block, was removed in the cycle-19
 landing because that comment had to be rewritten anyway — it still named a
 dependency the manifest no longer declares.
+
+The instances are closed; the mechanism is not, which is why this stays Active.
+The `UPSTREAM.md` row is the one that matters most: `codelore-rca`'s manifest
+sets `readme = "UPSTREAM.md"`, so those three markers were on the crate's
+crates.io page. The doc guards do not reach it either — `documented_action_ref_test`
+scans `README.md` plus `docs/**`, `doc_analysis_count_test` scans `docs/**`
+alone, and no test in the workspace names `UPSTREAM.md`. The axis the original
+finding missed is therefore not extension-or-path but **published versus
+internal**: the one markdown file this workspace publishes outside `docs/` is
+the one file no convention guard reads.
 
 *   **Impact**: documentation-only. Nothing is misbuilt; the markers rot exactly
     as the guard's own module doc describes, and mean nothing to a reader
@@ -1930,13 +1944,22 @@ dependency the manifest no longer declares.
       single-letter token and a letter-led token, and the whole-token ID rule
       rejects both on length and on prefix.
 
+    - **Surface** — derive the scanned set from the `readme` targets of all
+      four manifests plus `docs/**`, so a newly published file is covered by
+      construction rather than by someone remembering to add it.
+
     The guard's self-test convention applies — pin the widened matcher against
-    each of the three shapes the previous rule missed, calling the guard's own
-    matcher rather than a copy, so the extension is proved rather than asserted.
-*   **Caveat for the fix**: `codelore-rca` is deliberately out of scope as a
-    vendored MPL fork, and its manifest carries grammar-pinning comments that
-    reference upstream issue numbers. Any extension must keep that exclusion or
-    it will fail on hands-off code.
+    each of the shapes the previous rule missed, calling the guard's own matcher
+    rather than a copy, so the extension is proved rather than asserted.
+    `tests/bot_filter_hygiene_test.rs` is the worked example to copy: its
+    self-test exercises the matcher the guard actually runs.
+*   **Caveat for the fix**: the exclusion must be drawn by **provenance, not by
+    crate**. `codelore-rca` is hands-off as a vendored MPL fork, and its
+    manifest carries grammar-pinning comments referencing upstream issue
+    numbers that must keep passing. But `UPSTREAM.md` does not exist upstream at
+    all — it is codelore-authored fork-provenance documentation — so a
+    crate-wide exclusion would permanently exempt the most visible surface in
+    the workspace. Exempt upstream-derived text, not the crate that contains it.
 
 Recorded rather than fixed inline, per the standing rule that latent findings
 spotted during unrelated work land as findings.
@@ -1964,12 +1987,17 @@ would be a breaking API change.
     unreachable enum variant costs a `Display` arm, and the rustdoc list misleads
     a reader evaluating the crate standalone.
 *   **Why deferred rather than fixed**: removing enum variants is a breaking
-    change to `codelore-rca`'s published API, and the crate's stated policy is to
-    minimise upstream diff so merges stay cheap. Correcting the rustdoc means
-    diverging from an upstream file for a cosmetic gain. Both are defensible
-    changes, but they are a decision about the fork's divergence budget rather
-    than a defect fix, and that decision belongs to a cycle that is looking at
-    the fork rather than one that arrived here chasing a manifest comment.
+    change to `codelore-rca`'s published API, and that alone carries the first
+    half. The rustdoc half was originally deferred as "diverging from an upstream
+    file for a cosmetic gain", and that rationale does not survive scrutiny — the
+    same commit added a dozen lines of comment to `codelore-rca/Cargo.toml`, an
+    upstream-tracked file in the same crate, and rewrote `UPSTREAM.md`, which
+    upstream does not have at all. The divergence budget was spent in the very
+    commit that invoked it as a reason to wait. The honest reason is narrower:
+    the rustdoc list was wrong *before* the excision — most of the languages it
+    names were never vendored — so it is upstream residue rather than a
+    regression this thread introduced, and it should land together with the
+    extension-set pairing below rather than as a drive-by.
 *   **If taken**: pair it with the language list in the crate rustdoc *and* the
     supported-extension set, so the two cannot disagree again.
 
@@ -1979,11 +2007,15 @@ Surfaced by a cleanup review of the stale-claim fix. That fix repaired seven
 prose assertions by hand and shipped no mechanism, which is one altitude too low
 for a repo carrying fifteen convention-scanning guard tests.
 
-**The language set** is written out by hand in six places — the `profile`
-command's pinned-third-party line, an MCP tool description, the complexity
-module's rustdoc, the `UPSTREAM.md` grammar table, `codelore-rca`'s crate
-rustdoc, and the advanced-usage docs. None is compiler-checked and none is
-tested. Two were stale before the fix; a third (`codelore-rca`'s rustdoc) is
+**The language set** is written out by hand in at least eight places — the
+`profile` command's pinned-third-party line, an MCP tool description, the
+complexity module's rustdoc, the `UPSTREAM.md` grammar table, `codelore-rca`'s
+crate rustdoc, the advanced-usage docs, and two separate lists in the workspace
+`README.md`. The count is a floor on purpose: it was first written as six, and
+a later pass found the two README sites — the highest-traffic surface of the
+set. A hand-written census of hand-written facts reproduces the defect it
+documents, so the guard below should enumerate the sites rather than a person.
+None is compiler-checked and none is tested. Two were stale before the fix; a third (`codelore-rca`'s rustdoc) is
 still stale and tracked as [F309].
 
 **The grammar pins** are written out in four places — `codelore-rca`'s manifest,
@@ -2003,17 +2035,23 @@ four agree today and nothing checks that they continue to.
     count and format list on adjacent lines both derive from code. The
     tree-sitter version and the language list on that same line are the only
     hand-written facts in the function — and they are the ones that went stale.
-*   **Highest-value fix, smallest**: extend `dep_versions_drift_test.rs` to
+*   **The fix that matches the defect — do this one first**: a pin-agreement
+    guard on the `rust_version_pins_test.rs` template. That test guards the same
+    shape (one fact, several independent pin sites, no single source of truth)
+    and carries the anti-vacuity assertion such a guard needs. It should assert
+    the two manifests name the same grammar set at the same versions, and that
+    the published table has exactly one row per declared grammar. A self-test
+    must reject an *extra* table row naming a dropped grammar, since that is the
+    defect that actually occurred. The ordering here matters and was originally
+    inverted: what shipped was **set** drift — a published table naming four
+    grammars the manifest no longer declares — not version drift.
+*   **The cheaper adjacent fix**: extend `dep_versions_drift_test.rs` to
     value-check `grammar_pins()` against the lockfile. The existing test file
     already has the helper; the current provenance test asserts only that the
-    keys are present and non-empty, explicitly declining to check values.
-*   **Fuller fix**: a pin-agreement guard on the `rust_version_pins_test.rs`
-    template — that test guards the same shape (one fact, several independent
-    pin sites, no single source of truth) and carries the anti-vacuity assertion
-    such a guard needs. It should assert the two manifests name the same grammar
-    set at the same versions, and that the published table has exactly one row
-    per declared grammar. A self-test must reject an *extra* table row naming a
-    dropped grammar, since that is the defect that actually occurred.
+    keys are present and non-empty, explicitly declining to check values. Worth
+    doing — but on its own it guards agreement among sites that already agree,
+    a drift that has not occurred here, so taking it first would close the cheap
+    half and leave the half that actually bit.
 *   **On deriving the language list**: `Tier1Language` is already imported in
     `codelore-cli`, so no new dependency is needed — but it exposes no `ALL`, and
     its `as_str` deliberately collapses `Tsx` onto the TypeScript label (pinned
@@ -2045,4 +2083,56 @@ carry comments stating they match the first. Two real divergences:
     tables accept identical extension sets. Pre-existing; not introduced by the
     work that found it.
 
-The next sweep re-opens at **F312**.
+### F312 (Active) — `codelore-rca` compiles a dispatch layer the product cannot reach
+
+Found by an efficiency review of the unreleased range, which asked whether that
+range's dependency work reduced any build cost and concluded it did not — by the
+commits' own accurate admission, the removals changed nothing about the build.
+The class that *does* carry cost is the one the grammar excision closed,
+referenced-but-unreachable, and the fork still contains a live specimen of it.
+
+The entire consumed surface of `codelore-rca` is a single import: `complexity/mod.rs`
+takes `FuncSpace`, six parser types, `ParserTrait`, `SpaceKind` and `metrics`.
+Nothing else in the workspace names the crate. The `Callback` dispatch machinery
+— `action::<T>` in `macros.rs`, and every `Callback` impl behind it in `spaces`,
+`comment_rm`, `output/dump`, `count`, `function`, `find`, `ast` and `ops` — has
+no call site outside the crate, so those impls are dead as produced values.
+`concurrent_files.rs` is reachable only from its own `mod` and `pub use` lines.
+
+*   **Impact**: build time only; nothing miscomputes. Confirmed in `Cargo.lock`
+    that three crates have `codelore-rca` as their sole reverse dependency and
+    would leave the graph with those modules — `crossbeam` (and `crossbeam-queue`
+    beneath it), `termcolor`, and `num-format`. `walkdir` and `globset` would
+    **not**: `codelore-lib` declares both directly.
+*   **Honest magnitude**: four small pure-Rust crates plus roughly 2,400 lines of
+    source, on every build and every CI leg. Seconds, not the minutes the grammar
+    excision bought. Recorded because it is strictly more than the zero that range
+    delivered, and it earns the same argument the range made for its own removals:
+    a vendored crate's manifest and module tree should describe what the fork
+    actually needs.
+*   **Why not fixed here**: removing modules and the `Callback` surface is a
+    breaking change to a published crate — the same shape, and the same
+    version-bump requirement, as the grammar excision. It also needs a build to
+    verify, which the pass that found it could not afford.
+*   **Relationship to [F309]**: strictly larger and better evidenced. F309 covers
+    one orphaned `SpaceKind` variant and the crate rustdoc; this covers the
+    dispatch layer both of those sit inside. If the fork's divergence budget is
+    opened for one, it should be opened for both in the same cut.
+
+### F313 (Active) — `tempfile` is declared twice in `codelore-cli`
+
+`codelore-cli` declares `tempfile = "3"` in `[dependencies]` and again in
+`[dev-dependencies]`. Normal dependencies are already available to test and bench
+targets, so the second declaration changes nothing — the same
+declaration-that-changes-nothing class the range removed four lines above it when
+it dropped `dirs`.
+
+*   **Impact**: none at build time; manifest hygiene only.
+*   **Why not fixed here**: the range's own standard for a removal is *delete the
+    declaration and build*, not *search for the name* — that distinction is the
+    stated lesson of the `dirs` and `num-traits` entries. The pass that found this
+    was at 98% disk on a shared cargo target and could not meet that standard.
+    Applying a weaker one, in a review of the range that set it, would be the
+    wrong trade. Pre-existing; not introduced by the work that found it.
+
+The next sweep re-opens at **F314**.
