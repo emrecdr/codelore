@@ -31,16 +31,12 @@ pub enum SpaceKind {
     Function,
     /// A class space
     Class,
-    /// A struct space
-    Struct,
     /// A `Rust` trait space
     Trait,
     /// A `Rust` implementation space
     Impl,
     /// A general space
     Unit,
-    /// A `C/C++` namespace
-    Namespace,
     /// An interface
     Interface,
 }
@@ -51,11 +47,9 @@ impl fmt::Display for SpaceKind {
             SpaceKind::Unknown => "unknown",
             SpaceKind::Function => "function",
             SpaceKind::Class => "class",
-            SpaceKind::Struct => "struct",
             SpaceKind::Trait => "trait",
             SpaceKind::Impl => "impl",
             SpaceKind::Unit => "unit",
-            SpaceKind::Namespace => "namespace",
             SpaceKind::Interface => "interface",
         };
         write!(f, "{s}")

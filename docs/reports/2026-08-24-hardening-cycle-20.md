@@ -100,7 +100,9 @@ So `space_kind_str` carries two arms for values its own dependency can no longer
 
 **Recommendation:** split the item. Ship the rustdoc correction now — it is minutes of work, needs no API decision, and is the only part with a public audience. Keep the `SpaceKind` removal deferred on its own merits, and while it waits record all four dead arms rather than one, so the next reader knows they are unreachable rather than merely rare.
 
-*(Taken. The rustdoc correction ships with this report, and the divergence is recorded in `UPSTREAM.md` — a fork that documents every other deviation from upstream should not make this one silently. The removal stays deferred, upgraded in the ledger with the reverse-dependency count, the deprecation constraint, and all four arms.)*
+*(Taken, and then some. The rustdoc correction shipped with this report, and the divergence is recorded in `UPSTREAM.md` — a fork that documents every other deviation from upstream should not make this one silently.*
+
+*The removal followed in a second change rather than staying deferred. Splitting the item was the right call and it is what made the second half tractable: once the cheap half was no longer waiting on it, the expensive half could be judged on measured costs instead of assumed ones — one reverse dependency, no deprecation path, four arms rather than two. Both variants and all four arms are gone, confirmed by deleting them and building rather than by re-asserting the reachability argument. What survives of the deferral's caution is its method, not its verdict.)*
 
 **Severity Low.** Nothing computes a wrong number and no exit code moves. It is documentation — but documentation on a published package page, which is the same class as F287 (the `@v1` ref the docs promised and nothing provided), and that one was rated by its audience rather than its mechanism.
 
@@ -112,7 +114,9 @@ So `space_kind_str` carries two arms for values its own dependency can no longer
 
 Unchanged: the gitlink differential fixture (still the only item with no decision recorded against it, since cycle 6); `outputSchema` at 1 of 11 MCP tools; M8 cancellation; zizmor not yet a required context. From cycle 13: the `cargo publish --no-verify` split. From cycle 15: P1–P6, with P1 (AI attribution) still the highest-value open item.
 
-**Newly open:** the `SpaceKind::Namespace` *and* `SpaceKind::Struct` removal (§3), deferred on its own merits, with two dead match arms in the product while it waits. Also newly open: `unsafe_code = "forbid"` is declared workspace-wide but `codelore-rca`'s empty `[lints]` table declines it along with the clippy block, so the crate CLAUDE.md describes as covered is the one crate where the lint does not run. Nothing is wrong today — the tree has no executable `unsafe` — but "CI rejects additions" is false for a third of the workspace.
+**Opened and closed in this cycle:** the `SpaceKind::Namespace` *and* `SpaceKind::Struct` removal (§3) — both variants and all four match arms are gone, verified by building. And `unsafe_code = "forbid"`, which was declared workspace-wide while `codelore-rca`'s empty `[lints]` table declined it along with the clippy block, leaving the crate CLAUDE.md described as covered as the one crate where the lint did not run; it now carries the lint directly, without inheriting the clippy block that would raise upstream-merge friction.
+
+**Still open from §3's thread:** nothing stops the *next* divergence between what the crate claims and what it parses. That is [F310]'s guard, not this cycle's.
 
 **Currency:** not re-verified; the delta is documentation and manifest metadata.
 

@@ -53,11 +53,9 @@ fn space_kind_str(kind: SpaceKind) -> &'static str {
     match kind {
         SpaceKind::Function => "function",
         SpaceKind::Class => "class",
-        SpaceKind::Struct => "struct",
         SpaceKind::Trait => "trait",
         SpaceKind::Impl => "impl",
         SpaceKind::Unit => "unit",
-        SpaceKind::Namespace => "namespace",
         SpaceKind::Interface => "interface",
         SpaceKind::Unknown => "other",
     }

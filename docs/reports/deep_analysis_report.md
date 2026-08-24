@@ -1969,7 +1969,7 @@ the one file no convention guard reads.
 Recorded rather than fixed inline, per the standing rule that latent findings
 spotted during unrelated work land as findings.
 
-### F309 (Active, rustdoc half fixed) — the vendored fork's public surface still describes languages it no longer parses
+### F309 (Fixed — Unreleased) — the vendored fork's public surface still describes languages it no longer parses
 
 Found in the same validation pass as F308. Originally deferred whole; cycle 20
 established that its two halves do not share a cost, and the cheap half has
@@ -1984,8 +1984,8 @@ since landed.
     project that cannot act on them. The block now names the five parsed
     languages, states which upstream entries do not apply and why, and points at
     this repository; `UPSTREAM.md` records the divergence.
-*   **`src/spaces.rs` — still open.** `SpaceKind::Namespace` (documented as "A
-    `C/C++` namespace") and `SpaceKind::Struct` are unconstructible. Their sole
+*   **`src/spaces.rs` — FIXED.** `SpaceKind::Namespace` (documented as "A
+    `C/C++` namespace") and `SpaceKind::Struct` were unconstructible. Their sole
     producer was `impl Getter for CppCode`, removed with the grammar excision —
     `StructSpecifier => SpaceKind::Struct` and `NamespaceDefinition =>
     SpaceKind::Namespace`. Confirmed by an adversarial pass that closed every
@@ -2008,15 +2008,16 @@ since landed.
     The two in the product are the ones worth knowing about: `space_kind_str`
     carries arms for values its own dependency can no longer hand it.
 
-*   **Impact**: dead public API. Nothing miscomputes — an unreachable variant
-    costs two match arms and a line of `Display`.
-*   **Why the removal is still deferred**: it is semver-breaking on a published
-    crate, and it deserves a build rather than a reachability argument. That is
-    the standard this repo adopted for the `dirs` and `num-traits` decisions,
-    and reachability arguments are exactly what macro expansion has defeated
-    here before.
-*   **What the deferral is no longer waiting on.** Two costs once assumed large
-    have been measured, and both are smaller than the original wording implied:
+*   **Impact**: dead public API. Nothing miscomputed — the unreachable variants
+    cost two match arms each and a line of `Display`.
+*   **Resolution**: both variants and all four arms removed together, and
+    confirmed the way the deferral said it must be — by deleting them and
+    building, not by re-asserting the reachability argument. `cargo check
+    --workspace --all-targets --all-features` is clean. This is a breaking
+    change to `codelore-rca`'s published API and lands unreleased, the same
+    shape as the grammar excision that orphaned the variants in the first place.
+*   **What made the removal takeable.** Two costs assumed large were measured,
+    and both were smaller than the original wording implied:
     - **Blast radius is one crate.** `codelore-rca` has exactly one reverse
       dependency on crates.io, and it is `codelore-lib` — this same workspace.
       No external consumer is protected by waiting. The caveat is that
@@ -2029,10 +2030,10 @@ since landed.
       the variants would break the build, and the only way through is
       `#[allow(deprecated)]`, which is masking rather than fixing. The choice is
       removal or documentation, with nothing in between.
-*   **If taken**: remove both variants and all four arms in one change, cut it
-    as a minor bump since the crate is pre-1.0, and pair it with the
-    supported-extension set so the language list and the extension set cannot
-    disagree again.
+*   **Still open, tracked at [F310]**: pairing the language list with the
+    supported-extension set so the two cannot disagree again. The removal
+    closes the dead-variant half; nothing yet stops the *next* divergence
+    between what the crate claims and what it parses.
 
 ### F310 (Active) — the supported-language set and the grammar pins are hand-copied across many sites, and the one guard-shaped mechanism this repo favours is not applied to either
 
@@ -2168,7 +2169,7 @@ it dropped `dirs`.
     Applying a weaker one, in a review of the range that set it, would be the
     wrong trade. Pre-existing; not introduced by the work that found it.
 
-### F314 (Active) — `unsafe_code = "forbid"` does not cover the crate the docs say it covers
+### F314 (Fixed — Unreleased) — `unsafe_code = "forbid"` does not cover the crate the docs say it covers
 
 `CLAUDE.md` states the invariant as **`workspace.lints.rust: unsafe_code =
 "forbid"`** — "zero `unsafe` blocks; CI rejects additions." The first clause is
@@ -2195,14 +2196,16 @@ not run.
     vendored MPL code is correct and should stay. `unsafe_code` is a different
     kind of rule and was dropped along with the style lints only because
     inheritance is per-crate and all-or-nothing.
-*   **Fix**: give the crate the one lint without the rest —
-    `[lints.rust]` with `unsafe_code = "forbid"` — which preserves the
-    merge-friction policy exactly. Expected to be inert, but it must be
-    confirmed by building: `forbid` cannot be locally overridden, so any
-    `unsafe` inherited from upstream in a future sync becomes a hard error
-    rather than a warning, which is the intent but is worth knowing before it
-    happens mid-merge. The alternative is to narrow the claim in `CLAUDE.md` to
-    the two crates that honour it. Doing neither leaves a documented invariant
-    that a third of the workspace does not.
+*   **Resolution**: the crate now carries `[lints.rust]` with
+    `unsafe_code = "forbid"` directly, which restores the invariant without
+    inheriting the clippy block — the merge-friction policy is unchanged and
+    still documented on the line above it. Confirmed inert by building:
+    `cargo check -p codelore-rca --all-features` is clean, as expected for a
+    tree with no executable `unsafe`.
+*   **Consequence worth knowing**: `forbid` cannot be locally overridden, so
+    `unsafe` arriving from upstream in a future sync becomes a hard error rather
+    than a warning. That is the intent, but it will surface mid-merge rather
+    than at review time, and the honest response then is to port the code rather
+    than to downgrade the lint.
 
 The next sweep re-opens at **F315**.
