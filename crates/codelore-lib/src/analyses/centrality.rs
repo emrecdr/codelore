@@ -21,7 +21,7 @@
 //!   `PageRank`'s bias toward dangling nodes.
 //!
 //! All four are computed in one pass on a hash-adjacency
-//! representation (no [`petgraph`] graph construction overhead — the
+//! representation (no graph-library construction overhead — the
 //! coupling graph is sparse, edges already de-duplicated by
 //! `(entity_a, entity_b)` lexicographic ordering).
 //!
@@ -58,7 +58,6 @@
 //! See `docs/research-foundations.md` entry "centrality" for the
 //! grounded write-up.
 //!
-//! [`petgraph`]: https://docs.rs/petgraph
 //! [`CouplingRow`]: crate::analyses::coupling::CouplingRow
 
 use std::collections::HashMap;

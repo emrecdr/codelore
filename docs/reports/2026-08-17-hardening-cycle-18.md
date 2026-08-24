@@ -96,6 +96,12 @@ All three have **zero** occurrences anywhere in `codelore-rca/src/` — not in c
 > appears nowhere in the source. That is the *converse* of the blind spot this
 > very section cites two paragraphs down — and I cited it while walking into it.
 
+*(Corrected after cycle 19: the expansion emits an `extern crate num_traits as
+_num_traits;` item, not the bare `num_traits::` paths described above. The
+conclusion is unchanged and in fact firmer — an `extern crate` item resolves
+only against this crate's own extern prelude, which makes the direct-dependency
+requirement structural rather than stylistic. See cycle 19 §2.)*
+
 `serde_json` and `rayon` are genuinely unused — verified by removing both and
 running `cargo check -p codelore-rca --all-targets`, which passes with zero
 errors. They are the same residue class as `petgraph` and `aho-corasick`:
