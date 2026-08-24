@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786951814516,
+  "lastUpdate": 1787556751532,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -489,6 +489,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 94728980,
             "range": "± 1822800",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "d3ff722be9d63f698a4d9c6963a90e7a6955b988",
+          "message": "docs: close the marker class in the manifests, ship the machete entry cycle 18 prescribed (#290)\n\nA cleanup review scoped to the whole unreleased range rather than the last\ncommit, which is what made most of this findable: three hardening-cycle\nreports sitting side by side reveal drift a single-commit diff cannot.\n\nThe convention banning plan markers and version numbers from comments was\nenforced nowhere the markers actually were. The comment-hygiene guard scans\n.rs/.sql under the product crates' src/tests, so a Cargo.toml sits outside\nit twice over -- by extension and by path -- and no guard reads UPSTREAM.md\nat all, which codelore-rca's manifest sets as `readme` and which is\ntherefore that crate's published package page. Seven marker sites across\nfour manifests and that page now describe the current contract. F308 is\nrewritten to match: its instance table went stale the moment these landed,\nits caveat excluded codelore-rca wholesale when UPSTREAM.md is\ncodelore-authored and not upstream's at all, and the axis it named\n(extension-and-path) is not the axis that hid the worst instance\n(published-versus-internal).\n\ncodelore-rca now carries [package.metadata.cargo-machete] ignored =\n[\"num-traits\"]. Cycle 18 section 3 had already prescribed exactly this;\nrejecting the machete *gate* in #287 silently took the non-gate declaration\nwith it, so a comment reading \"Do not act on that report\" shipped alone --\nreaching only someone who opens the manifest, when every report of this\ndependency so far arrived as tool output. Verified by running it: five\nfindings drop to four. The four grammar false positives stay visible on\npurpose. They are the evidence that a text scanner cannot see through a\nmacro, and a green scanner would erase the argument for rejecting the gate.\n\nThe stale-claim class now closes by rule rather than by count. An eighth\ninstance of the corrected `solely` attribution sits in the released\n[0.28.0] section and is deliberately left standing: prose giving\npresent-tense guidance gets swept, prose recording what was believed at a\npoint in time does not. Seven was never a property of the codebase, only of\nwhere the author looked.\n\nAlso corrected: a quotation carrying the machete rejection is restored to\nthe words its source used -- \"red on every pull request\", not \"red for the\nwrong reason\", which swapped a criterion about volume for one about\ncorrectness with the quote marks left in place. The original reaches a\nmachete gate directly, five false positives being red on every pull\nrequest. centrality.rs stops measuring itself against a crate that left the\nworkspace and stops linking it as a live alternative; UPSTREAM.md stops\nexplaining a different crate's feature choice, where it had already gone\nstale twice; the num-traits mechanism is stated once rather than\nre-synchronised across two entries; F310's fix ranking is un-inverted so\nthe guard matching the defect that shipped comes first; F309's deferral\nrests on a reason its own commit honours; and the grammar sweep recipe\nnames every pin site a bump has to touch.\n\nRecorded rather than fixed: F312, codelore-rca compiling a Callback\ndispatch layer with no call site outside the crate, three crates leaving\nthe graph with it but removal being a breaking change to a published crate;\nand F313, tempfile declared in both dependency tables, where the range's\nown standard is delete-and-build and this pass was at 98% disk.\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-08-24T02:08:12Z",
+          "url": "https://github.com/emrecdr/codelore/commit/d3ff722be9d63f698a4d9c6963a90e7a6955b988"
+        },
+        "date": 1787556748673,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 52167551,
+            "range": "± 2019134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 94969750,
+            "range": "± 1767324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 95345671,
+            "range": "± 1788250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 94477342,
+            "range": "± 1444092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 96553460,
+            "range": "± 1236125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 95823103,
+            "range": "± 1802056",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 94248033,
+            "range": "± 1088243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 95041926,
+            "range": "± 1932333",
             "unit": "ns/iter"
           }
         ]
