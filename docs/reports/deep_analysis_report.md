@@ -2208,4 +2208,76 @@ not run.
     than at review time, and the honest response then is to port the code rather
     than to downgrade the lint.
 
-The next sweep re-opens at **F315**.
+### F315 (Active) — scan coverage is disclosed but not gated
+
+The HEAD complexity scan now tallies eligible-but-skipped files and warns below a
+90% floor. The `degraded` verdict still does not consume it. `eval_code_health_gate`
+computes `degraded = code_health.is_empty() && head_has_scorable_source(repo, opts)`,
+and that witness ends in `paths.iter().any(...)` — a boolean. A scan covering a
+minority of the repository is not empty, so the gate still reports `passed`.
+
+*   **Why this was not fixed in the same change**: the honest denominator is not
+    obvious, and getting it wrong produces a sentinel nobody can trust. A HEAD-tree
+    denominator is wrong: `query_live_paths` derives from `changes ⋈ commits`, so
+    under `--after`/`--before` the scan legitimately attempts fewer files than the
+    tree holds and a tree-based ratio fires spuriously. The correct denominator is
+    the scan's own eligible count — which is exactly what the new `ScanCoverage`
+    carries, and why threading it is the right shape rather than recomputing a
+    ratio at gate time.
+*   **Fix**: persist `ScanCoverage` where it survives a cache hit — `provenance`,
+    not `IngestStats`, since a cached run never re-executes ingest — and have
+    `eval_code_health_gate` record `degraded` when the stored ratio is below the
+    floor. `fail_on_degraded` already defaults true, so wiring it is what converts
+    disclosure into enforcement.
+*   **Anti-vacuity requirement**: the self-test must reject a *partial* scan, not
+    just an empty one. A test that only pins the empty case would pass against the
+    current code and prove nothing about the change.
+
+### F316 (Active) — the clones and imports HEAD passes share the silent-skip shape
+
+`ingest_complexity_at_head` now classifies its skips; the sibling passes do not.
+`clones_head.rs` and `imports_head.rs` both `warn!` per file and return `None`,
+keeping no tally. `clones` feeds `disallow_clone_type_1`, which is literally
+`COUNT(DISTINCT clone_group_id)` — a thin scan lowers the count and the gate reads
+it as improvement. `imports` feeds `max_dependency_cycles` and the
+architecture-violation gates.
+
+*   **Fix**: lift `ScanOutcome`/`ScanCoverage` out of `complexity_head.rs` into the
+    shared ingest module and apply to all three. Deliberately *not* done pre-emptively
+    — one consumer is not yet a shared abstraction, and this repo's convention is that
+    three similar lines beat a premature one. The second consumer is the point at
+    which lifting it is justified.
+
+### F317 (Active) — `codelore gate` can pass a newly-introduced dependency cycle
+
+`change_set.rs` builds the projected import graph from the working tree. Three
+adjacent lines treat failure three different ways: the file read propagates with
+`map_err(...)?`, the size cap `continue`s silently, and an `extract_imports`
+failure `warn!`s and `continue`s. A file whose imports fail to extract contributes
+no edges, so `cyclic_paths` sees no cycle and the gate passes.
+
+*   **Impact**: this is the agent-loop gate — the surface whose whole purpose is to
+    catch a regression before it lands.
+*   **Fix**: the asymmetry is the bug. If an unreadable file is fatal, an
+    unparseable one that silently removes edges from a cycle check should be at
+    least disclosed. The `ParseOutcome::Skipped(REASON_*)` vocabulary already in
+    this file is the mechanism; the import path just does not use it.
+
+### F318 (Active) — a schema-wrong SARIF document silently deletes an engine's findings
+
+`sarif_parse.rs` errors correctly on a missing `version`/`runs` and on a non-array
+`runs`. But a run whose `results` key is missing or not an array hits a bare
+`continue` with no warning — and the engine was already registered by then, so it
+flows into the seed-empty-batches path where `replace_engine(engine, &[])` deletes
+that engine's stored rows. That deletion is intentional for a clean re-scan, which
+is precisely what makes a malformed document indistinguishable from a legitimate
+one that found nothing.
+
+*   **Impact**: silent data loss, then a green gate — `max_findings_in_hot_files`
+    reports `skipped` on zero findings and `fail_on_skipped` defaults false.
+*   **Fix**: treat a missing/invalid `results` as an error rather than a skip, or at
+    minimum refuse to seed an empty batch for a run that did not parse. Untested
+    today; the test should plant a valid-JSON/wrong-schema document and assert the
+    prior rows survive.
+
+The next sweep re-opens at **F319**.

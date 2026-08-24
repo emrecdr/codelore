@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@1.96.1
         with:
           targets: ${{ matrix.target }}
 
@@ -430,7 +430,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@1.96.1
 
       - name: Publish to crates.io
         if: ${{ github.ref_type == 'tag' && env.CRATES_IO_TOKEN != '' }}

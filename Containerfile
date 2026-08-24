@@ -18,9 +18,9 @@
 ARG RUST_VERSION=1.96
 ARG DEBIAN_RELEASE=bookworm
 # Base-image digests are pinned IN-LINE on the FROM instructions
-# below (not via ARG) so Dependabot's docker ecosystem can auto-PR
-# digest bumps — Dependabot reads the literal `image:tag@sha256:...`
-# shape and won't resolve ARG substitutions. Tag refs without a
+# below (not via ARG) because every digest-bumping bot reads the
+# literal `image:tag@sha256:...` shape and none resolve ARG
+# substitutions. Tag refs without a
 # digest are MUTABLE on both Docker Hub and gcr.io (both registries
 # rebuild floating tags on a regular schedule), so an unpinned build
 # today is NOT guaranteed to be byte-identical to the same
@@ -28,10 +28,16 @@ ARG DEBIAN_RELEASE=bookworm
 # a single immutable manifest so reproducibility, provenance
 # attestation (cosign / SLSA), and CVE diffing work as intended.
 #
-# Updating: bump via the Dependabot docker stanza in
-# `.github/dependabot.yml`, or capture a new digest manually with
-# `docker buildx imagetools inspect <ref> | grep Digest` and edit
-# both FROM lines. The bump is intentional, not automatic.
+# Updating: MANUAL today. There is no Dependabot docker stanza, and
+# there cannot be one — Dependabot's `docker` ecosystem matches only
+# `Dockerfile` / `*.Dockerfile` and skips `Containerfile`, the
+# OCI-canonical name used here. `renovate.json` configures Renovate's
+# `dockerfile` manager, which does read this file, but the Renovate
+# app is not installed on the repository, so that config is inert and
+# no bot has ever bumped these digests. Until the app is installed,
+# capture a new digest with
+# `docker buildx imagetools inspect <ref> | grep Digest` and edit both
+# FROM lines by hand. Do not assume these are maintained automatically.
 # REPO is the GitHub `owner/repo` slug. Used only by the
 # `org.opencontainers.image.source` OCI label so `docker inspect`
 # / `cosign verify` / Snyk / Grype / Trivy etc. dereference back

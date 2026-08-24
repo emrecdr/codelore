@@ -59,9 +59,15 @@ updates:
       - dependency-name: "tree-sitter"
       - dependency-name: "tree-sitter-*"
 
-  # Docker / container-image digests are handled by Renovate (not
-  # Dependabot) because Dependabot's `docker` ecosystem only detects
-  # `Dockerfile` / `*.Dockerfile` and skips files named `Containerfile`
-  # (the OCI-canonical name we use). Renovate's `dockerfile` manager
-  # picks Containerfile up natively. See `renovate.json` for the
-  # docker package rule.
+  # Docker / container-image digests are NOT handled here, and cannot
+  # be: Dependabot's `docker` ecosystem only detects `Dockerfile` /
+  # `*.Dockerfile` and skips files named `Containerfile` (the
+  # OCI-canonical name we use). `renovate.json` configures Renovate's
+  # `dockerfile` manager, which does read it — but the Renovate app is
+  # not installed on this repository, so that config has never run and
+  # no bot has ever opened a digest-bump PR. Base-image digests are
+  # therefore maintained by hand; see the `Updating:` note in
+  # `Containerfile`. Installing the Renovate app is what closes this,
+  # and it would also cover `rust-toolchain.toml` via Renovate's
+  # native `rust-toolchain` manager — the gap that let the pinned
+  # toolchain sit on a patch release with a known miscompilation.
