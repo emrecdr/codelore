@@ -10,6 +10,22 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# NEVER set `all-features = true` here.
+#
+# The `spa` feature makes `build.rs` fetch the vendored ECharts / d3 /
+# Alpine assets from a CDN, and docs.rs blocks network access for every
+# crate, permanently and without exception — it is the one sandbox limit
+# they will not raise on request. Enabling all features would therefore
+# turn a passing docs build into one that can never succeed.
+#
+# Today this works only by accident: `default = []`, so docs.rs builds
+# without `spa` and never reaches the fetch. `all-features = true` is the
+# reflexive first line anyone adds when a module is missing from the
+# rendered docs, which is exactly how this trap gets sprung. The block
+# exists to make the constraint visible at the place someone would edit.
+[package.metadata.docs.rs]
+all-features = false
+
 [lints]
 workspace = true
 

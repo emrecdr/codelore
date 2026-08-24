@@ -9,6 +9,13 @@ description = "CodeLore — Behavioral Code Analyzer CLI"
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Point crates.io at the user guide rather than docs.rs. This crate is
+# binary-only — no `[lib]`, no `src/lib.rs` — so rustdoc has no library
+# target to document and the docs.rs build reports failure by design.
+# Without this key crates.io falls back to that failed build, which means
+# the one crate users actually `cargo install` advertises a broken docs
+# link. This is not a docs.rs problem to fix; it is the wrong destination.
+documentation = "https://emrecdr.github.io/codelore/"
 
 [[bin]]
 name = "codelore"
