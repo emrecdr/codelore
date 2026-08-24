@@ -13,26 +13,38 @@ use crate::{CodeLoreError, Options, Result};
 /// analyses — is drawing conclusions from a minority of the codebase.
 const MIN_SCAN_COVERAGE: f64 = 0.9;
 
-const REASON_NOT_TRACKED: &str = "not tracked at HEAD";
 const REASON_BLOB_READ: &str = "blob read failed";
-const REASON_SIZE_CAP: &str = "exceeds the AST size cap";
 const REASON_PARSE_ERROR: &str = "parse error";
 
 /// What the HEAD scan did with one file.
 ///
-/// The distinction that matters is [`Ineligible`](ScanOutcome::Ineligible) vs
-/// [`Skipped`](ScanOutcome::Skipped). Both produce no `complexity_metrics` row,
-/// but only the second is a coverage loss: a `README.md` is *supposed* to score
+/// The distinction that matters is [`NotCounted`](ScanOutcome::NotCounted) vs
+/// [`Lost`](ScanOutcome::Lost). Both produce no `complexity_metrics` row, but
+/// only the second is a coverage loss: a `README.md` is *supposed* to score
 /// nothing, whereas a `.rs` file whose blob would not read is a file the scan
 /// owed the user and could not deliver. Collapsing the two — which a bare
 /// `Option` does — is what lets a scan that reached 200 of 5,200 files look
 /// exactly like a small repository.
+///
+/// The split follows the per-file log level the scan already used, which is the
+/// authority on which outcomes are routine: the two `debug!` cases (a path in
+/// `changes` that is no longer in the HEAD tree, and a file over the AST size
+/// cap) are expected and land in `NotCounted`; the two `warn!` cases (an
+/// object-database failure and a parse error) are the ones a healthy run does
+/// not produce. Counting the routine cases as losses put CodeLore's own
+/// repository at 86% and fired the aggregate warning on a scan that had not
+/// lost anything.
 enum ScanOutcome {
-    /// Not a Tier-1 source file. Expected; excluded from the denominator.
-    Ineligible,
-    /// Eligible, but the scan could not score it. Carries the reason so the
-    /// aggregate can say *why* coverage was lost rather than only that it was.
-    Skipped(&'static str),
+    /// No metrics row, and none was owed. Not a Tier-1 source file; or a path
+    /// carried by `changes` that HEAD no longer tracks (`live_paths` is derived
+    /// from history, so a file deleted before HEAD is legitimately absent); or a
+    /// file past the AST size cap, which is the generated/minified case the cap
+    /// exists to skip. Excluded from the denominator — including these would
+    /// mark a healthy repository degraded.
+    NotCounted,
+    /// Eligible, and the scan failed on it. Carries the reason so the aggregate
+    /// can say *why* coverage was lost rather than only that it was.
+    Lost(&'static str),
     /// Scored: `(path, deduped_entities)`.
     Scored(String, Vec<crate::complexity::ComplexityEntity>),
 }
@@ -53,15 +65,15 @@ impl ScanCoverage {
         for o in outcomes {
             match o {
                 ScanOutcome::Scored(..) => scored += 1,
-                ScanOutcome::Skipped(reason) => *counts.entry(reason).or_default() += 1,
-                ScanOutcome::Ineligible => {}
+                ScanOutcome::Lost(reason) => *counts.entry(reason).or_default() += 1,
+                ScanOutcome::NotCounted => {}
             }
         }
-        let skipped: usize = counts.values().sum();
+        let lost: usize = counts.values().sum();
         let mut by_reason: Vec<(&'static str, usize)> = counts.into_iter().collect();
         by_reason.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         Self {
-            eligible: scored + skipped,
+            eligible: scored + lost,
             scored,
             by_reason,
         }
@@ -136,7 +148,7 @@ impl FactsDb {
         // every file that worker reads) and uses it to read the blob,
         // dispatch the tree-sitter parser, and de-duplicate entities.
         // Per-file failures are logged via `tracing::warn!` but do NOT abort the
-        // parallel scan; they surface as [`ScanOutcome::Skipped`] and are tallied
+        // parallel scan; they surface as [`ScanOutcome::Lost`] and are tallied
         // below so a scan that loses most of its files is disclosed rather than
         // silently thin.
         let outcomes: Vec<ScanOutcome> = live_paths
@@ -145,7 +157,7 @@ impl FactsDb {
                 || repo.blob_reader_at("HEAD"),
                 |reader, path| {
                     let Some(lang) = Tier1Language::from_path(&path) else {
-                        return ScanOutcome::Ineligible;
+                        return ScanOutcome::NotCounted;
                     };
                     // Prefer the blob at HEAD (works on bare repos, ignores
                     // dirty-tree edits). Fall back to disk if the Repo
@@ -159,7 +171,7 @@ impl FactsDb {
                             // Path not tracked at HEAD; skip (matches the
                             // HEAD-time scan semantic of "current files only").
                             tracing::debug!("complexity: {path} not tracked at HEAD; skipping");
-                            return ScanOutcome::Skipped(REASON_NOT_TRACKED);
+                            return ScanOutcome::NotCounted;
                         }
                         Err(e) => {
                             // Object-database error (corrupted pack, missing
@@ -170,7 +182,7 @@ impl FactsDb {
                             // loses most of its files this way must not be
                             // indistinguishable from a small repository.
                             tracing::warn!("complexity: blob read failed for {path}: {e}");
-                            return ScanOutcome::Skipped(REASON_BLOB_READ);
+                            return ScanOutcome::Lost(REASON_BLOB_READ);
                         }
                     };
                     // Skip oversized files before handing to tree-sitter.
@@ -186,7 +198,7 @@ impl FactsDb {
                             size = source.len(),
                             cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                         );
-                        return ScanOutcome::Skipped(REASON_SIZE_CAP);
+                        return ScanOutcome::NotCounted;
                     }
                     // Path only used for error reporting in compute_for_file;
                     // the repo-relative form is more useful than the absolute
@@ -196,7 +208,7 @@ impl FactsDb {
                         Ok(v) => v,
                         Err(e) => {
                             tracing::warn!("complexity: parse error {path}: {e}");
-                            return ScanOutcome::Skipped(REASON_PARSE_ERROR);
+                            return ScanOutcome::Lost(REASON_PARSE_ERROR);
                         }
                     };
                     let deduped = dedup_entities(entities);
@@ -210,9 +222,10 @@ impl FactsDb {
         // logged per-file. A per-file `warn!` is invisible at the default
         // `EnvFilter` level on a big repo and says nothing about proportion;
         // the aggregate is what distinguishes "two generated files were
-        // skipped" from "this scan went blind". Ineligible (non-Tier-1) files
-        // are excluded from the denominator — counting them would mark every
-        // repository with a README as degraded.
+        // skipped" from "this scan went blind". Routine outcomes — non-Tier-1
+        // files, paths history carries that HEAD no longer tracks, and files
+        // past the AST size cap — are excluded from the denominator; counting
+        // them put this repository at 86% on a scan that lost nothing.
         let coverage = ScanCoverage::tally(&outcomes);
         coverage.warn_if_degraded();
 
@@ -222,7 +235,7 @@ impl FactsDb {
             .into_iter()
             .map(|o| match o {
                 ScanOutcome::Scored(path, entities) => Some((path, entities)),
-                ScanOutcome::Ineligible | ScanOutcome::Skipped(_) => None,
+                ScanOutcome::NotCounted | ScanOutcome::Lost(_) => None,
             })
             .collect();
 
@@ -271,13 +284,13 @@ mod tests {
 
     #[test]
     fn ineligible_files_are_not_a_coverage_loss() {
-        // A docs-only tree is honestly complete, not degraded. If `Ineligible`
+        // A docs-only tree is honestly complete, not degraded. If `NotCounted`
         // counted toward the denominator, every repository with a README would
         // report a thin scan — which is the false positive that makes a
         // coverage sentinel unusable.
         let outcomes = vec![
-            ScanOutcome::Ineligible,
-            ScanOutcome::Ineligible,
+            ScanOutcome::NotCounted,
+            ScanOutcome::NotCounted,
             scored("src/lib.rs"),
         ];
         let cov = ScanCoverage::tally(&outcomes);
@@ -287,8 +300,36 @@ mod tests {
     }
 
     #[test]
+    fn routine_skips_do_not_lower_coverage() {
+        // Regression: the first version of this counted every non-scored file
+        // as a loss, including paths that `changes` carries but HEAD no longer
+        // tracks. CodeLore's own repository reported 349/404 (86%) and tripped
+        // the warning on a scan that had failed at nothing. These are the exact
+        // numbers from that run.
+        let mut outcomes: Vec<ScanOutcome> =
+            (0..349).map(|i| scored(&format!("f{i}.rs"))).collect();
+        for _ in 0..55 {
+            outcomes.push(ScanOutcome::NotCounted);
+        }
+        let cov = ScanCoverage::tally(&outcomes);
+        assert_eq!(
+            cov.eligible, 349,
+            "paths history carries but HEAD does not track are not files the scan owed"
+        );
+        assert!(
+            (cov.ratio() - 1.0).abs() < f64::EPSILON,
+            "a scan that lost nothing must read as complete, got {}",
+            cov.ratio()
+        );
+        assert!(
+            cov.by_reason.is_empty(),
+            "nothing was lost, so nothing to attribute"
+        );
+    }
+
+    #[test]
     fn a_source_less_tree_is_vacuously_complete() {
-        let cov = ScanCoverage::tally(&[ScanOutcome::Ineligible]);
+        let cov = ScanCoverage::tally(&[ScanOutcome::NotCounted]);
         assert_eq!(cov.eligible, 0);
         assert!(
             (cov.ratio() - 1.0).abs() < f64::EPSILON,
@@ -302,7 +343,7 @@ mod tests {
         // must not be arithmetically indistinguishable from a small repository.
         let mut outcomes = vec![scored("a.rs")];
         for _ in 0..9 {
-            outcomes.push(ScanOutcome::Skipped(REASON_BLOB_READ));
+            outcomes.push(ScanOutcome::Lost(REASON_BLOB_READ));
         }
         let cov = ScanCoverage::tally(&outcomes);
         assert_eq!(cov.eligible, 10);
@@ -322,9 +363,9 @@ mod tests {
     #[test]
     fn reasons_are_ranked_most_frequent_first() {
         let outcomes = vec![
-            ScanOutcome::Skipped(REASON_PARSE_ERROR),
-            ScanOutcome::Skipped(REASON_BLOB_READ),
-            ScanOutcome::Skipped(REASON_BLOB_READ),
+            ScanOutcome::Lost(REASON_PARSE_ERROR),
+            ScanOutcome::Lost(REASON_BLOB_READ),
+            ScanOutcome::Lost(REASON_BLOB_READ),
         ];
         let cov = ScanCoverage::tally(&outcomes);
         assert_eq!(
