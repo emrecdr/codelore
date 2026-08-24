@@ -14,9 +14,15 @@ readme = "UPSTREAM.md"
 keywords.workspace = true
 categories.workspace = true
 
-# Don't apply workspace lints to vendored MPL files — keeps upstream-merge friction low.
-# See UPSTREAM.md for rationale.
-[lints]
+# Workspace *clippy* lints are deliberately not inherited here — rewriting
+# vendored MPL code to satisfy them would raise upstream-merge friction. See
+# UPSTREAM.md. `unsafe_code` is declared directly instead: it is a safety
+# invariant rather than a style rule, and Cargo's `[lints] workspace = true`
+# inheritance is all-or-nothing, so declining the clippy block would otherwise
+# decline this too and leave the crate CLAUDE.md describes as covered as the
+# one crate where the lint does not run.
+[lints.rust]
+unsafe_code = "forbid"
 
 [dependencies]
 # Tree-sitter core — pinned workspace-wide; the grammars below are pinned to
