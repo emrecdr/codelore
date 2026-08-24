@@ -1055,6 +1055,8 @@ The tile is absent when all three proxy inputs are unavailable (no merge commits
 
 CodeLore caches the DuckDB fact store at `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`. Second invocation on the same `(repo_path, HEAD sha, options, schema_version, codelore_version)` opens read-only in ≈ 10 ms instead of re-walking history.
 
+The `options` component is not just the flags you typed. Seven repository files that change what gets ingested are hashed by *content* into the key, so editing any of them invalidates it: `.mailmap`, `.codelorebots`, `.codelore-teams`, `.codeloreignore`, `.gitignore`, `.git/info/exclude`, and whatever `--group-file` / `--calibration` / `--defect-calibration` point at. The last two ignore files matter most for correctness: they feed `paths_filter`, which decides which rows reach `changes` at all — and `.git/info/exclude` is untracked, so nothing else about a run would change when you edit it.
+
 ```bash
 # Skip the cache (always fresh in-memory)
 codelore analyze --analysis hotspots --no-cache
@@ -1072,18 +1074,28 @@ Eviction: 5 entries per repo + 2 GB global cap, oldest-ingest-first. Pruning run
 
 ### Dirty-worktree cache hit warning
 
-The cache key includes `head_sha` but NOT the working tree. That's correct for analyses that read only committed history (`revisions`, `coupling`, `ownership`, `churn`, `messages`, ...), but `hotspots`-style HEAD-time metrics computed by `ingest_complexity_at_head` and `populate_clones_at_head` read files from disk at ingest time. If you change files without committing and then re-run codelore, the cache hits on `head_sha` — and you get the previous run's metrics computed from the previous worktree state, not your current edits.
+The cache key includes `head_sha` but NOT the working tree, and that is now correct for the whole fact store rather than only for the history-reading analyses. Every HEAD-time pass — `ingest_complexity_at_head`, `populate_clones_at_head`, the import scan — sources blobs through `Repo::blob_reader_at("HEAD")` rather than from disk, so the ingested facts are a function of HEAD and the options. Uncommitted edits do not make them stale; they make them *about HEAD*, which is what a `head_sha`-keyed cache should hold.
 
-To surface this, codelore emits a `tracing::warn!` on a cache hit that lands on a working tree with uncommitted changes to a tracked file (untracked files don't count — they can't affect a HEAD-time scan). The read-time warning fires only when stderr is an interactive terminal: on a non-interactive or redirected stderr (CI, the agent-loop, a pipe) the dirty-tree status walk is skipped entirely — nobody would read the hint, and the scan isn't free. Separately, on a cache *miss* against a dirty tree the persistent cache write is skipped **unconditionally** (regardless of stderr), so dirty HEAD-time metrics never get persisted under the clean `head_sha` key:
+Two consequences follow, and they are the opposite of what this section used to describe.
+
+**A dirty tree no longer skips the cache write.** It used to, on the grounds that disk-read HEAD metrics would poison the clean-`head_sha` key. With blob reads that hazard is gone, and keeping the skip cost a full re-ingest on *every* invocation for anyone with uncommitted work — the normal state of an edit-and-gate loop. The one worktree dependency that survived the blob migration was the ignore-file set: `paths_filter` reads `.gitignore` and `.git/info/exclude`, and those decide which rows reach `changes`. Both are content-digested into the cache key, which is what makes dropping the skip safe. That ordering mattered: `.git/info/exclude` is untracked, so editing it moved neither `head_sha` nor the dirty flag — before it was hashed, a clean-tree re-run served the pre-edit file set with no signal at all.
+
+**The remaining caveat is a mixed snapshot, not staleness.** Analyses that walk the working tree at *analysis* time — clone detection in its default working-tree mode, and the agent-loop change-set projection — describe your uncommitted edits, while everything derived from the fact store describes HEAD. The warning says so:
 
 ```
-WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
-     (hotspots' complexity, clones) may be stale relative to disk.
-     Recompute against the working tree with `--cache-dir <scratch>` (or
-     `--no-cache` on `analyze`, the only surface carrying that flag).
+WARN cache hit on a working tree with uncommitted changes. The fact store
+     describes HEAD, which is correct and no longer stale — every HEAD-time
+     pass reads blobs from HEAD rather than from disk. The caveat is a mixed
+     snapshot: analyses that walk the working tree at analysis time (clone
+     detection in its default working-tree mode, and the agent-loop
+     change-set projection) will describe your uncommitted edits, while
+     everything derived from the fact store describes HEAD. Commit, or pass
+     `--no-cache` on `analyze`, to have both halves agree.
 ```
 
-Detection is cheap (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker). Pass `--cache-dir <scratch>` (or `--no-cache` on `analyze`) if the dirty state matters for your analysis — `--no-cache` exists only on `analyze`, so `check`/`gate`/`explain` use the cache-dir form. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
+It fires only when stderr is an interactive terminal: on a redirected stderr (CI, the agent loop, a pipe) the dirty-tree status walk is skipped entirely — nobody would read the hint, and the walk isn't free. Detection is cheap either way (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker), and untracked files don't count toward it.
+
+Auto-invalidation via worktree-content hashing was considered and rejected, and that still holds: hashing every tracked file on every invocation costs 100ms–1s on large trees. Hashing the three ignore files instead is the targeted version of the same idea — they are the only worktree inputs the ingest actually reads.
 
 ### Memory ceiling and disk spill
 
