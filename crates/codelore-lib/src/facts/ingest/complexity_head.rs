@@ -261,7 +261,9 @@ impl FactsDb {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_SCAN_COVERAGE, REASON_BLOB_READ, REASON_PARSE_ERROR, ScanCoverage, ScanOutcome};
+    use super::{
+        MIN_SCAN_COVERAGE, REASON_BLOB_READ, REASON_PARSE_ERROR, ScanCoverage, ScanOutcome,
+    };
 
     fn scored(path: &str) -> ScanOutcome {
         ScanOutcome::Scored(path.to_string(), Vec::new())
