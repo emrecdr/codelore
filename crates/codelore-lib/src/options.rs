@@ -387,6 +387,28 @@ impl Options {
         // `.codeloreignore` is parsed by clones extraction to filter files;
         // edits change which files get fingerprinted and were invisible too.
         let codeloreignore_digest = digest_of(&self.repo_path.join(".codeloreignore"));
+        // `.gitignore` and `.git/info/exclude` are the other two inputs to
+        // `paths_filter::PathsFilter`, which the ingest consumer applies to
+        // every change row — so they decide what lands in `changes`,
+        // `complexity_metrics`, `clones` and `imports`. They belong in the key
+        // for the same reason `.codeloreignore` does.
+        //
+        // `.git/info/exclude` is the sharper of the two: it is UNTRACKED, so
+        // editing it does not move `head_sha` and does not make the working
+        // tree dirty. Before it was hashed here, adding a pattern to it and
+        // re-running on a clean tree produced a cache hit that silently served
+        // the pre-edit file set. `.gitignore` had the same gap but was masked —
+        // it is tracked, so editing it dirtied the tree and the dirty-tree
+        // cache-write skip happened to cover it.
+        //
+        // Scope caveat, inherited deliberately from the sibling digests: only
+        // the repository-root files are hashed. `PathsFilter` adds exactly
+        // these paths (see `paths_filter::PathsFilter::from_opts`) and does not
+        // walk parent directories, so root-only is complete for what the filter
+        // actually reads today; it would become partial if parent discovery
+        // were ever added.
+        let gitignore_digest = digest_of(&self.repo_path.join(".gitignore"));
+        let info_exclude_digest = digest_of(&self.repo_path.join(".git/info/exclude"));
 
         if let serde_json::Value::Object(map) = &mut canon {
             // The path strings themselves don't go into the canonical
@@ -409,6 +431,11 @@ impl Options {
             map.insert(
                 "codeloreignore_digest".to_string(),
                 json!(codeloreignore_digest),
+            );
+            map.insert("gitignore_digest".to_string(), json!(gitignore_digest));
+            map.insert(
+                "info_exclude_digest".to_string(),
+                json!(info_exclude_digest),
             );
         }
         canon
@@ -796,6 +823,52 @@ mod tests {
         assert!(s.contains("team_map_digest"), "digest field missing: {s}");
     }
 
+    #[test]
+    fn canonical_json_invalidates_when_gitignore_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitignore = dir.path().join(".gitignore");
+        std::fs::write(&gitignore, "target/\n").unwrap();
+        let opts = Options {
+            repo_path: dir.path().to_path_buf(),
+            ..Options::default()
+        };
+        let v1 = opts.canonical_json();
+        std::fs::write(&gitignore, "target/\nvendor/\n").unwrap();
+        let v2 = opts.canonical_json();
+        assert_ne!(
+            v1, v2,
+            ".gitignore decides which files reach `changes`, so an edit must \
+             invalidate the cache key"
+        );
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_info_exclude_changes() {
+        // The sharpest of the ignore-file digests. `.git/info/exclude` is
+        // UNTRACKED: editing it moves neither `head_sha` nor the worktree's
+        // dirty flag, so before it was hashed here nothing about the run
+        // changed except which files were ingested — a cache hit silently
+        // served the pre-edit file set.
+        let dir = tempfile::tempdir().unwrap();
+        let info = dir.path().join(".git").join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        let exclude = info.join("exclude");
+        std::fs::write(&exclude, "scratch/\n").unwrap();
+        let opts = Options {
+            repo_path: dir.path().to_path_buf(),
+            ..Options::default()
+        };
+        let v1 = opts.canonical_json();
+        std::fs::write(&exclude, "scratch/\ngenerated/\n").unwrap();
+        let v2 = opts.canonical_json();
+        assert_ne!(
+            v1, v2,
+            "`.git/info/exclude` edits are invisible to head_sha and to the \
+             dirty-tree check, so the cache key is the only thing that can \
+             notice them"
+        );
+    }
+
     /// Pins the cache-key field classification. The exhaustive-destructure
     /// guard in `canonical_json` makes adding an `Options` field a COMPILE
     /// error until it is classified; this test pins the RESULT so an
@@ -841,6 +914,8 @@ mod tests {
             "codelorebots_digest",
             "mailmap_digest",
             "codeloreignore_digest",
+            "gitignore_digest",
+            "info_exclude_digest",
         ] {
             assert!(obj.contains_key(digest), "{digest} must key the cache");
         }
@@ -862,7 +937,7 @@ mod tests {
 
         let digest = hex::encode(Sha256::digest(canon.to_string().as_bytes()));
         assert_eq!(
-            digest, "1d4205a4bf72624e0f7b804e82447d5b0dae0009f22624c4127869c3d45c5dfb",
+            digest, "3574fe8f874867508bc70802292b5a2f0aca9f922ec8b2150c1866db442537d0",
             "cache-key classification changed:\n{canon}"
         );
     }
