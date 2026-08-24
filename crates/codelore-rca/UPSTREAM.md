@@ -39,6 +39,19 @@ The following were REMOVED from the vendored tree:
   The `pub mod abc`, `pub mod wmc`, `pub mod npa`, `pub mod npm` declarations in
   `src/metrics/mod.rs` were removed.
 
+The crate rustdoc in `src/lib.rs` was rewritten. Upstream's opening block
+describes `rust-code-analysis`, directs readers to Mozilla's repository and
+issue tracker, and lists eleven supported languages. Four of those — C#, CSS,
+Go and HTML — were never vendored here; two more, C++ and the Firefox-internal
+JavaScript dialect, left with the excisions recorded below. The inherited block
+therefore advertised six capabilities this fork does not have, on its own
+docs.rs page, and sent its bug reports to a project that cannot act on them.
+The block now names the five languages the fork parses, points at this
+repository, and states which upstream entries do not apply and why. This is a
+deliberate divergence from upstream in a file that is otherwise inherited: the
+alternative is a published package page that is wrong about what the package
+does.
+
 ## Mozjs and dropped-metrics excision (2026-06-06)
 
 **Option B chosen: fully excise Mozjs and dropped metrics.**

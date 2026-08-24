@@ -588,7 +588,12 @@ turned out to be mis-stated by the reports that logged them.
 
 ### F271 (Fixed — v0.27.3, partial) — MCP tools hand-roll JSON into a text block instead of declaring structured output
 
-*   **Location**: `codelore-cli/src/mcp.rs` — all eleven `#[tool]` bodies return `Result<String, ErrorData>`
+*   **Location**: `codelore-cli/src/mcp.rs` — ten of the eleven `#[tool]` bodies
+    return `Result<String, ErrorData>`. `check_gates` returns
+    `Result<Json<GateSummary>, ErrorData>`, which is what makes it the one tool
+    with an `outputSchema`: `rmcp`'s `#[tool]` macro derives the schema from a
+    `Json<T>` return type, so nothing in this repository names `output_schema`
+    and a text search for it reports zero. Read the return types instead.
 *   **Severity**: LOW-MED · **Category**: protocol fidelity (optional)
 *   **Description**: Each tool serialises its rows itself and returns the JSON
     as text, so clients get no `outputSchema` and no structured-content block.
@@ -1964,42 +1969,70 @@ the one file no convention guard reads.
 Recorded rather than fixed inline, per the standing rule that latent findings
 spotted during unrelated work land as findings.
 
-### F309 (Active) — the vendored fork's public surface still describes languages it no longer parses
+### F309 (Active, rustdoc half fixed) — the vendored fork's public surface still describes languages it no longer parses
 
-Found in the same validation pass as F308, and deliberately not fixed: both sites
-are in `codelore-rca`, which is hands-off as a vendored MPL fork, and one of them
-would be a breaking API change.
+Found in the same validation pass as F308. Originally deferred whole; cycle 20
+established that its two halves do not share a cost, and the cheap half has
+since landed.
 
-*   **`src/spaces.rs`** — `SpaceKind::Namespace` (documented as "A `C/C++`
-    namespace") and `SpaceKind::Struct` lost their only producers when the C++
-    `Getter` impl was removed with the grammar excision. No `Getter` impl in the
-    tree emits either variant now; the only surviving references are their own
-    arms in the `Display` impl. They are unreachable as produced values, and the
-    first names a language the crate cannot parse.
-*   **`src/lib.rs`** — the crate rustdoc's "Supported Languages" list names C++,
-    C#, CSS, Go, HTML, and a Firefox-internal JavaScript dialect. This is
-    published on docs.rs. Note the list was **already** wrong before the excision:
-    most of those were never vendored, so this is upstream residue rather than a
-    regression the excision introduced — C++ is one more stale entry on a page
-    that was misleading beforehand.
+*   **`src/lib.rs` — FIXED.** The crate rustdoc's "Supported Languages" list
+    named eleven languages against five parsed. The split is four never-present
+    (C#, CSS, Go, HTML — `UPSTREAM.md` has no hit for any of them) plus two
+    removed (C++, and the Firefox-internal JavaScript dialect), so this was
+    upstream residue compounded by this project's own excisions rather than
+    either alone. It was live on docs.rs, and it directed bug reports to a
+    project that cannot act on them. The block now names the five parsed
+    languages, states which upstream entries do not apply and why, and points at
+    this repository; `UPSTREAM.md` records the divergence.
+*   **`src/spaces.rs` — still open.** `SpaceKind::Namespace` (documented as "A
+    `C/C++` namespace") and `SpaceKind::Struct` are unconstructible. Their sole
+    producer was `impl Getter for CppCode`, removed with the grammar excision —
+    `StructSpecifier => SpaceKind::Struct` and `NamespaceDefinition =>
+    SpaceKind::Namespace`. Confirmed by an adversarial pass that closed every
+    other construction route: `SpaceKind` derives `Serialize` but **not**
+    `Deserialize`, so no runtime value can be built from data; it has no
+    `FromPrimitive`, no `From`/`TryFrom`/`FromStr`; `Default` resolves to
+    `Unknown`; no macro expansion emits it; and the union over all six `Getter`
+    impls is `{Unknown, Function, Class, Unit, Interface, Trait, Impl}`.
 
-*   **Impact**: documentation and dead public API. Nothing miscomputes — an
-    unreachable enum variant costs a `Display` arm, and the rustdoc list misleads
-    a reader evaluating the crate standalone.
-*   **Why deferred rather than fixed**: removing enum variants is a breaking
-    change to `codelore-rca`'s published API, and that alone carries the first
-    half. The rustdoc half was originally deferred as "diverging from an upstream
-    file for a cosmetic gain", and that rationale does not survive scrutiny — the
-    same commit added a dozen lines of comment to `codelore-rca/Cargo.toml`, an
-    upstream-tracked file in the same crate, and rewrote `UPSTREAM.md`, which
-    upstream does not have at all. The divergence budget was spent in the very
-    commit that invoked it as a reason to wait. The honest reason is narrower:
-    the rustdoc list was wrong *before* the excision — most of the languages it
-    names were never vendored — so it is upstream residue rather than a
-    regression this thread introduced, and it should land together with the
-    extension-set pairing below rather than as a drive-by.
-*   **If taken**: pair it with the language list in the crate rustdoc *and* the
-    supported-extension set, so the two cannot disagree again.
+    Four dead match arms remain, not two — the earlier phrasing named only the
+    `Display` impl:
+
+    | file | variant |
+    |---|---|
+    | `codelore-rca/src/spaces.rs:54` | `Struct` |
+    | `codelore-rca/src/spaces.rs:58` | `Namespace` |
+    | `codelore-lib/src/complexity/mod.rs:56` | `Struct` |
+    | `codelore-lib/src/complexity/mod.rs:60` | `Namespace` |
+
+    The two in the product are the ones worth knowing about: `space_kind_str`
+    carries arms for values its own dependency can no longer hand it.
+
+*   **Impact**: dead public API. Nothing miscomputes — an unreachable variant
+    costs two match arms and a line of `Display`.
+*   **Why the removal is still deferred**: it is semver-breaking on a published
+    crate, and it deserves a build rather than a reachability argument. That is
+    the standard this repo adopted for the `dirs` and `num-traits` decisions,
+    and reachability arguments are exactly what macro expansion has defeated
+    here before.
+*   **What the deferral is no longer waiting on.** Two costs once assumed large
+    have been measured, and both are smaller than the original wording implied:
+    - **Blast radius is one crate.** `codelore-rca` has exactly one reverse
+      dependency on crates.io, and it is `codelore-lib` — this same workspace.
+      No external consumer is protected by waiting. The caveat is that
+      `SpaceKind` is re-exported from the crate root, so an unknown direct user
+      could construct either variant today.
+    - **Deprecation is not a middle path here.** `#[deprecated]` is a minor
+      change under the Cargo semver rules and would normally be the graceful
+      option. But the `deprecated` lint fires on *pattern* matches,
+      `codelore-lib` carries two such arms, and CI runs `-D warnings`. Marking
+      the variants would break the build, and the only way through is
+      `#[allow(deprecated)]`, which is masking rather than fixing. The choice is
+      removal or documentation, with nothing in between.
+*   **If taken**: remove both variants and all four arms in one change, cut it
+    as a minor bump since the crate is pre-1.0, and pair it with the
+    supported-extension set so the language list and the extension set cannot
+    disagree again.
 
 ### F310 (Active) — the supported-language set and the grammar pins are hand-copied across many sites, and the one guard-shaped mechanism this repo favours is not applied to either
 
@@ -2135,4 +2168,41 @@ it dropped `dirs`.
     Applying a weaker one, in a review of the range that set it, would be the
     wrong trade. Pre-existing; not introduced by the work that found it.
 
-The next sweep re-opens at **F314**.
+### F314 (Active) — `unsafe_code = "forbid"` does not cover the crate the docs say it covers
+
+`CLAUDE.md` states the invariant as **`workspace.lints.rust: unsafe_code =
+"forbid"`** — "zero `unsafe` blocks; CI rejects additions." The first clause is
+true. The second is false for one crate in three.
+
+`codelore-lib` and `codelore-cli` opt in with `[lints] workspace = true`.
+`codelore-rca` carries a deliberately empty `[lints]` table, commented
+"Don't apply workspace lints to vendored MPL files — keeps upstream-merge
+friction low." Cargo's `[lints]` inheritance is all-or-nothing per crate, so
+declining the workspace clippy block also declines `unsafe_code = "forbid"`.
+The crate that wraps the tree-sitter grammars is the one where the lint does
+not run.
+
+*   **Impact**: none today. A search across `crates/` finds zero executable
+    `unsafe`; the three textual hits are doc comments explaining why
+    `unsafe { env::set_var }` was avoided. The defect is that a guarantee is
+    asserted more broadly than it holds, so `unsafe` added to `codelore-rca`
+    would pass CI in silence.
+*   **Class**: guard narrower than its claimed class — the same shape as [F308],
+    the bot-filter guard and the SPA escaping guard. The rule reports clean
+    because its scope is smaller than the claim made for it, and the gap is
+    invisible from inside the rule.
+*   **Why the policy is not the problem**: declining workspace *clippy* lints on
+    vendored MPL code is correct and should stay. `unsafe_code` is a different
+    kind of rule and was dropped along with the style lints only because
+    inheritance is per-crate and all-or-nothing.
+*   **Fix**: give the crate the one lint without the rest —
+    `[lints.rust]` with `unsafe_code = "forbid"` — which preserves the
+    merge-friction policy exactly. Expected to be inert, but it must be
+    confirmed by building: `forbid` cannot be locally overridden, so any
+    `unsafe` inherited from upstream in a future sync becomes a hard error
+    rather than a warning, which is the intent but is worth knowing before it
+    happens mid-merge. The alternative is to narrow the claim in `CLAUDE.md` to
+    the two crates that honour it. Doing neither leaves a documented invariant
+    that a third of the workspace does not.
+
+The next sweep re-opens at **F315**.

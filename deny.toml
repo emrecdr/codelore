@@ -3,7 +3,18 @@ all-features = true
 
 [advisories]
 yanked = "deny"
-ignore = []
+ignore = [
+    # `bisync` reaches us as gix -> gix-protocol -> bisync. Every published
+    # version of it is yanked, and gix-protocol still requires `^0.3.0` at its
+    # newest release, so there is no version of anything we control that
+    # resolves this — `cargo update -p bisync` has nowhere to go.
+    #
+    # Scoped to this one crate at this one version deliberately, rather than
+    # relaxing `yanked` to "warn": a yank in any other dependency must still
+    # fail the build. The entry stops matching once gix drops the dependency,
+    # so delete it then rather than carrying it forward.
+    { crate = "bisync@0.3.0", reason = "fully yanked upstream; no semver-compatible replacement published" },
+]
 
 [licenses]
 allow = [
