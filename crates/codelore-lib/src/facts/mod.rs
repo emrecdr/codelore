@@ -366,11 +366,16 @@ impl FactsDb {
             // trait's best-effort-hint contract for `is_worktree_dirty`.
             if std::io::IsTerminal::is_terminal(&std::io::stderr()) && repo.is_worktree_dirty() {
                 tracing::warn!(
-                    "cache hit on a working tree with uncommitted changes; \
-                     HEAD-time metrics (hotspots' complexity, clones) may be \
-                     stale relative to disk. Recompute against the working \
-                     tree with `--cache-dir <scratch>` (or `--no-cache` on \
-                     `analyze`, which is the only surface carrying that flag)."
+                    "cache hit on a working tree with uncommitted changes. The \
+                     fact store describes HEAD, which is correct and no longer \
+                     stale — every HEAD-time pass reads blobs from HEAD rather \
+                     than from disk. The caveat is a mixed snapshot: analyses \
+                     that walk the working tree at analysis time (clone \
+                     detection in its default working-tree mode, and the \
+                     agent-loop change-set projection) will describe your \
+                     uncommitted edits, while everything derived from the fact \
+                     store describes HEAD. Commit, or pass `--no-cache` on \
+                     `analyze`, to have both halves agree."
                 );
             }
             return Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir));
@@ -378,31 +383,26 @@ impl FactsDb {
 
         tracing::info!("cache miss: ingesting to {}", cache_p.display());
 
-        // Skip cache WRITE when the working tree is dirty.
-        // HEAD-time metrics (complexity, clones) are computed from disk at
-        // ingest time; persisting them under the clean head_sha cache key
-        // would poison the cache — a later run on a CLEAN tree would
-        // cache-hit and silently serve the dirty metrics with no warning
-        // (the read-time warn fires only when the CURRENT tree is dirty).
+        // NOTE: a dirty working tree no longer skips the cache write.
         //
-        // Fall back to an in-memory FactsDb so the analysis still runs;
-        // the user just doesn't get the persistent-cache speedup until
-        // they commit (or run with `--no-cache` and accept the slow path
-        // explicitly).
-        if repo.is_worktree_dirty() {
-            tracing::warn!(
-                "working tree has uncommitted changes; skipping persistent \
-                 cache write to avoid caching dirty HEAD-time metrics \
-                 (complexity, clones) under the clean head_sha key. \
-                 Commit the changes to silence this, or pass `--no-cache` on \
-                 `analyze` (the only surface carrying that flag)."
-            );
-            let mem = Self::new_in_memory_with_temp_dir(Some(&spill_dir))?;
-            mem.create_schema()?;
-            mem.ingest(repo, opts)?;
-            return Ok(mem);
-        }
-
+        // The skip existed because HEAD-time metrics (complexity, clones) were
+        // read from disk at ingest time, so caching them under the clean
+        // `head_sha` key would have served a later clean run the dirty values.
+        // That is no longer how ingest works: every HEAD-time pass now sources
+        // blobs through `Repo::blob_reader_at("HEAD")`, so the fact store is a
+        // function of HEAD and the options — not of the working tree. Keeping
+        // the skip cost a full re-ingest on every invocation for anyone with
+        // uncommitted work, which is the normal state of the edit/gate loop the
+        // agent surfaces are built for.
+        //
+        // The one worktree dependency that survived the blob migration was the
+        // ignore-file set: `paths_filter` reads `.gitignore` and
+        // `.git/info/exclude`, and those decide which rows reach `changes`. They
+        // are hashed into the cache key by `Options::canonical_json` as of the
+        // same change that removed this skip — that ordering is load-bearing.
+        // Removing the skip first would have unmasked a stale-cache bug rather
+        // than only exposing the one `.git/info/exclude` already had, since that
+        // file is untracked and never dirtied the tree in the first place.
         // Create the parent directory if it doesn't exist yet.
         if let Some(parent) = cache_p.parent() {
             std::fs::create_dir_all(parent)
