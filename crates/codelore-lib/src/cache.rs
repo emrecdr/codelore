@@ -25,18 +25,21 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v18`) orphans any cache file that persisted an
-/// empty fact store. A shallow / merge-tip checkout ingests zero commits under
-/// the default merge filter, and the HEAD-scoped cache key does not fold shallow
-/// state — so a run that cached that empty store poisoned the key a later
-/// repaired (unshallowed) clone recomputes, turning the ingest-witness failure
-/// into a sticky one no re-fetch could clear. Bumping the epoch discards those
-/// poisoned entries so the repaired clone rebuilds from full history.
+/// The current epoch (`schema_v19`) orphans every entry written while the
+/// options hash covered analysis-only thresholds. Those entries are not wrong —
+/// the facts they hold are correct — but they were keyed under a classification
+/// this build no longer uses, so they would linger unreachable and consume
+/// per-repo slots that the new key can never hit. Bumping discards them in one
+/// pass instead of leaving five dead files per repository.
+///
+/// The prior epoch (`schema_v18`) orphaned any cache file that persisted an
+/// empty fact store, after a shallow / merge-tip checkout ingested zero commits
+/// and poisoned a key that a later repaired clone would recompute.
 ///
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v18";
+pub const CACHE_EPOCH: &str = "schema_v19";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
@@ -147,17 +150,27 @@ fn fallback_tmp_root() -> PathBuf {
     PathBuf::from(format!("/tmp/codelore-fallback-{id}"))
 }
 
-/// Produce a stable canonical string from the full Options struct to use as
-/// the per-options cache fingerprint. Defers to `Options::canonical_json()`
-/// which serializes every field (including clone-detection options, exclude
-/// patterns, etc.) and applies normalizations (sorted `exclude_patterns`,
-/// dropped cosmetic knobs like `rows_limit`).
+/// Produce a stable canonical string from the ingest-affecting subset of
+/// `Options`, to use as the per-options cache fingerprint. Defers to
+/// [`Options::ingest_cache_json`], which takes the full canonical form and
+/// subtracts the knobs the ingest never reads.
 ///
-/// Replaces the pre-2026-06-08 hand-curated 11-field allowlist that silently
-/// omitted clone-detection options and produced cache collisions when those
-/// options changed. The new behavior auto-propagates as Options grows.
+/// Two earlier shapes were both wrong in opposite directions. A hand-curated
+/// 11-field allowlist silently omitted the clone-detection options and served
+/// collisions when they changed; replacing it with the *full* canonical form
+/// fixed that but went too far, folding in ~21 analysis-only thresholds so
+/// that `--min-revs 5` → `--min-revs 10` re-walked the entire history and
+/// burned one of the five per-repo cache slots. Threshold sweeping is the
+/// natural way to use this tool and it was the most expensive thing a user
+/// could do.
+///
+/// The current shape auto-propagates as `Options` grows, like the full form
+/// did: a new field trips the exhaustive-destructure guard in
+/// `canonical_json`, and a completeness test then forces it to be classified
+/// as ingest-affecting or analysis-only. Neither list is hand-maintained
+/// against the struct.
 fn opts_hash(opts: &Options) -> String {
-    opts.canonical_json().to_string()
+    opts.ingest_cache_json().to_string()
 }
 
 /// `fs::canonicalize` wrapper that logs a `tracing::debug!` when the
@@ -609,7 +622,13 @@ mod tests {
     }
 
     #[test]
-    fn cache_key_changes_when_min_revs_changes() {
+    fn cache_key_unchanged_when_min_revs_changes() {
+        // Polarity flipped deliberately. `min_revs` is read only by analyses,
+        // never by the ingest, so two runs differing in it hold IDENTICAL facts
+        // — proved by `analysis_only_options_do_not_change_the_ingested_facts`.
+        // Keying on it meant sweeping a threshold re-walked all of history and
+        // burned one of the five per-repo slots, which made the most natural
+        // way to use the tool the most expensive.
         let opts_a = Options {
             min_revs: 5,
             ..base_opts()
@@ -620,11 +639,11 @@ mod tests {
         };
         let k1 = cache_key(Path::new("/tmp/test-repo"), "abc123", &opts_a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "abc123", &opts_b);
-        assert_ne!(k1, k2, "key must differ when min_revs changes");
+        assert_eq!(k1, k2, "min_revs is analysis-only and must reuse the entry");
     }
 
     #[test]
-    fn cache_key_changes_when_fisher_significance_changes() {
+    fn cache_key_unchanged_when_fisher_significance_changes() {
         let opts_a = Options {
             fisher_significance: 0.05,
             ..base_opts()
@@ -635,14 +654,17 @@ mod tests {
         };
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
-        assert_ne!(k1, k2, "key must differ when fisher_significance changes");
+        assert_eq!(
+            k1, k2,
+            "fisher_significance is applied at analysis time and must reuse the entry"
+        );
     }
 
     #[test]
     fn cache_key_unchanged_when_target_changes() {
         // `target` is a per-invocation selector (function-xray path) that
         // ingest never reads. Two runs differing only in `--target` must hit
-        // the same cache entry; different `window_days` must still differ.
+        // the same cache entry.
         let opts_no_target = Options {
             window_days: 30,
             ..base_opts()
@@ -661,9 +683,23 @@ mod tests {
         let k_with = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_with_target);
         let k_diff = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_different_window);
         assert_eq!(k_no, k_with, "target must not affect the cache key");
-        assert_ne!(
+        // `window_days` is analysis-only too, so it no longer differentiates.
+        // The ingest-affecting control for this test is `include_ignored`,
+        // which decides what `paths_filter` lets through into `changes`.
+        assert_eq!(
             k_with, k_diff,
-            "window_days still differentiates the key when target differs"
+            "window_days is analysis-only and must not split the key"
+        );
+        let opts_ingest_affecting = Options {
+            target: Some("src/lib.rs".into()),
+            window_days: 30,
+            include_ignored: !base_opts().include_ignored,
+            ..base_opts()
+        };
+        let k_ingest = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_ingest_affecting);
+        assert_ne!(
+            k_with, k_ingest,
+            "an ingest-affecting option must still split the key"
         );
     }
 
@@ -728,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_key_changes_when_clone_similarity_floor_changes() {
+    fn cache_key_unchanged_when_clone_similarity_floor_changes() {
         let opts_a = Options {
             clone_similarity_floor: 0.70,
             ..base_opts()
@@ -739,7 +775,12 @@ mod tests {
         };
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
-        assert_ne!(k1, k2, "clone_similarity_floor must affect the cache key");
+        // Distinct from `min_clone_node_count`, which IS ingest-affecting (it
+        // bounds what gets fingerprinted at HEAD) and still splits the key.
+        assert_eq!(
+            k1, k2,
+            "clone_similarity_floor filters already-fingerprinted clones at analysis time"
+        );
     }
 
     #[test]
