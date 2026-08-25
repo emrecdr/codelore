@@ -124,7 +124,7 @@ Spec §3.1 + Kamei et al. 2013 (TSE). Implemented as five SQL UPDATE passes afte
 - **MSRV**: Rust 1.96+
 - **`unsafe_code = "forbid"`** in `clippy.toml` (forbidden across the whole workspace)
 - **`RUSTFLAGS = "-Dwarnings"`** in CI (all warnings are errors)
-- **CI matrix**: Linux + macOS + Windows on `dtolnay/rust-toolchain@1.96.0` (pinned to match `rust-toolchain.toml`)
+- **CI matrix**: Linux + macOS + Windows, every job pinned to the exact patch release named by `rust-toolchain.toml`'s `channel` (the version is deliberately not repeated here — it is a patch-granularity pin that moves on point releases, and duplicating it is how this line went stale)
 - **Gates**: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspace --all-features`, `cargo deny check`
 - **Release pipeline** (`.github/workflows/release.yml`): hand-rolled multi-target `cargo build --release` matrix (5 targets — macOS arm64+x86_64, Linux arm64+x86_64-gnu, Windows x86_64-msvc), SLSA Build L3 provenance via `actions/attest` running in a separate trusted-signer job (`.github/workflows/attest-artifact.yml`) so the signing token is unreachable from the jobs that execute `build.rs`, distroless OCI container at `ghcr.io/emrecdr/codelore` (separate `container.yml`), Homebrew formula regenerated and pushed to `emrecdr/homebrew-codelore` via SSH deploy key, `cargo binstall` falls back to the standard GitHub-Release scan — all fire on `v*` tag push
 
