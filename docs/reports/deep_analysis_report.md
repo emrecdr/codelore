@@ -2280,4 +2280,55 @@ one that found nothing.
     today; the test should plant a valid-JSON/wrong-schema document and assert the
     prior rows survive.
 
-The next sweep re-opens at **F319**.
+### F319 (Active) — 21 analysis-only options key the ingest cache, forcing a full re-ingest to change a threshold
+
+`cache.rs` folds `Options::canonical_json()` into the cache key, and
+`canonical_json` deliberately admits every field not on its drop-list. Most of
+those fields never reach the ingest. Changing `--min-revs 5` to `--min-revs 10`
+re-walks the entire history and burns one of the five per-repo cache slots —
+and threshold sweeping is the natural way to use this tool.
+
+**The classification, verified from the direction that matters.** A negative
+grep ("none of these appear in the ingest path") is weak evidence and was in
+fact unreliable here — a shell-variable expansion made it return clean for
+everything. The positive enumeration is the one to trust: every `opts.<field>`
+token appearing anywhere under `repo/`, `facts/`, `kamei/`, `identity/`,
+`imports/`, `clones/` and `paths_filter.rs`.
+
+That yields exactly **13** tokens, of which **12 are code**:
+
+    after, before, exclude_patterns, group_file, head_only_ingest,
+    include_ignored, include_merges, min_clone_node_count, repo_path,
+    strict_grouping, track_rewrites, use_canonical_lineage
+
+The thirteenth, `time_bucket`, appears only inside a doc comment at
+`facts/ingest/grouping.rs:15`; the table it names, `changes_bucketed`, is a
+session TEMP table built at analysis time. It is analysis-only. Note that an
+`-o`-style token extraction cannot distinguish code from comments, so this one
+has to be read rather than counted — it is the single discrepancy between the
+two methods and the reason the enumeration must be inspected, not just sized.
+
+Everything else — `min_revs`, `min_shared_revs`, `min_coupling_pct`,
+`max_coupling_pct`, `max_changeset_size`, `fisher_significance`,
+`message_regex`, `age_time_now`, `min_soc`, `code_maat_compat`,
+`fdr_correction`, `window_days`, `knowledge_model`, `rework_window_days`,
+`release_tag_glob`, `departed_threshold_days`, `min_clone_shared_revs`,
+`clone_similarity_floor`, `clone_skip_same_dir`, `complexity_sample`, and
+`time_bucket` — resolves to `analyses/` or `quality_gates/`.
+
+*   **Fix**: split `canonical_json` into an ingest-affecting subset that keys
+    the cache and an analysis-only subset that does not. The exhaustive-destructure
+    guard already forces every new field to be classified, so adding a third
+    group is mechanically safe, and the pinned cache-key digest test gives the
+    before/after proof.
+*   **The risk that makes this the most dangerous item in the perf backlog**:
+    if any of the 21 secretly affects an ingested row, the split silently serves
+    stale facts — the worst outcome an analysis tool has. The enumeration above
+    is evidence, not proof. It must land with a test that ingests twice under two
+    values of each analysis-only option and asserts byte-identical fact tables.
+*   **Adjacent, lower value**: `calibration_digest` / `defect_calibration_digest`
+    also key the cache, while `options.rs` asserts "the corpus lens is additive
+    output only — it must never split the ingest cache." Path-independence is
+    tested; content-independence is not.
+
+The next sweep re-opens at **F320**.
