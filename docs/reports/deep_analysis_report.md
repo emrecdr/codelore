@@ -2280,7 +2280,7 @@ one that found nothing.
     today; the test should plant a valid-JSON/wrong-schema document and assert the
     prior rows survive.
 
-### F319 (Active) — 21 analysis-only options key the ingest cache, forcing a full re-ingest to change a threshold
+### F319 (Fixed — Unreleased) — 21 analysis-only options key the ingest cache, forcing a full re-ingest to change a threshold
 
 `cache.rs` folds `Options::canonical_json()` into the cache key, and
 `canonical_json` deliberately admits every field not on its drop-list. Most of
@@ -2316,16 +2316,27 @@ Everything else — `min_revs`, `min_shared_revs`, `min_coupling_pct`,
 `clone_similarity_floor`, `clone_skip_same_dir`, `complexity_sample`, and
 `time_bucket` — resolves to `analyses/` or `quality_gates/`.
 
-*   **Fix**: split `canonical_json` into an ingest-affecting subset that keys
-    the cache and an analysis-only subset that does not. The exhaustive-destructure
-    guard already forces every new field to be classified, so adding a third
-    group is mechanically safe, and the pinned cache-key digest test gives the
-    before/after proof.
-*   **The risk that makes this the most dangerous item in the perf backlog**:
-    if any of the 21 secretly affects an ingested row, the split silently serves
-    stale facts — the worst outcome an analysis tool has. The enumeration above
-    is evidence, not proof. It must land with a test that ingests twice under two
-    values of each analysis-only option and asserts byte-identical fact tables.
+*   **Resolution**: `Options::ingest_cache_json` now keys the cache, deriving
+    itself by *subtracting* the analysis-only list from `canonical_json` so the
+    two cannot drift in shape. `CACHE_EPOCH` moved to `schema_v19` to discard
+    entries written under the old classification — correct facts, unreachable
+    key, and they would otherwise hold slots forever.
+*   **The trap this hit, worth recording**: the obvious implementation is to
+    narrow `canonical_json` in place. That would have been a correctness
+    regression. `change_set::report_key` keys the agent-loop report cache on it
+    and its docstring explicitly relies on it covering `min_revs` and the clone
+    thresholds — narrowing it would have let two gate runs at different
+    thresholds share a report entry and serve a wrong verdict. The split had to
+    *add* a function, not edit one. Checking a function's callers before
+    narrowing it is the general form.
+*   **The proof, and its own near-miss**: an equivalence test ingests the same
+    repository twice — defaults, then all 21 knobs moved simultaneously — and
+    asserts a per-table digest of every row of every table is identical, with
+    dynamic table discovery so a new table joins without anyone remembering.
+    Its anti-vacuity control had to be corrected during development: the first
+    control flipped `include_merges`, which changes nothing on a linear fixture
+    (`tiny_repo`'s merge lives in `differential_repo`), so it proved nothing
+    about the digest's sensitivity. A control that cannot fail is decoration.
 *   **Adjacent, lower value**: `calibration_digest` / `defect_calibration_digest`
     also key the cache, while `options.rs` asserts "the corpus lens is additive
     output only — it must never split the ingest cache." Path-independence is
