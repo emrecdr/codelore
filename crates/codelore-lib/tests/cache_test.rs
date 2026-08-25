@@ -370,9 +370,13 @@ fn different_opts_produce_different_cache_paths() {
         min_revs: 1,
         ..Options::default()
     };
+    // An INGEST-AFFECTING difference. `exclude_patterns` decides which rows
+    // reach `changes`, so two runs that disagree about it hold genuinely
+    // different facts and must not share an entry.
     let opts_b = Options {
         repo_path: repo_path.clone(),
-        min_revs: 10,
+        min_revs: 1,
+        exclude_patterns: vec!["vendor/**".to_string()],
         ..Options::default()
     };
 
@@ -385,13 +389,32 @@ fn different_opts_produce_different_cache_paths() {
 
     assert_ne!(
         path_a, path_b,
-        "different opts must produce different cache paths"
+        "opts that change what gets ingested must produce different cache paths"
     );
     // Both should share the same repo-hash parent directory.
     assert_eq!(
         path_a.parent(),
         path_b.parent(),
         "same repo → same parent dir"
+    );
+
+    // The other half of the contract, and the reason this test changed: an
+    // ANALYSIS-ONLY difference must now REUSE the entry. This case previously
+    // asserted the opposite (it varied `min_revs`), because the cache key
+    // folded in every threshold — so sweeping one re-walked all of history and
+    // burned one of the five per-repo slots. The facts are identical either
+    // way; `analysis_only_options_do_not_change_the_ingested_facts` is the
+    // proof, not this assertion.
+    let opts_swept = Options {
+        repo_path: repo_path.clone(),
+        min_revs: 10,
+        ..Options::default()
+    };
+    let key_swept = cache_key(&repo_path, head_sha, &opts_swept);
+    assert_eq!(
+        cache_path_with_root(&key_swept, &repo_path, cache_root.path()),
+        path_a,
+        "sweeping an analysis-only threshold must reuse the cached facts"
     );
 }
 
@@ -427,5 +450,125 @@ fn head_only_ingest_persists_its_cache_entry() {
         cache_file.exists(),
         "head-only ingest must persist a cache entry at {}",
         cache_file.display()
+    );
+}
+
+/// Digest every row of every fact table, so a difference anywhere is caught
+/// rather than only in the tables the author thought to check. Table discovery
+/// is dynamic for the same reason — a new table joins the comparison without
+/// anyone remembering to add it.
+fn fact_store_digest(db: &FactsDb) -> Vec<(String, String)> {
+    let tables = db
+        .query_one_value(
+            "SELECT COALESCE(string_agg(table_name, ',' ORDER BY table_name), '') \
+             FROM information_schema.tables WHERE table_schema = 'main'",
+        )
+        .expect("list tables");
+    assert!(
+        !tables.is_empty(),
+        "no fact tables found — the comparison would be vacuously equal"
+    );
+    tables
+        .split(',')
+        .map(|t| {
+            let digest = db
+                .query_one_value(&format!(
+                    "SELECT COALESCE(md5(string_agg(r, '|' ORDER BY r)), 'empty') \
+                     FROM (SELECT CAST({t} AS VARCHAR) AS r FROM {t})"
+                ))
+                .unwrap_or_else(|e| panic!("digest {t}: {e}"));
+            (t.to_string(), digest)
+        })
+        .collect()
+}
+
+/// The equivalence proof behind splitting the cache key: changing every
+/// analysis-only option at once must leave the ingested facts byte-identical.
+///
+/// This is the test the split cannot ship without. The classification of which
+/// options are ingest-affecting was established by reading the ingest path, and
+/// reading is evidence, not proof — if any one of these knobs does reach a row,
+/// dropping it from the key serves stale facts silently, which is the worst
+/// outcome an analysis tool has.
+#[test]
+fn analysis_only_options_do_not_change_the_ingested_facts() {
+    let repo = tiny_repo::build();
+    let repo_path = repo.dir.path().to_path_buf();
+    let gix = GixRepo::open(&repo_path).expect("open gix repo");
+
+    let base = Options {
+        repo_path: repo_path.clone(),
+        min_revs: 1,
+        ..Options::default()
+    };
+
+    // Every analysis-only knob moved off its default simultaneously. One ingest
+    // per option would be 21 walks; moving them together catches the same class
+    // and tells you there is a problem, which is what a guard owes you.
+    let swept = Options {
+        min_revs: 9,
+        min_shared_revs: 9,
+        min_coupling_pct: 42,
+        max_coupling_pct: 99,
+        max_changeset_size: 7,
+        fisher_significance: 0.01,
+        message_regex: Some("fix".to_string()),
+        min_soc: Some(3),
+        code_maat_compat: true,
+        fdr_correction: true,
+        window_days: 30,
+        rework_window_days: 7,
+        release_tag_glob: "rel-*".to_string(),
+        departed_threshold_days: 45,
+        min_clone_shared_revs: 9,
+        clone_similarity_floor: 0.95,
+        clone_skip_same_dir: false,
+        allow_foreign_calibration: true,
+        ..base.clone()
+    };
+
+    let db_base = FactsDb::new_in_memory().expect("db base");
+    db_base.ingest(&gix, &base).expect("ingest base");
+    let digest_base = fact_store_digest(&db_base);
+
+    let db_swept = FactsDb::new_in_memory().expect("db swept");
+    db_swept.ingest(&gix, &swept).expect("ingest swept");
+    let digest_swept = fact_store_digest(&db_swept);
+
+    assert_eq!(
+        digest_base.len(),
+        digest_swept.len(),
+        "both ingests must produce the same set of tables"
+    );
+    for ((t1, d1), (t2, d2)) in digest_base.iter().zip(digest_swept.iter()) {
+        assert_eq!(t1, t2, "table order must match");
+        assert_eq!(
+            d1, d2,
+            "table `{t1}` differs between ingests — an option classified as \
+             analysis-only actually reaches the ingest, and dropping it from the \
+             cache key would serve stale facts"
+        );
+    }
+
+    // Anti-vacuity: the digest must be capable of detecting a difference at
+    // all. `exclude_patterns` is the control because its effect is visible on
+    // ANY non-empty fixture — it removes rows from `changes`, which every
+    // downstream table derives from. `include_merges` was the first choice and
+    // was wrong: `tiny_repo` is linear (the merge lives in `differential_repo`),
+    // so flipping it correctly changed nothing and the control proved nothing
+    // about the digest's sensitivity.
+    let ingest_affecting = Options {
+        exclude_patterns: vec!["**".to_string()],
+        ..base.clone()
+    };
+    let db_diff = FactsDb::new_in_memory().expect("db diff");
+    db_diff
+        .ingest(&gix, &ingest_affecting)
+        .expect("ingest diff");
+    let digest_diff = fact_store_digest(&db_diff);
+    assert_ne!(
+        digest_base, digest_diff,
+        "flipping an ingest-affecting option must change the fact store — \
+         otherwise this test proves nothing"
     );
 }

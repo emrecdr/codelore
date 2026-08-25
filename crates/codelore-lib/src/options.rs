@@ -253,6 +253,14 @@ impl Options {
         use serde_json::json;
         use sha2::{Digest, Sha256};
 
+        // NOTE ON SCOPE: this is the FULL canonical form. It keys
+        // `change_set::report_key`, which needs every report-affecting knob
+        // including analysis-only ones like `min_revs` and the clone
+        // thresholds. The narrower form that keys the *ingest* cache is
+        // [`Self::ingest_cache_json`], which subtracts from this one — never
+        // narrow this function in place, or the gate's report cache silently
+        // stops noticing threshold changes and serves a wrong verdict.
+
         // Cache-key classification guard. Destructuring `Self` with no `..`
         // means adding a field to `Options` fails to COMPILE here until the
         // author decides which side it belongs on — silence is no longer an
@@ -437,6 +445,74 @@ impl Options {
                 "info_exclude_digest".to_string(),
                 json!(info_exclude_digest),
             );
+        }
+        canon
+    }
+
+    /// Keys in the full [`Self::canonical_json`] form that the **ingest** never
+    /// reads, and so must not split the ingest cache.
+    ///
+    /// Verified by enumerating every `opts.<field>` token appearing anywhere
+    /// under `repo/`, `facts/`, `kamei/`, `identity/`, `imports/`, `clones/`
+    /// and `paths_filter.rs` — the positive direction, because a negative
+    /// "none of these appear" grep cannot distinguish a true absence from a
+    /// broken matcher. Twelve fields appear in code. `time_bucket` appears
+    /// only inside a doc comment (`facts/ingest/grouping.rs`); the table it
+    /// names is a session TEMP table built at analysis time, so it belongs
+    /// here — a token count alone gets that one wrong in either direction.
+    ///
+    /// The two calibration digests are here for a reason the code already
+    /// asserts elsewhere: the corpus lens is additive output only and "must
+    /// never split the ingest cache". Neither reaches the ingest path, so
+    /// keying on their content was making the code contradict its own claim.
+    const ANALYSIS_ONLY_CACHE_KEYS: &'static [&'static str] = &[
+        "min_revs",
+        "min_shared_revs",
+        "min_coupling_pct",
+        "max_coupling_pct",
+        "max_changeset_size",
+        "fisher_significance",
+        "message_regex",
+        "age_time_now",
+        "min_soc",
+        "code_maat_compat",
+        "fdr_correction",
+        "window_days",
+        "knowledge_model",
+        "rework_window_days",
+        "release_tag_glob",
+        "departed_threshold_days",
+        "min_clone_shared_revs",
+        "clone_similarity_floor",
+        "clone_skip_same_dir",
+        "complexity_sample",
+        "time_bucket",
+        "allow_foreign_calibration",
+        "calibration_digest",
+        "defect_calibration_digest",
+    ];
+
+    /// The canonical form restricted to what the ingest actually reads — the
+    /// fingerprint that keys the persistent fact-store cache.
+    ///
+    /// Derived by *subtracting* from [`Self::canonical_json`] rather than being
+    /// built independently, so the two cannot drift in shape: a new `Options`
+    /// field still trips the exhaustive-destructure guard over there, and
+    /// `every_canonical_key_is_classified` then forces it to be sorted into
+    /// ingest-affecting or analysis-only here.
+    ///
+    /// Why this exists: `canonical_json` folds in every threshold, so
+    /// `--min-revs 5` → `--min-revs 10` re-walked the entire history and burned
+    /// one of the five per-repo cache slots. Threshold sweeping is the natural
+    /// way to use this tool, and it was the most expensive thing a user could
+    /// do. None of those knobs can change a row the ingest writes.
+    #[must_use]
+    pub fn ingest_cache_json(&self) -> serde_json::Value {
+        let mut canon = self.canonical_json();
+        if let serde_json::Value::Object(map) = &mut canon {
+            for key in Self::ANALYSIS_ONLY_CACHE_KEYS {
+                map.remove(*key);
+            }
         }
         canon
     }
@@ -867,6 +943,135 @@ mod tests {
              dirty-tree check, so the cache key is the only thing that can \
              notice them"
         );
+    }
+
+    #[test]
+    fn every_analysis_only_key_exists_in_the_canonical_form() {
+        // Guards the one way the subtraction can rot silently: a key listed in
+        // ANALYSIS_ONLY_CACHE_KEYS that no longer exists (renamed field, typo)
+        // removes nothing, so the option quietly starts keying the ingest cache
+        // again with no failing test anywhere.
+        let opts = Options {
+            repo_path: std::path::PathBuf::from("pin-repo"),
+            ..Options::default()
+        };
+        let canon = opts.canonical_json();
+        let obj = canon.as_object().expect("canonical form is an object");
+        for key in Options::ANALYSIS_ONLY_CACHE_KEYS {
+            assert!(
+                obj.contains_key(*key),
+                "{key} is listed as analysis-only but is not in the canonical form — \
+                 a rename or typo would make this list silently stop subtracting it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ingest_key_is_a_strict_subset_of_the_canonical_form() {
+        let opts = Options {
+            repo_path: std::path::PathBuf::from("pin-repo"),
+            ..Options::default()
+        };
+        let full = opts.canonical_json();
+        let ingest = opts.ingest_cache_json();
+        let full_keys = full.as_object().expect("object").len();
+        let ingest_keys = ingest.as_object().expect("object").len();
+        assert_eq!(
+            ingest_keys,
+            full_keys - Options::ANALYSIS_ONLY_CACHE_KEYS.len(),
+            "the ingest form must be exactly the canonical form minus the analysis-only list"
+        );
+        assert!(ingest_keys > 0, "the ingest form must not be empty");
+        for key in Options::ANALYSIS_ONLY_CACHE_KEYS {
+            assert!(
+                !ingest.as_object().unwrap().contains_key(*key),
+                "{key} must not key the ingest cache"
+            );
+        }
+    }
+
+    #[test]
+    fn analysis_only_knobs_do_not_split_the_ingest_cache() {
+        // The point of the split: sweeping a threshold must reuse the cache.
+        let base = Options {
+            repo_path: std::path::PathBuf::from("pin-repo"),
+            ..Options::default()
+        };
+        let key = base.ingest_cache_json().to_string();
+
+        let swept = Options {
+            min_revs: base.min_revs + 5,
+            min_coupling_pct: 42,
+            fisher_significance: 0.01,
+            window_days: 30,
+            clone_similarity_floor: 0.95,
+            ..base.clone()
+        };
+        assert_eq!(
+            key,
+            swept.ingest_cache_json().to_string(),
+            "changing analysis-only thresholds must not force a re-ingest"
+        );
+        assert_ne!(
+            base.canonical_json().to_string(),
+            swept.canonical_json().to_string(),
+            "the FULL form must still notice them — `change_set::report_key` depends on it"
+        );
+    }
+
+    #[test]
+    fn ingest_affecting_knobs_still_split_the_ingest_cache() {
+        // Anti-vacuity for the test above: if the subtraction were too greedy,
+        // the previous test would pass for the wrong reason.
+        let base = Options {
+            repo_path: std::path::PathBuf::from("pin-repo"),
+            ..Options::default()
+        };
+        let key = base.ingest_cache_json().to_string();
+
+        for (label, changed) in [
+            (
+                "include_merges",
+                Options {
+                    include_merges: !base.include_merges,
+                    ..base.clone()
+                },
+            ),
+            (
+                "include_ignored",
+                Options {
+                    include_ignored: !base.include_ignored,
+                    ..base.clone()
+                },
+            ),
+            (
+                "exclude_patterns",
+                Options {
+                    exclude_patterns: vec!["vendor/**".to_string()],
+                    ..base.clone()
+                },
+            ),
+            (
+                "min_clone_node_count",
+                Options {
+                    min_clone_node_count: base.min_clone_node_count + 1,
+                    ..base.clone()
+                },
+            ),
+            (
+                "head_only_ingest",
+                Options {
+                    head_only_ingest: !base.head_only_ingest,
+                    ..base.clone()
+                },
+            ),
+        ] {
+            assert_ne!(
+                key,
+                changed.ingest_cache_json().to_string(),
+                "{label} reaches the ingest and must still split the cache"
+            );
+        }
     }
 
     /// Pins the cache-key field classification. The exhaustive-destructure
