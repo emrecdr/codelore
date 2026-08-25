@@ -6,9 +6,12 @@
 //!   `file://` scheme and leading `./` stripped; `uriBaseId`-agnostic
 //! - `start_line` / `end_line`: NULLABLE (absent in many dialects)
 //! - `level`: result → rule `defaultConfiguration.level` → `"warning"`
-//! - `fingerprint`: `partialFingerprints.primaryLocationLineHash` →
-//!   any `partialFingerprints` value → any `fingerprints` value →
-//!   self-hash `sha256(engine|rule_id|path|start_line)`
+//! - `fingerprint`: any `fingerprints` value → `partialFingerprints.
+//!   primaryLocationLineHash` → any other `partialFingerprints` value →
+//!   self-hash `sha256(engine|rule_id|path|start_line)`. `fingerprints` leads
+//!   because SARIF defines it as the tool's authoritative identity while
+//!   `partialFingerprints` are contributions an RMS combines — see
+//!   `resolve_fingerprint` for why the order is load-bearing.
 //! - `message.text`
 //!
 //! Unparseable individual results are skipped with [`tracing::warn`]; a
@@ -251,10 +254,28 @@ fn normalize_level(s: &str) -> String {
 }
 
 /// Resolve fingerprint via the SARIF 2.1.0 fallback chain:
-/// 1. `partialFingerprints.primaryLocationLineHash`
-/// 2. any other value in `partialFingerprints`
-/// 3. any value in `fingerprints` (semgrep stores `matchBasedId/v1` here)
+/// 1. any value in `fingerprints` (semgrep stores `matchBasedId/v1` here)
+/// 2. `partialFingerprints.primaryLocationLineHash`
+/// 3. any other value in `partialFingerprints`
 /// 4. self-hash: `sha256(engine|rule_id|path|start_line)`
+///
+/// `fingerprints` comes first because SARIF 2.1.0 defines it as the tool's
+/// authoritative stable identity — "a stable value that can be used by a
+/// result management system to uniquely identify a result over time, even if
+/// a relevant artifact is modified" — whereas `partialFingerprints` are
+/// partial contributions an RMS is expected to combine with other information.
+/// When both are present the spec says prefer the former.
+///
+/// This chain used to read them in the opposite order, and the cost was not
+/// cosmetic. Semgrep emits BOTH `partialFingerprints.primaryLocationLineHash`
+/// and `fingerprints["matchBasedId/v1"]`; the line hash moves when surrounding
+/// code moves, while the match-based id is built from the rule pattern with
+/// metavariables substituted and survives code motion. Taking the line hash
+/// meant an unchanged finding that merely shifted down the file arrived with a
+/// new fingerprint — and since `external_findings` is keyed
+/// `(engine, fingerprint)`, that inserts a second row rather than upserting the
+/// first. Downstream, a gate counting findings reads the move as a brand-new
+/// finding.
 fn resolve_fingerprint(
     result: &Value,
     engine: &str,
@@ -262,15 +283,9 @@ fn resolve_fingerprint(
     path: &str,
     start_line: Option<u32>,
 ) -> String {
-    // 1. partialFingerprints.primaryLocationLineHash
-    if let Some(v) = result["partialFingerprints"]["primaryLocationLineHash"].as_str()
-        && !v.is_empty()
-    {
-        return v.to_owned();
-    }
-
-    // 2. any other partialFingerprints value
-    if let Some(map) = result["partialFingerprints"].as_object() {
+    // 1. any fingerprints value — the tool's authoritative identity.
+    //    Semgrep uses `matchBasedId/v1`, which survives code motion.
+    if let Some(map) = result["fingerprints"].as_object() {
         for (_key, val) in map {
             if let Some(s) = val.as_str()
                 && !s.is_empty()
@@ -280,8 +295,16 @@ fn resolve_fingerprint(
         }
     }
 
-    // 3. any fingerprints value (semgrep uses fingerprints.matchBasedId/v1)
-    if let Some(map) = result["fingerprints"].as_object() {
+    // 2. partialFingerprints.primaryLocationLineHash — the most portable
+    //    partial contribution, and the only one GitHub code scanning reads.
+    if let Some(v) = result["partialFingerprints"]["primaryLocationLineHash"].as_str()
+        && !v.is_empty()
+    {
+        return v.to_owned();
+    }
+
+    // 3. any other partialFingerprints value
+    if let Some(map) = result["partialFingerprints"].as_object() {
         for (_key, val) in map {
             if let Some(s) = val.as_str()
                 && !s.is_empty()

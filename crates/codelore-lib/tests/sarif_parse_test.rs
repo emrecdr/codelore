@@ -277,3 +277,69 @@ fn parse_sarif_engines_dedupes_and_rejects_non_sarif() {
     // Missing `runs` is not a SARIF document.
     assert!(parse_sarif_with_engines(r#"{"version":"2.1.0"}"#).is_err());
 }
+
+// ─── precedence when BOTH fingerprint families are present ──────────────────
+
+/// A minimal one-result document carrying both fingerprint families, so the
+/// chain's ordering is the only thing under test.
+fn doc_with_both_fingerprints() -> String {
+    r#"{
+      "version": "2.1.0",
+      "runs": [{
+        "tool": { "driver": { "name": "semgrep", "rules": [] } },
+        "results": [{
+          "ruleId": "python.lang.security.audit.exec-detected",
+          "message": { "text": "exec detected" },
+          "fingerprints": { "matchBasedId/v1": "AUTHORITATIVE-match-based-id" },
+          "partialFingerprints": { "primaryLocationLineHash": "PARTIAL-line-hash" },
+          "locations": [{
+            "physicalLocation": {
+              "artifactLocation": { "uri": "src/app.py" },
+              "region": { "startLine": 12 }
+            }
+          }]
+        }]
+      }]
+    }"#
+    .to_string()
+}
+
+/// SARIF 2.1.0 defines `fingerprints` as the tool's authoritative stable
+/// identity and `partialFingerprints` as contributions a result management
+/// system combines; when both are present the authoritative one wins.
+///
+/// This is a regression test with a concrete cost behind it. Semgrep emits
+/// both. `primaryLocationLineHash` moves when surrounding code moves, while
+/// `matchBasedId/v1` is built from the rule pattern with metavariables
+/// substituted and survives code motion. Preferring the line hash — which this
+/// parser did — meant an unchanged finding that merely shifted down the file
+/// arrived with a new fingerprint. `external_findings` is keyed
+/// `(engine, fingerprint)`, so that inserts a second row instead of upserting
+/// the first, and a gate counting findings reads a pure move as a new finding.
+#[test]
+fn authoritative_fingerprints_win_over_partial_ones() {
+    let findings = parse_findings(&doc_with_both_fingerprints());
+    assert_eq!(findings.len(), 1, "fixture defines exactly one result");
+    assert_eq!(
+        findings[0].fingerprint, "AUTHORITATIVE-match-based-id",
+        "`fingerprints` is the tool's authoritative identity and must win over \
+         `partialFingerprints`; taking the line hash makes a moved finding read as new"
+    );
+}
+
+/// Anti-vacuity: the partial value must still be reachable when it is the only
+/// family present, or the test above would pass for a parser that ignored
+/// `partialFingerprints` entirely.
+#[test]
+fn partial_fingerprints_are_still_used_when_alone() {
+    let doc = doc_with_both_fingerprints().replace(
+        r#""fingerprints": { "matchBasedId/v1": "AUTHORITATIVE-match-based-id" },"#,
+        "",
+    );
+    let findings = parse_findings(&doc);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].fingerprint, "PARTIAL-line-hash",
+        "with no authoritative fingerprint, the partial one is still the best available"
+    );
+}
