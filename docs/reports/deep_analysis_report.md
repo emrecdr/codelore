@@ -2342,4 +2342,58 @@ Everything else — `min_revs`, `min_shared_revs`, `min_coupling_pct`,
     output only — it must never split the ingest cache." Path-independence is
     tested; content-independence is not.
 
-The next sweep re-opens at **F320**.
+### F320 (Active) — `code-health` walks the working tree on every run, and on a dirty tree that contradicts what `check` documents
+
+`run_code_health` — the entry point behind `codelore check`, the SPA,
+`factors`, `delta-health` and `refactoring-targets` — builds its context from
+`HealthScanCtx::head()`, which sets `clone_source: CloneSource::WorkingTree`.
+That triggers a full `WalkDir` + tree-sitter parse of every Tier-1 file at
+*analysis* time, on every invocation, including a cache hit.
+
+The cheap path already exists and is already wired: `CloneSource::Head` reads
+`SELECT path, COUNT(*) FROM clones GROUP BY path` from the table the ingest
+populates from HEAD blobs. Both key on path — `clones.rs` sets
+`entity: member.path.clone()` — so the two are structurally comparable.
+
+**Two problems, one cause.**
+
+*   **Cost.** On a clean tree the walk recomputes what the cached `clones`
+    table already holds. `run_clones_memoised` bounds it to once per process,
+    not once per analysis, but it is still a full parse per invocation of the
+    flagship analysis and everything routing through it.
+*   **Semantics.** `CloneSource::WorkingTree`'s own doc warrants itself with
+    "On a clean tree this equals HEAD" — a justification that holds only in the
+    case where the walk is *also* redundant. `check` does not require a clean
+    tree, and `advanced-usage` §"quality gates" states the three surfaces are
+    non-overlapping: **`check` gates the committed tree at HEAD**, `gate` gates
+    the uncommitted working tree, `diff` gates a rev range. On a dirty tree
+    `check`'s DRY biomarker reads the working tree while the command claims to
+    describe HEAD.
+
+**Why this is not implemented here.** The one-line fix — `run_code_health`
+uses `CloneSource::Head` — is byte-identical on a clean tree and buys the perf
+win outright. But it *changes* dirty-tree behaviour: `check` would stop
+counting duplication you had written and not yet committed. That is arguably
+correct (it is what the documented split says, and `gate` is the surface for
+uncommitted work) and arguably a regression (someone using `check` as a
+pre-commit check loses a signal). That is a product decision, not a
+refactor, and it should be made deliberately rather than arrive inside a
+performance change.
+
+*   **Option A — align with the documented contract.** `run_code_health` uses
+    `CloneSource::Head`. One line. Byte-identical on clean trees; on dirty
+    trees `check` becomes HEAD-faithful as documented. Requires a CHANGELOG
+    note that `check` no longer sees uncommitted duplication, and a pointer to
+    `codelore gate` for that use.
+*   **Option B — keep the semantics, take only the perf.** Select `Head`
+    when the worktree is clean and `WorkingTree` when dirty. Zero behaviour
+    change. Costs more: `run_code_health(db, opts)` has no `Repo` and cannot
+    ask, so the cleanliness signal must be threaded through the signature or
+    `Options` across every call site.
+*   **Not affected either way**: the gate baseline (`change_set.rs`, already
+    `Head`) and the gate projection (already `WorkingTree` and deliberately so).
+    `health_trend.rs` and `defect_calibration/validate.rs` also pin
+    `WorkingTree`; whether a *historical* rev should be scored against today's
+    working tree is a separate question this finding does not address.
+
+The next sweep re-opens at **F321**.
