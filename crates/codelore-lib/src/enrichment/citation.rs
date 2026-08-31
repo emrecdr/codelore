@@ -11,8 +11,9 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-/// Whether a narrative's numbers are all grounded in the fact sheet, and which
-/// numeric tokens were not.
+/// Whether a narrative's numbers are all grounded in the fact sheet, which
+/// numeric tokens were not, and which tokens passed through the check's two
+/// known blind spots (the small-integer exemption and the percent fallback).
 #[derive(Debug, Clone)]
 pub struct Groundedness {
     /// True iff every non-exempt numeric token in the narrative matched a fact
@@ -22,6 +23,14 @@ pub struct Groundedness {
     /// and `%` retained as quoted) that matched no fact value and are not
     /// exempt small integers.
     pub unmatched: Vec<String>,
+    /// The whole-number tokens (sign retained) the small-integer prose
+    /// exemption skipped instead of checking — the tokens an invented small
+    /// count would hide among. Diagnostic only; never affects `grounded`.
+    pub exempt_small_ints: Vec<String>,
+    /// The percent tokens grounded *only* by the `fact * 100` fallback — the
+    /// tokens an unrelated fraction on the sheet could be silently grounding.
+    /// Diagnostic only; never affects `grounded`.
+    pub percent_fallback_only: Vec<String>,
 }
 
 /// Largest magnitude of a whole-number token treated as prose scaffolding
@@ -50,7 +59,12 @@ const SMALL_INT_EXEMPTION: f64 = 12.0;
 /// this exemption and by the standard rounding rule (a `1e-9` fact rounds to
 /// `0` at zero decimal places).
 ///
-/// `grounded` is true exactly when `unmatched` is empty.
+/// `grounded` is true exactly when `unmatched` is empty. The two blind spots
+/// below are additionally surfaced as diagnostics on the result — the exempt
+/// tokens in [`Groundedness::exempt_small_ints`], and the percent tokens whose
+/// only grounding was the `× 100` fallback in
+/// [`Groundedness::percent_fallback_only`] — so their real-world incidence can
+/// be measured rather than guessed at. Neither influences the verdict.
 ///
 /// # Known limitations — this check labels, it does not prove
 ///
@@ -73,6 +87,8 @@ const SMALL_INT_EXEMPTION: f64 = 12.0;
 pub fn check_citations(narrative: &str, fact_values: &[f64]) -> Groundedness {
     let stripped = strip_thousands_separators(narrative);
     let mut unmatched = Vec::new();
+    let mut exempt_small_ints = Vec::new();
+    let mut percent_fallback_only = Vec::new();
     for token in token_regex().find_iter(&stripped) {
         let raw = token.as_str();
         let is_percent = raw.ends_with('%');
@@ -87,26 +103,38 @@ pub fn check_citations(narrative: &str, fact_values: &[f64]) -> Groundedness {
         } else {
             unsigned_value
         };
+        let display = if negated {
+            format!("-{raw}")
+        } else {
+            raw.to_string()
+        };
         // Small whole numbers in prose (list positions, section numbers, "the 3
-        // files") are scaffolding, not cited statistics — never flag them.
+        // files") are scaffolding, not cited statistics — never flag them, but
+        // record them so an evaluation can measure how much this blind spot
+        // swallows.
         if !is_percent && decimals == 0 && value.abs() <= SMALL_INT_EXEMPTION {
+            exempt_small_ints.push(display);
             continue;
         }
-        let matched = fact_values
+        let direct = fact_values
             .iter()
-            .any(|&fact| matches_at(fact, value, decimals, is_percent));
-        if !matched {
-            let display = if negated {
-                format!("-{raw}")
-            } else {
-                raw.to_string()
-            };
+            .any(|&fact| rounds_to(fact, value, decimals));
+        let fallback = !direct
+            && is_percent
+            && fact_values
+                .iter()
+                .any(|&fact| rounds_to(fact * 100.0, value, decimals));
+        if fallback {
+            percent_fallback_only.push(display);
+        } else if !direct {
             unmatched.push(display);
         }
     }
     Groundedness {
         grounded: unmatched.is_empty(),
         unmatched,
+        exempt_small_ints,
+        percent_fallback_only,
     }
 }
 
@@ -131,13 +159,6 @@ fn is_unary_minus(text: &str, token_start: usize) -> bool {
         Some(prev2) => !prev2.is_alphanumeric(),
         None => true,
     }
-}
-
-/// Whether `fact` grounds `token_value` at `decimals` decimal places, trying the
-/// `fact * 100` reading as well for percent tokens.
-fn matches_at(fact: f64, token_value: f64, decimals: usize, is_percent: bool) -> bool {
-    rounds_to(fact, token_value, decimals)
-        || (is_percent && rounds_to(fact * 100.0, token_value, decimals))
 }
 
 /// Whether `value` rounded to `decimals` decimal places equals `target`.
@@ -312,5 +333,49 @@ mod tests {
         let facts: [f64; 0] = [];
         let g = check_citations("about 99.5%", &facts);
         assert_eq!(g.unmatched, vec!["99.5%".to_string()]);
+    }
+
+    #[test]
+    fn exempt_small_int_tokens_are_reported() {
+        let facts: [f64; 0] = [];
+        let g = check_citations("the 3 files and a delta of -3", &facts);
+        assert!(g.grounded);
+        assert_eq!(
+            g.exempt_small_ints,
+            vec!["3".to_string(), "-3".to_string()],
+            "exempt tokens keep appearance order and sign"
+        );
+    }
+
+    #[test]
+    fn percent_grounded_only_by_fallback_is_reported() {
+        let facts = [0.5];
+        let g = check_citations("about 50% of changes", &facts);
+        assert!(g.grounded, "unmatched: {:?}", g.unmatched);
+        assert_eq!(g.percent_fallback_only, vec!["50%".to_string()]);
+    }
+
+    #[test]
+    fn percent_with_direct_grounding_is_not_fallback_only() {
+        let facts = [50.0, 0.5];
+        let g = check_citations("about 50% of changes", &facts);
+        assert!(g.grounded, "unmatched: {:?}", g.unmatched);
+        assert!(g.percent_fallback_only.is_empty());
+    }
+
+    #[test]
+    fn unmatched_percent_token_is_not_fallback_only() {
+        let facts: [f64; 0] = [];
+        let g = check_citations("about 99.5%", &facts);
+        assert!(!g.grounded);
+        assert!(g.percent_fallback_only.is_empty());
+    }
+
+    #[test]
+    fn clean_narrative_reports_no_citation_diagnostics() {
+        let facts = [87.5];
+        let g = check_citations("Health score 87.5.", &facts);
+        assert!(g.exempt_small_ints.is_empty());
+        assert!(g.percent_fallback_only.is_empty());
     }
 }

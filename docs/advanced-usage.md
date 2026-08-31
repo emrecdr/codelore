@@ -1157,7 +1157,7 @@ advisory — model <id>, grounded ✓
 advisory — model <id>, ⚠ contains uncited claims: -0.5, 42.5%
 ```
 
-**Honest limits: the check labels magnitudes, it does not prove claims.** `grounded ✓` means "every number the narrative quotes appears in the evidence" — not "every claim is true". The check cannot detect a fabricated small count (whole numbers up to 12 in magnitude are exempt as prose scaffolding — list positions, "the 3 files"), a percent that happens to collide with an unrelated fraction on the sheet, or a real number attached to the wrong claim. The narrative is advisory; the dossier above it is the authority.
+**Honest limits: the check labels magnitudes, it does not prove claims.** `grounded ✓` means "every number the narrative quotes appears in the evidence" — not "every claim is true". The check cannot detect a fabricated small count (whole numbers up to 12 in magnitude are exempt as prose scaffolding — list positions, "the 3 files"), a percent that happens to collide with an unrelated fraction on the sheet, or a real number attached to the wrong claim. The narrative is advisory; the dossier above it is the authority. These limits are measured, not just stated: [`docs/narrative-evidence-v1.md`](narrative-evidence-v1.md) characterizes the check's false-positive and false-negative behavior on a labelled corpus replayed in CI, including the over-flagging routes (version and date fragments, CI-bound quotes, ordinal percentiles, derived arithmetic) where the check errs toward `⚠` on faithful text.
 
 ### Configuration (environment only)
 

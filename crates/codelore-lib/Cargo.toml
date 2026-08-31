@@ -163,6 +163,10 @@ browser-tests = ["spa", "dep:headless_chrome"]
 
 [dev-dependencies]
 criterion = "0.8"
+# The labelled narrative corpus fixture is JSON; the citation-corpus eval test
+# deserializes it with the same serde/serde_json the library already ships.
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [[bench]]
 name = "end_to_end"
