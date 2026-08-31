@@ -1302,3 +1302,101 @@ fn defect_calibration_recomputes_the_no_dry_scale_from_the_tuned_dry_weight() {
         "at least one scored file must have captured intensities for the divisor check to bite"
     );
 }
+
+/// A clean working tree must score identically whether the DRY biomarker is
+/// counted from the ingested `clones` table or by fingerprinting the tree.
+///
+/// This is the proof obligation behind making [`CloneSource::Head`] the
+/// default: the change is only safe if it is a no-op wherever the tree matches
+/// HEAD, which is every non-gate surface's normal state. `tiny_repo` is built
+/// by committing files and never touching them afterwards, so its worktree is
+/// byte-identical to HEAD — exactly the condition under test.
+///
+/// The assertion covers the full row, not just `score`. A DRY difference would
+/// move `score` first, but pinning every field means a future change that
+/// shifts a band or a biomarker without moving the score still trips this.
+#[test]
+fn clean_tree_scores_identically_from_head_clones_and_worktree_clones() {
+    use codelore_lib::analyses::code_health::{CloneSource, HealthScanCtx, run_code_health_scoped};
+
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let from_head = run_code_health_scoped(
+        &db,
+        &opts,
+        &HealthScanCtx {
+            clone_source: CloneSource::Head,
+            ..HealthScanCtx::head()
+        },
+    )
+    .expect("head-clone scan");
+
+    let from_worktree = run_code_health_scoped(
+        &db,
+        &opts,
+        &HealthScanCtx {
+            clone_source: CloneSource::WorkingTree,
+            ..HealthScanCtx::head()
+        },
+    )
+    .expect("worktree-clone scan");
+
+    // Anti-vacuity: an empty result set would satisfy any comparison below.
+    assert!(
+        !from_head.is_empty(),
+        "fixture must produce rows or this proves nothing"
+    );
+    assert_eq!(
+        from_head.len(),
+        from_worktree.len(),
+        "same file set expected from both clone sources"
+    );
+
+    for (h, w) in from_head.iter().zip(from_worktree.iter()) {
+        assert_eq!(h.path, w.path, "row order must match");
+        // Epsilon rather than `==`, matching this file's existing stability
+        // assertions: both scans run the same computation over the same
+        // inputs, and a real DRY divergence moves the score by orders of
+        // magnitude more than this.
+        assert!(
+            (h.score - w.score).abs() < 1e-12,
+            "score diverged for {} on a clean tree: head={} worktree={}",
+            h.path,
+            h.score,
+            w.score
+        );
+        assert_eq!(h.band, w.band, "band diverged for {}", h.path);
+        assert!(
+            (h.cognitive - w.cognitive).abs() < 1e-12,
+            "cognitive diverged for {}",
+            h.path
+        );
+    }
+}
+
+/// Pins the default that the equivalence test above licenses.
+///
+/// `HealthScanCtx::head()` names a HEAD scan and every other field resolves to
+/// a fact-store table; `clone_source` is the one that used to read the working
+/// tree instead, which made `codelore check` describe a mixed snapshot on a
+/// dirty tree while its documentation promised the committed tree at HEAD.
+/// Surfaces that genuinely want working-tree duplication — the gate projection
+/// — say so explicitly, so this default is what keeps the two apart.
+#[test]
+fn head_context_counts_clones_from_head_not_the_working_tree() {
+    use codelore_lib::analyses::code_health::{CloneSource, HealthScanCtx};
+
+    assert_eq!(
+        HealthScanCtx::head().clone_source,
+        CloneSource::Head,
+        "a context named `head()` must not read the working tree"
+    );
+}
