@@ -14,9 +14,10 @@
 //!   `resolve_fingerprint` for why the order is load-bearing.
 //! - `message.text`
 //!
-//! Unparseable individual results are skipped with [`tracing::warn`]; a
-//! document that is not SARIF at all (missing `version` or `runs`) returns
-//! [`Err`].
+//! Unparseable individual results are skipped with [`tracing::warn`]. A
+//! document that is not SARIF at all (missing `version` or `runs`), or whose
+//! `results` is present but is not an array, returns [`Err`] — an unreadable
+//! document must never be read as a clean scan.
 
 use serde_json::Value;
 use tracing::warn;
@@ -64,7 +65,9 @@ pub struct ExternalFinding {
 /// # Errors
 ///
 /// Returns [`CodeLoreError::Analysis`] when the input is not a SARIF document
-/// (missing `version` field or `runs` array).
+/// (missing `version` field or `runs` array), or when a run's `results` is
+/// present but is not an array — an unreadable document must not be mistaken
+/// for a clean scan, because that would clear the engine's stored findings.
 pub fn parse_sarif_with_engines(raw: &str) -> Result<(Vec<ExternalFinding>, Vec<String>)> {
     let doc: Value = serde_json::from_str(raw)
         .map_err(|e| CodeLoreError::Analysis(format!("SARIF parse: not valid JSON: {e}")))?;
@@ -100,16 +103,38 @@ pub fn parse_sarif_with_engines(raw: &str) -> Result<(Vec<ExternalFinding>, Vec<
             .map(|v| v.iter().collect())
             .unwrap_or_default();
 
-        let Some(results) = run["results"].as_array() else {
-            continue;
-        };
-
-        for result in results {
-            match parse_result(result, &engine, &engine_version, &rules) {
-                Ok(finding) => findings.push(finding),
-                Err(reason) => {
-                    warn!("skipping unparseable SARIF result: {reason}");
+        // `results` is OPTIONAL in SARIF 2.1.0, so an absent one is a real
+        // clean scan. A present-but-non-array one is a document we cannot
+        // read, and the distinction is load-bearing: the engine is already
+        // registered above, so a zero-finding run reaches the caller's
+        // replace-engine upsert and clears that engine's stored rows. That is
+        // right for a genuine clean re-scan and wrong for a broken file, which
+        // would erase good findings and leave the gate green.
+        match run.get("results") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(results)) => {
+                for result in results {
+                    match parse_result(result, &engine, &engine_version, &rules) {
+                        Ok(finding) => findings.push(finding),
+                        Err(reason) => {
+                            warn!("skipping unparseable SARIF result: {reason}");
+                        }
+                    }
                 }
+            }
+            Some(other) => {
+                return Err(CodeLoreError::Analysis(format!(
+                    "SARIF `runs[].results` for engine `{engine}` is present but is a \
+                     {kind}, not an array; refusing to treat an unreadable document as \
+                     a clean scan (doing so would delete this engine's stored findings)",
+                    kind = match other {
+                        Value::Object(_) => "object",
+                        Value::String(_) => "string",
+                        Value::Number(_) => "number",
+                        Value::Bool(_) => "boolean",
+                        _ => "non-array value",
+                    }
+                )));
             }
         }
     }

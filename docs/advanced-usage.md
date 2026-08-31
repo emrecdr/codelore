@@ -1448,6 +1448,8 @@ Re-ingesting a file is **idempotent**: findings are replaced per engine, so two 
 
 Any other SARIF 2.1.0 producer is accepted; unparseable individual results are skipped with a warning, not a hard error.
 
+A run that found nothing is a normal, meaningful input: because re-ingest replaces per engine, a clean scan is how an engine's previously-stored findings get dropped once you fix them. `results` may be absent or `[]` — both are valid SARIF and both are treated as that clean scan. A `results` that is *present but not an array* is a different thing entirely: it means the document could not be read, and it is a hard error rather than a scan of zero findings. Accepting it would let a malformed file delete an engine's stored findings and leave the gate reporting none. When several files are passed at once, this error aborts the ingest before anything is written, so a bad file cannot partially clear the store.
+
 #### Step 2 — run the overlap analysis
 
 ```bash

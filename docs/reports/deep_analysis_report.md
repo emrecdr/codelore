@@ -2263,7 +2263,7 @@ no edges, so `cyclic_paths` sees no cycle and the gate passes.
     least disclosed. The `ParseOutcome::Skipped(REASON_*)` vocabulary already in
     this file is the mechanism; the import path just does not use it.
 
-### F318 (Active) — a schema-wrong SARIF document silently deletes an engine's findings
+### F318 (Fixed — Unreleased) — a schema-wrong SARIF document silently deletes an engine's findings
 
 `sarif_parse.rs` errors correctly on a missing `version`/`runs` and on a non-array
 `runs`. But a run whose `results` key is missing or not an array hits a bare
@@ -2279,6 +2279,17 @@ one that found nothing.
     minimum refuse to seed an empty batch for a run that did not parse. Untested
     today; the test should plant a valid-JSON/wrong-schema document and assert the
     prior rows survive.
+
+**Correction applied when fixing this.** The finding groups "missing or not an
+array" together and the proposed fix errors on both. Erroring on a *missing*
+`results` would be wrong: SARIF 2.1.0 marks the property optional, so a run that
+found nothing may legitimately omit it, and rejecting that would break the very
+clean-re-scan path whose delete semantics make this finding dangerous. The three
+cases are now distinct — absent and `null` are a clean scan, `[]` is the same
+scan spelled explicitly, and present-but-non-array is a hard error naming the
+type it found. Two of the three tests exist as anti-vacuity controls, because a
+parser that simply rejected every zero-finding run would satisfy the
+malformed-input test while silently breaking clean re-scans.
 
 ### F319 (Fixed — Unreleased) — 21 analysis-only options key the ingest cache, forcing a full re-ingest to change a threshold
 
