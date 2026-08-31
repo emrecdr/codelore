@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787556751532,
+  "lastUpdate": 1788183753770,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -559,6 +559,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 95041926,
             "range": "± 1932333",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "7256e468134a75b0babb50dcbd725a0e65f32c07",
+          "message": "fix(ingest): tally scan coverage for the clones and imports passes too (#313)\n\nThe HEAD complexity pass learned to separate \"no row was owed\" from \"a\nrow was owed and lost\", and to warn once when coverage falls below 90%.\nIts two sibling passes did not, and for `clones` the consequence runs\nthe wrong way: `disallow_clone_type_1` is `COUNT(DISTINCT\nclone_group_id)` and passes on zero, so a scan that failed to read the\nrepository produces the same verdict as a repository with no\nduplication — the gate reads a broken scan as an improvement. `imports`\nhas the same shape feeding `max_dependency_cycles` and the\narchitecture-violation gates, where an empty graph is indistinguishable\nfrom a codebase with no dependencies.\n\n`ScanOutcome` and `ScanCoverage` move to `facts/ingest/coverage.rs`,\ngeneric over the payload so three passes carry three different result\ntypes through one accounting. `warn_if_degraded` takes the pass name and\nits fact table, so the message says both what went thin and what reads\nit. Lifting the abstraction was deliberately deferred until a second\nconsumer existed, which is this repository's convention; the second and\nthird are now here.\n\nThe classification is a faithful move. Outcomes still split on the\nper-file log level each pass already used, so the `debug!` cases (a path\n`changes` carries that HEAD no longer tracks, a file over the AST size\ncap) stay out of the denominator and only the `warn!` cases count as\nlost. Counting routine skips as losses is the mistake that once put this\nrepository at 86% and fired the warning on a scan that had failed at\nnothing.\n\nOne case needed care in the opposite direction, and it is not in the\nfinding. A file read and parsed successfully that declares no imports —\nmost files, in most repositories — previously returned the same `None`\nas a failed blob read. Routing it to `NotCounted` is the obvious reading\nof \"produced no row\" and would have been wrong: the file *was* covered.\nIt would also have shrunk the denominator, making coverage read better\nthe more import-free files a repository holds, reproducing one level up\nthe exact blindness this accounting removes. It is now `Scored` with an\nempty payload, and the drain filters empties one stage later than the\nclassifier — which is what lets the same code answer \"what did we write\"\nand \"what did we cover\" honestly at once. Removing that third match arm\n*is* the fix: fewer branches, more information.\n\nThe clones pass gained a second method along the way. The additions\npushed `populate_clones_at_head` one line past the `too_many_lines`\nceiling at 101/100, and the honest response to that is to take the seam\nthe lint points at rather than silence it: writing rows is now\n`append_clone_groups`, and the primary-key deduplication rationale about\nminified bundles lives next to the code it explains.\n\nNo ingested fact changes — the rows written to `complexity_metrics`,\n`clones` and `imports` are identical before and after.\n\nGate: cargo clippy --workspace --all-targets --all-features -- -D\nwarnings clean (0 errors, 0 warnings); cargo fmt --all --check clean;\ncoverage 8/8, ingest_test 9/9, cache_test 11/11 including the\nwhole-fact-store digest that proves the rows are unchanged.\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-08-31T13:25:51Z",
+          "url": "https://github.com/emrecdr/codelore/commit/7256e468134a75b0babb50dcbd725a0e65f32c07"
+        },
+        "date": 1788183751814,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 54098328,
+            "range": "± 3585154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 93903057,
+            "range": "± 1817868",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 92610778,
+            "range": "± 1829644",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 93037279,
+            "range": "± 2273697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 93762839,
+            "range": "± 1628039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 92796044,
+            "range": "± 2037845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 93292722,
+            "range": "± 1579981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 92994065,
+            "range": "± 1969731",
             "unit": "ns/iter"
           }
         ]
