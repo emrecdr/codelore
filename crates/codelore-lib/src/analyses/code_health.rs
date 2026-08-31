@@ -60,13 +60,21 @@ use crate::{CodeLoreError, Options, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloneSource {
     /// Fingerprint the live working tree via
-    /// [`crate::analyses::clones::run_clones_memoised`]. On a clean tree this
-    /// equals HEAD, so `codelore check` and the gate projection both use it.
+    /// [`crate::analyses::clones::run_clones_memoised`]. Equals [`Self::Head`]
+    /// on a clean tree and diverges on a dirty one, which is the point: the
+    /// gate *projection* uses it to see duplication you have written but not
+    /// committed. Every caller that wants this states it explicitly — it is
+    /// deliberately not the default, because a scan reading the working tree
+    /// while every other source reads the fact store describes neither.
     WorkingTree,
     /// Read HEAD clone counts from the `clones` table populated at ingest from
-    /// HEAD blobs (`facts::ingest::populate_clones_at_head`). The gate baseline
-    /// uses it so `baseline_score` is HEAD-faithful and a newly duplicated
-    /// function shows as a real negative delta rather than cancelling.
+    /// HEAD blobs (`facts::ingest::populate_clones_at_head`). The default, and
+    /// what every fact-store-derived surface wants: the rest of a health scan
+    /// (complexity, imports, history) already describes HEAD, so counting
+    /// clones from the working tree was the one input that disagreed. The gate
+    /// baseline also relies on it so `baseline_score` is HEAD-faithful and a
+    /// newly duplicated function shows as a real negative delta rather than
+    /// cancelling against the projection.
     Head,
 }
 
@@ -91,9 +99,11 @@ pub struct HealthScanCtx {
 
 impl HealthScanCtx {
     /// The HEAD scan — every source resolves to today's table, DRY included.
-    /// Clones are counted from the working tree, matching `codelore check`;
-    /// the gate baseline overrides [`clone_source`](Self::clone_source) to
-    /// [`CloneSource::Head`].
+    /// Clones are counted from the ingested `clones` table, so the whole
+    /// context describes HEAD and nothing silently reads the working tree.
+    /// Callers that want working-tree duplication — the gate projection — set
+    /// [`clone_source`](Self::clone_source) to [`CloneSource::WorkingTree`]
+    /// explicitly.
     #[must_use]
     pub fn head() -> Self {
         Self {
@@ -101,7 +111,7 @@ impl HealthScanCtx {
             imports_source: "imports".to_string(),
             history_cutoff: None,
             include_clones: true,
-            clone_source: CloneSource::WorkingTree,
+            clone_source: CloneSource::Head,
         }
     }
 
