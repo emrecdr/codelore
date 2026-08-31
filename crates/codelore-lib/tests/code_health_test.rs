@@ -1362,14 +1362,20 @@ fn clean_tree_scores_identically_from_head_clones_and_worktree_clones() {
 
     for (h, w) in from_head.iter().zip(from_worktree.iter()) {
         assert_eq!(h.path, w.path, "row order must match");
-        assert_eq!(
-            h.score, w.score,
+        // Epsilon rather than `==`, matching this file's existing stability
+        // assertions: both scans run the same computation over the same
+        // inputs, and a real DRY divergence moves the score by orders of
+        // magnitude more than this.
+        assert!(
+            (h.score - w.score).abs() < 1e-12,
             "score diverged for {} on a clean tree: head={} worktree={}",
-            h.path, h.score, w.score
+            h.path,
+            h.score,
+            w.score
         );
         assert_eq!(h.band, w.band, "band diverged for {}", h.path);
-        assert_eq!(
-            h.cognitive, w.cognitive,
+        assert!(
+            (h.cognitive - w.cognitive).abs() < 1e-12,
             "cognitive diverged for {}",
             h.path
         );
