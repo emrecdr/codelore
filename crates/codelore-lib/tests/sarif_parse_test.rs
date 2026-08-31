@@ -343,3 +343,69 @@ fn partial_fingerprints_are_still_used_when_alone() {
         "with no authoritative fingerprint, the partial one is still the best available"
     );
 }
+
+// ─── malformed `results` must not read as a clean scan ──────────────────────
+
+fn doc_with_results(results_json: &str) -> String {
+    format!(
+        r#"{{
+          "version": "2.1.0",
+          "runs": [{{
+            "tool": {{ "driver": {{ "name": "semgrep", "rules": [] }} }},
+            "results": {results_json}
+          }}]
+        }}"#
+    )
+}
+
+/// A run whose `results` is present but not an array is a document we failed
+/// to understand, and must be an error rather than "found nothing".
+///
+/// The conflation is dangerous in one direction only. The engine is registered
+/// before `results` is read, so a run contributing zero findings flows into the
+/// caller's replace-engine upsert and DELETES that engine's stored rows. That
+/// deletion is correct for a genuine clean re-scan — it is how a re-scan drops
+/// fixed findings — which is exactly what made a malformed document
+/// indistinguishable from one, and left the gate reporting zero findings and
+/// passing over data it had just erased.
+#[test]
+fn malformed_results_is_an_error_not_an_empty_scan() {
+    for malformed in [r#"{ "not": "an array" }"#, r#""a string""#, "42", "true"] {
+        let err = parse_sarif_with_engines(&doc_with_results(malformed))
+            .expect_err("a non-array `results` must not parse as a clean scan");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("results"),
+            "the error must name the offending field, got: {msg}"
+        );
+    }
+}
+
+/// Anti-vacuity: an ABSENT `results` is legitimate SARIF — the run found
+/// nothing — and must still parse as a clean scan. Without this, the test
+/// above would also pass for a parser that rejected every zero-finding run,
+/// which would break the clean-re-scan path that drops fixed findings.
+#[test]
+fn absent_results_is_a_legitimate_clean_scan() {
+    let doc = r#"{
+      "version": "2.1.0",
+      "runs": [{ "tool": { "driver": { "name": "semgrep", "rules": [] } } }]
+    }"#;
+    let (findings, engines) =
+        parse_sarif_with_engines(doc).expect("a run with no `results` is valid SARIF");
+    assert!(findings.is_empty(), "no results means no findings");
+    assert_eq!(
+        engines,
+        vec!["semgrep".to_string()],
+        "the engine must still be registered so a clean re-scan drops its fixed findings"
+    );
+}
+
+/// An explicitly empty array is the other spelling of the same clean scan.
+#[test]
+fn empty_results_array_is_a_legitimate_clean_scan() {
+    let (findings, engines) =
+        parse_sarif_with_engines(&doc_with_results("[]")).expect("empty results is valid");
+    assert!(findings.is_empty());
+    assert_eq!(engines, vec!["semgrep".to_string()]);
+}
