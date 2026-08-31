@@ -16,6 +16,32 @@ on:
   # when an earlier run was cancelled and an empty commit can't re-trigger
   # because of the `paths-ignore` filter above.
   workflow_dispatch:
+  # Weekly re-verification of `main`, because `push` and `pull_request`
+  # together still leave a gap: they answer "was this commit good when it
+  # landed", never "is it still good". Some checks depend on the outside
+  # world and can start failing on an unchanged commit — `cargo-deny` most
+  # of all, since a yank or a new advisory published after the last merge
+  # invalidates a `Cargo.lock` that passed. That is not hypothetical: a
+  # `chacha20` yank went undetected for six days and finally surfaced as a
+  # red `cargo-deny` on an unrelated PR whose diff touched no manifest at
+  # all, which is a confusing place to learn `main` is broken.
+  #
+  # Monday 06:17 UTC — deliberately off the hour, since schedules bunched
+  # on exact hour boundaries get throttled and delayed.
+  #
+  # Safe against the two mechanisms below it. A scheduled run reports
+  # `refs/heads/main` and main's current SHA, so it lands in the same
+  # per-SHA concurrency group as a re-dispatch of that commit, which is
+  # precisely the same-SHA replacement that group is built for. And it
+  # publishes nothing: the gh-pages push in `dogfood` is gated on
+  # `github.event_name == 'push'` and the gate verdict on
+  # `== 'pull_request'`, so neither fires here. `paths-ignore` is scoped to
+  # `push` and does not apply, so the full matrix always runs.
+  #
+  # Operational note: GitHub disables scheduled workflows after 60 days
+  # with no repository activity, and re-enabling is manual.
+  schedule:
+    - cron: '17 6 * * 1'
 
 # Cancel superseded runs for the same ref — but never let one main commit's
 # CI cancel another's.
@@ -39,8 +65,8 @@ on:
 # pending one, so the middle commit of three would still have lost its run.
 # `cancel-in-progress` stays `true` because it remains correct within a
 # group: on a PR it cancels the superseded push, and on main it only ever
-# sees a deliberate re-dispatch of the same SHA, where replacing the stale
-# run is exactly what is wanted.
+# sees another run of the same SHA — a deliberate re-dispatch or the weekly
+# schedule above — where replacing the stale run is exactly what is wanted.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
