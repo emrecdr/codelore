@@ -21,6 +21,7 @@ impl FactsDb {
         live_paths: &[String],
         head_rev: &str,
     ) -> Result<usize> {
+        use super::coverage::{REASON_BLOB_READ, ScanCoverage, ScanOutcome};
         use crate::clones::{CloneLanguage, extract_functions, group_clones};
         use rayon::prelude::*;
 
@@ -39,14 +40,19 @@ impl FactsDb {
             .collect();
 
         // Phase 2 (parallel): read each file + run tree-sitter fingerprinting on
-        // the rayon pool. Mirrors the complexity pass above. Unreadable files
-        // silently yield no fingerprints; extract errors short-circuit the pass
-        // via `collect::<Result<_>>`.
-        let per_file: Vec<Vec<_>> = candidates
+        // the rayon pool. Mirrors the complexity pass above, including its
+        // coverage accounting: a file this pass fails to read is a coverage
+        // loss, not an absence of clones. That distinction is load-bearing here
+        // in a way it is not for complexity — `disallow_clone_type_1` is
+        // `COUNT(DISTINCT clone_group_id)` and passes on zero, so a scan that
+        // read nothing reports the same clean bill as a repository with no
+        // duplication. Extract errors still short-circuit the whole pass via
+        // `collect::<Result<_>>` rather than degrading coverage.
+        let outcomes: Vec<ScanOutcome<Vec<_>>> = candidates
             .into_par_iter()
             .map_init(
                 || repo.blob_reader_at("HEAD"),
-                |reader, (rel, lang)| -> Result<Vec<_>> {
+                |reader, (rel, lang)| -> Result<ScanOutcome<Vec<_>>> {
                     // Read the blob at HEAD via the Repo trait. Bare-repo
                     // safe and ignores dirty-tree edits. Backends without
                     // blob support return Ok(None) — same skip behaviour as
@@ -58,14 +64,14 @@ impl FactsDb {
                             // Path not tracked at HEAD; skip (non-fatal, the
                             // rest of the scan continues).
                             tracing::debug!("clones: {rel} not tracked at HEAD; skipping");
-                            return Ok(Vec::new());
+                            return Ok(ScanOutcome::NotCounted);
                         }
                         Err(e) => {
                             // Object-database error (corrupted pack, missing
                             // shallow object). Surface as a warning and skip
                             // — the rest of the scan can still complete.
                             tracing::warn!("clones: blob read failed for {rel}: {e}");
-                            return Ok(Vec::new());
+                            return Ok(ScanOutcome::Lost(REASON_BLOB_READ));
                         }
                     };
                     // Skip oversized files (generated / minified) before
@@ -77,20 +83,48 @@ impl FactsDb {
                             size = code.len(),
                             cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                         );
-                        return Ok(Vec::new());
+                        return Ok(ScanOutcome::NotCounted);
                     }
+                    // A file that fingerprints to nothing is still fully
+                    // covered — it was read and walked, it simply holds no
+                    // extractable functions.
                     extract_functions(&rel, &code, lang)
+                        .map(ScanOutcome::Scored)
                         .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
                 },
             )
             .collect::<Result<Vec<_>>>()?;
-        let all_fns: Vec<_> = per_file.into_iter().flatten().collect();
+
+        ScanCoverage::tally(&outcomes).warn_if_degraded("clone", "clones");
+
+        let all_fns: Vec<_> = outcomes
+            .into_iter()
+            .filter_map(|o| match o {
+                ScanOutcome::Scored(fns) => Some(fns),
+                ScanOutcome::NotCounted | ScanOutcome::Lost(_) => None,
+            })
+            .flatten()
+            .collect();
 
         let groups = group_clones(all_fns, opts.min_clone_node_count);
         if groups.is_empty() {
             return Ok(0);
         }
 
+        self.append_clone_groups(groups, head_rev)
+    }
+
+    /// Insert one row per clone-family member, returning the number written.
+    ///
+    /// Split out of [`Self::populate_clones_at_head`] because it is a distinct
+    /// phase — the scan decides *what* is duplicated, this decides *what gets
+    /// stored* — and the primary-key deduplication below is the part that
+    /// needs the explanation.
+    fn append_clone_groups(
+        &self,
+        groups: Vec<crate::clones::CloneGroup>,
+        head_rev: &str,
+    ) -> Result<usize> {
         // Second pass: INSERT one row per family member into `clones`.
         //
         // `clones` has PRIMARY KEY (clone_group_id, path, function, start_line).
