@@ -2229,11 +2229,19 @@ minority of the repository is not empty, so the gate still reports `passed`.
     `eval_code_health_gate` record `degraded` when the stored ratio is below the
     floor. `fail_on_degraded` already defaults true, so wiring it is what converts
     disclosure into enforcement.
+*   **Scope note, since F316 landed**: `ScanCoverage` is no longer complexity-only.
+    All three HEAD passes now produce one, so the question this finding asks —
+    what does the gate do with a thin scan — has three answers to thread, not
+    one. `clones` is the sharpest of them: `disallow_clone_type_1` passes on
+    zero, so a thin clones scan currently reads as an *improvement* rather than
+    a degradation. Whatever shape the persistence takes should carry all three
+    rather than special-casing complexity.
+
 *   **Anti-vacuity requirement**: the self-test must reject a *partial* scan, not
     just an empty one. A test that only pins the empty case would pass against the
     current code and prove nothing about the change.
 
-### F316 (Active) — the clones and imports HEAD passes share the silent-skip shape
+### F316 (Fixed — Unreleased) — the clones and imports HEAD passes share the silent-skip shape
 
 `ingest_complexity_at_head` now classifies its skips; the sibling passes do not.
 `clones_head.rs` and `imports_head.rs` both `warn!` per file and return `None`,
@@ -2247,6 +2255,30 @@ architecture-violation gates.
     — one consumer is not yet a shared abstraction, and this repo's convention is that
     three similar lines beat a premature one. The second consumer is the point at
     which lifting it is justified.
+
+**Fixed as described.** `ScanOutcome` and `ScanCoverage` now live in
+`facts/ingest/coverage.rs`, generic over the payload so the three passes can
+carry three different result types through the same accounting, and
+`warn_if_degraded` takes the pass name and its fact table so the message says
+both what went thin and what reads it. The classification is a faithful move —
+outcomes still split on the per-file log level each pass already used, so the
+`debug!` cases stay out of the denominator.
+
+**One case needed care in the opposite direction, and the finding does not
+mention it.** A file read and parsed successfully that declares no imports —
+most files in most repositories — previously returned the same `None` as a
+failed blob read. Routing that to `NotCounted` would have been the obvious
+reading of "produced no row", and it would have been wrong: the file *was*
+covered. It would also have shrunk the denominator, making coverage read
+**better** the more import-free files a repository holds — reproducing one
+level up the exact blindness this accounting exists to remove. It is now
+`Scored` with an empty payload, and the drain filters empties one stage later
+than the classifier, which is what lets the same code answer "what did we
+write" and "what did we cover" honestly at once. Two tests pin it: one for the
+empty-payload semantic, one asserting the tally stays payload-agnostic.
+
+No ingested fact changes — the rows written to all three tables are identical
+before and after, confirmed by the cache suite's whole-fact-store digest.
 
 ### F317 (Refuted) — `codelore gate` can pass a newly-introduced dependency cycle
 

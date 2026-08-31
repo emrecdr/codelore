@@ -30,6 +30,7 @@ impl FactsDb {
         live_paths: &[String],
         head_rev: &str,
     ) -> Result<usize> {
+        use super::coverage::{REASON_BLOB_READ, REASON_PARSE_ERROR, ScanCoverage, ScanOutcome};
         use crate::imports::{ImportLanguage, RawImport, extract_imports};
         use rayon::prelude::*;
         use std::collections::HashSet;
@@ -48,8 +49,17 @@ impl FactsDb {
 
         // Phase 2 (parallel): read blob + extract imports per file.
         // Errors are logged at warn / debug and the file skipped —
-        // a single malformed file shouldn't fail the whole ingest.
-        let per_file: Vec<(String, Vec<RawImport>)> = candidates
+        // a single malformed file shouldn't fail the whole ingest — but they
+        // are now tallied, because `imports` feeds `max_dependency_cycles` and
+        // the architecture-violation gates, and a pass that read nothing
+        // produces the same empty graph as a repository with no dependencies.
+        //
+        // Note which outcome an import-free file gets: `Scored`, not
+        // `NotCounted`. It was read and walked successfully and is fully
+        // covered; it simply declares no imports. Counting it as ineligible
+        // would shrink the denominator and make coverage read better than it
+        // is — the exact blindness this accounting exists to remove.
+        let outcomes: Vec<ScanOutcome<(String, Vec<RawImport>)>> = candidates
             .into_par_iter()
             .map_init(
                 || repo.blob_reader_at("HEAD"),
@@ -60,14 +70,14 @@ impl FactsDb {
                             // Path not tracked at HEAD; skip (non-fatal, the
                             // rest of the scan continues).
                             tracing::debug!("imports: {rel} not tracked at HEAD; skipping");
-                            return None;
+                            return ScanOutcome::NotCounted;
                         }
                         Err(e) => {
                             // Object-database error (corrupted pack, missing
                             // shallow object). Surface as a warning and skip
                             // — the rest of the scan can still complete.
                             tracing::warn!("imports: blob read failed for {rel}: {e}");
-                            return None;
+                            return ScanOutcome::Lost(REASON_BLOB_READ);
                         }
                     };
                     if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
@@ -76,20 +86,29 @@ impl FactsDb {
                             size = code.len(),
                             cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                         );
-                        return None;
+                        return ScanOutcome::NotCounted;
                     }
-                    let imports = match extract_imports(&code, lang) {
-                        Ok(v) if !v.is_empty() => v,
-                        Ok(_) => return None,
+                    match extract_imports(&code, lang) {
+                        Ok(imports) => ScanOutcome::Scored((rel, imports)),
                         Err(e) => {
                             tracing::warn!("imports: extract failed for {rel}: {e}");
-                            return None;
+                            ScanOutcome::Lost(REASON_PARSE_ERROR)
                         }
-                    };
-                    Some((rel, imports))
+                    }
                 },
             )
-            .flatten_iter()
+            .collect();
+
+        ScanCoverage::tally(&outcomes).warn_if_degraded("import", "imports");
+
+        // Import-free files are covered but contribute no rows, so the drain
+        // filters them out here rather than the classifier above.
+        let per_file: Vec<(String, Vec<RawImport>)> = outcomes
+            .into_iter()
+            .filter_map(|o| match o {
+                ScanOutcome::Scored((rel, imports)) if !imports.is_empty() => Some((rel, imports)),
+                _ => None,
+            })
             .collect();
 
         // Phase 3 (serial drain): bulk-insert via the DuckDB Appender

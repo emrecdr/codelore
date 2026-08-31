@@ -12,6 +12,7 @@ pub mod at_rev;
 mod clones_head;
 mod complexity_head;
 pub(crate) mod consumer;
+mod coverage;
 mod grouping;
 mod imports_head;
 mod lineage;
