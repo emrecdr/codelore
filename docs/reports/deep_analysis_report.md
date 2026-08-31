@@ -2248,7 +2248,7 @@ architecture-violation gates.
     three similar lines beat a premature one. The second consumer is the point at
     which lifting it is justified.
 
-### F317 (Active) — `codelore gate` can pass a newly-introduced dependency cycle
+### F317 (Refuted) — `codelore gate` can pass a newly-introduced dependency cycle
 
 `change_set.rs` builds the projected import graph from the working tree. Three
 adjacent lines treat failure three different ways: the file read propagates with
@@ -2262,6 +2262,57 @@ no edges, so `cyclic_paths` sees no cycle and the gate passes.
     unparseable one that silently removes edges from a cycle check should be at
     least disclosed. The `ParseOutcome::Skipped(REASON_*)` vocabulary already in
     this file is the mechanism; the import path just does not use it.
+
+**Refuted on validation. No code change made.** Each of the three failure paths
+was traced, and two of them cannot fire:
+
+*   **`extract_imports` returns `Err`** — this is the mechanism the finding
+    names, and it is not reachable per-file. The function's own `# Errors`
+    section says so: it errors *only* if tree-sitter rejects the language
+    assignment, "a static-config bug that would fail every file under that
+    language". A malformed file never takes this path.
+*   **`parser.parse()` returns `None`** (the `Ok(Vec::new())` guard) — proven
+    unreachable by experiment. tree-sitter returns `Some` even for a byte string
+    of binary junk; `None` requires an unset language or a timeout/cancellation,
+    and `set_language` succeeded on the line above while no timeout or
+    cancellation flag is configured anywhere in the crate.
+*   **tree-sitter error recovery silently dropping imports** — a fourth
+    mechanism the finding does not name, hypothesised during validation and
+    then disproved. For `use a::b;` / a syntax error / `use c::d;`, extraction
+    returns **both** targets, identical to the same file without the error.
+    Error recovery does not cost import edges.
+
+That leaves the AST size cap as the one reachable path — and it is **already
+disclosed to the user**, which is precisely what the finding asks for. The chain
+is complete and was traced end to end: a changed file over the cap is skipped by
+`parse_worktree_file` as `ParseOutcome::Skipped(REASON_SIZE_LIMIT)`, lands in
+`skip_reasons`, becomes a `FileDelta` carrying that reason, and `assemble_findings`
+turns it into a user-visible `unparseable` finding reading "could not be
+re-parsed for the projection: file exceeds the AST size limit." The gate does not
+pass quietly; it names the exact file whose import edges were dropped.
+
+The disclosure covers every reachable case because the two gates agree:
+`ImportLanguage::from_path` and `Tier1Language::from_path` map the identical
+extension set (`rs`, `py|pyi`, `java`, `js|jsx|mjs|cjs`, `ts`, `tsx`) against the
+same `DEFAULT_MAX_AST_FILE_BYTES`, so any file the cycle projection caps is also
+one the health projection caps and reports. (One asymmetry between them is real
+but points the other way — see F321.)
+
+Two further points the finding's framing gets wrong. The behaviour is **not
+gate-specific**: `populate_imports_at_head` applies the same cap, so
+`--analysis dependency-cycles` cannot see those cycles either — it is a uniform
+property of the import graph, not a defect in the projection. And the cap is not
+an oversight: its constant documents the measurements behind it (Linux's
+`block.c` ~195 KB and V8's largest hand-written `.cc` ~1.5 MB, against minified
+bundles at 5–50 MB and `sqlite3.c` at ~9 MB), and without it tree-sitter hits
+stack-overflow or OOM on deeply-nested generated code. Excluding generated and
+vendored files is the cap's purpose, and the project already classified a
+size-cap skip as routine rather than lost coverage when it split `ScanOutcome`.
+
+The comment above the loop was also checked against its own claim and is
+accurate: it says the size cap "gates extraction" and that a per-file
+*extraction error* is logged — both true. Adding a `debug!` for the size-cap
+skip was considered and rejected as improving adjacent code to no end.
 
 ### F318 (Fixed — Unreleased) — a schema-wrong SARIF document silently deletes an engine's findings
 
@@ -2443,4 +2494,38 @@ cognitive row by row, with an anti-vacuity guard on the row count. A second test
 pins the default, because the first compares two explicit contexts and would
 keep passing if the default silently reverted.
 
-The next sweep re-opens at **F321**.
+
+### F321 (Active) — an uppercase source extension gets complexity but no imports
+
+`Tier1Language::from_path` lowercases before matching
+(`ext.to_ascii_lowercase()`); `ImportLanguage::from_path` matches the raw
+extension. The two arms are otherwise identical (`rs`, `py|pyi`, `java`,
+`js|jsx|mjs|cjs`, `ts`, `tsx`), so the sets agree for every lowercase path and
+diverge for an uppercase or mixed-case one: `Foo.RS` is Tier-1 — it is scanned
+for complexity, scored for code health, and fingerprinted for clones — while the
+import pass returns `None` and skips it silently.
+
+Found while validating F317, which needed the two gates to cover the same file
+set. They do for the case that mattered there, and this is the direction they
+do not.
+
+*   **Impact**: such a file is a node with no outgoing edges in the import
+    graph, so it is invisible to `dependency-cycles`, `architecture-violations`,
+    `instability` and the propagation-cost family — which read as *this file
+    imports nothing*, not *this file was not examined*. Unlike the size cap
+    (F317), nothing discloses it. Case-sensitivity is the trigger, so the
+    exposure is filesystem- and project-dependent: a case-insensitive
+    filesystem (macOS default, Windows) makes an uppercase-extension file
+    ordinary, and it survives into a case-sensitive CI checkout unchanged.
+    Rare in practice for the Tier-1 languages, none of which conventionally
+    uppercase their extensions.
+*   **Fix**: lowercase in `ImportLanguage::from_path` to match its twin. Note
+    the two also differ in how they take the extension — `Path::extension()`
+    versus `rsplit('.')` — which disagree on a dotfile like `.rs` (the former
+    yields `None`, the latter `"rs"`); align deliberately rather than by
+    accident, and cover both with a test.
+*   **Not urgent**: no evidence of a real repository hitting it, and the
+    corrective is small. Recorded rather than fixed inline, per the standing
+    rule on latent bugs found during unrelated work.
+
+The next sweep re-opens at **F322**.
