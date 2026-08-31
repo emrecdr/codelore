@@ -2353,7 +2353,7 @@ Everything else — `min_revs`, `min_shared_revs`, `min_coupling_pct`,
     output only — it must never split the ingest cache." Path-independence is
     tested; content-independence is not.
 
-### F320 (Active) — `code-health` walks the working tree on every run, and on a dirty tree that contradicts what `check` documents
+### F320 (Fixed — Unreleased) — `code-health` walks the working tree on every run, and on a dirty tree that contradicts what `check` documents
 
 `run_code_health` — the entry point behind `codelore check`, the SPA,
 `factors`, `delta-health` and `refactoring-targets` — builds its context from
@@ -2406,5 +2406,41 @@ performance change.
     `health_trend.rs` and `defect_calibration/validate.rs` also pin
     `WorkingTree`; whether a *historical* rev should be scored against today's
     working tree is a separate question this finding does not address.
+
+**Resolved as Option A, after the blast radius was measured rather than
+assumed.** The finding calls this a one-line fix and it is, but the line is not
+where it says: rather than overriding `clone_source` inside `run_code_health`,
+the default in `HealthScanCtx::head()` moves to `CloneSource::Head`. That is the
+actual defect — a constructor whose name and doc comment both say HEAD was
+setting the one field that read the working tree, while every other field
+resolved to a fact-store table.
+
+Changing a default that feeds eleven production call sites needed checking, and
+it held: **every caller that deliberately wants working-tree clones already
+states it explicitly**, and all three build the context as a full struct literal
+with no `..head()` spread, so none of them observe the default at all. Those are
+the gate projection in `change_set.rs` (which must see uncommitted duplication,
+and whose baseline already pinned `Head` so the two do not cancel), plus
+`health_trend.rs` and `defect_calibration/validate.rs` — the latter two with
+`include_clones: false`, making their clone source moot.
+
+Two call sites were contradicting their own labels and are fixed by the same
+line. `check`, per the documented split. And `calibrate-defects`, whose call
+reads `.context("HEAD code-health scan")` under an `eprintln!` announcing
+"scanning HEAD code-health" while `repo_path` points at the user's real repo —
+its output feeds a committed calibration artifact, so a dirty tree could bake
+uncommitted edits into shipped quantiles. That instance is not in the finding
+and is the more consequential of the two.
+
+`codelore diff` was investigated as a suspected third instance and cleared:
+`analyze_at_rev` sets `repo_path` to a throwaway worktree checked out at the
+rev, so the working tree *is* the rev and both clone sources describe the same
+content. The "code health at rev" call was never reading the user's tree.
+
+The equivalence ships as a test rather than a claim — one scan per clone source
+over a fixture whose worktree matches HEAD, comparing path, score, band and
+cognitive row by row, with an anti-vacuity guard on the row count. A second test
+pins the default, because the first compares two explicit contexts and would
+keep passing if the default silently reverted.
 
 The next sweep re-opens at **F321**.
