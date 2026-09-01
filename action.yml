@@ -46,6 +46,12 @@ outputs:
   version-used:
     description: 'The actual codelore version that was downloaded (resolved from `latest` or pinned).'
     value: ${{ steps.install.outputs.version }}
+  result:
+    description: 'For command: check/gate — the gate verdict the binary writes to its step output: pass or fail. Empty for command: analyze/diff, which emit no verdict.'
+    value: ${{ steps.run.outputs.result }}
+  violations:
+    description: 'For command: check/gate — the number of gate violations behind the verdict. Empty for command: analyze/diff.'
+    value: ${{ steps.run.outputs.violations }}
 
 runs:
   using: 'composite'
