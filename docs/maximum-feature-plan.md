@@ -300,7 +300,7 @@ After all three tiers: offline-installable PWA, full-citation static docs, opera
 
 ## 8. Deliberately out of scope
 
-Per the [borrow-or-build principle](roadmap-v1.x-and-beyond.md#borrow-or-build-principle-applies-to-every-feature-evaluation) and the [`project_git_only_scope` memory](../../.claude/memory/project_git_only_scope.md):
+Per the [borrow-or-build principle](roadmap-v1.x-and-beyond.md#borrow-or-build-principle-applies-to-every-feature-evaluation) and the `project_git_only_scope` project rule:
 
 | Out-of-scope feature | Why | Memory anchor |
 |---|---|---|
@@ -392,7 +392,7 @@ Every choice in this plan is the modern primitive for its category:
 | Shell completions | `clap_complete` (derive) | hand-written completion files | Single source of truth, auto-updates |
 | Tree walks | tree-sitter 0.25 LANGUAGE API + single TreeCursor (F45) | per-node `node.walk()` allocation | Validated; ships today |
 
-Per the [`feedback_modernize_dont_migrate`](../../.claude/memory/feedback_modernize_dont_migrate.md) memory: defaults are *modern*, with backward-compat shims only when explicitly required.
+Per the `feedback_modernize_dont_migrate` memory: defaults are *modern*, with backward-compat shims only when explicitly required.
 
 ---
 
@@ -415,4 +415,4 @@ All open Active F-findings (F89, F91, F93, F94, F95, F96, F99–F106) sit in `de
 
 The fact that **27 substantial features fit into 18 days with zero stack changes** is the architectural proof. v0.5.0's stack migration (Tailwind v4 + DaisyUI 5 + Alpine.js + ECharts 6 + SHA-pinned single-file SPA) was the necessary investment to make this plan possible — without that foundation, every Tier 1+2 item would have required new dependencies, new build steps, or legacy primitives. The maintainer's discipline on the stack pays the dividend here: this is the broadest aligned feature set CodeLore can ship at this point in its lifecycle, and every line of it traces to a source-quote-verified architectural seam.
 
-Per the [`feedback_improve_during_validation`](../../.claude/memory/feedback_improve_during_validation.md) memory: validation is when scope is refined. The 18-day plan above is the *refined* scope after the validation pass — the brainstorm version was ~60 features; the filter that landed at 27 is the verifiable-alignment filter.
+Per the `feedback_improve_during_validation` memory: validation is when scope is refined. The 18-day plan above is the *refined* scope after the validation pass — the brainstorm version was ~60 features; the filter that landed at 27 is the verifiable-alignment filter.

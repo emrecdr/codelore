@@ -777,7 +777,7 @@ underlying citations:
 The detailed migration map between code-maat output and CodeLore
 output is in `README.md`'s "Migrating from code-maat" section. The
 philosophy (modernise, don't migrate) is in
-[`feedback_modernize_dont_migrate`](../.devt/memory/feedback_modernize_dont_migrate.md).
+`feedback_modernize_dont_migrate`.
 
 ---
 

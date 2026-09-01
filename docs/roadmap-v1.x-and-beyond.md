@@ -33,7 +33,7 @@ SonarQube, CHM / code-health-meter, jscpd, etc.):
   Brand promise: every metric is peer-reviewed-grounded.
 
 This rule applies retroactively too — past code-maat borrowing was done
-on this basis ([feedback memory: modernize-dont-migrate](../../.claude/memory/feedback_modernize_dont_migrate.md)).
+on this basis (per the `feedback_modernize_dont_migrate` project rule).
 
 ---
 
@@ -166,7 +166,7 @@ Forward-looking exclusions surfaced from competitive + literature audits. Each e
 
 ### LLM-based PR Refactoring Agent
 
-CodeScene v7.5.0 combines AI-assisted refactoring with a local deterministic CodeHealth MCP server to auto-fix PRs ([CodeScene changelog](https://community.codescene.com/changelog), [CodeScene blog](https://codescene.com/blog/deterministic-pr-refactoring-agents), [Code Health MCP](https://codescene.com/product/code-health-mcp)). Well-engineered for their SaaS product surface. CodeLore declines because the README's stated brand is "no LLM-based scoring" + CLI-only / self-contained-SPA — auto-fix requires a SaaS or persistent agent runtime. Anchored by [`feedback_no_copypaste_features`](../../.claude/memory/feedback_no_copypaste_features.md).
+CodeScene v7.5.0 combines AI-assisted refactoring with a local deterministic CodeHealth MCP server to auto-fix PRs ([CodeScene changelog](https://community.codescene.com/changelog), [CodeScene blog](https://codescene.com/blog/deterministic-pr-refactoring-agents), [Code Health MCP](https://codescene.com/product/code-health-mcp)). Well-engineered for their SaaS product surface. CodeLore declines because the README's stated brand is "no LLM-based scoring" + CLI-only / self-contained-SPA — auto-fix requires a SaaS or persistent agent runtime. Anchored by `feedback_no_copypaste_features`.
 
 ### Synthetic "4-factor" composite score (Code Health + Knowledge Distribution + Team/Code Alignment + Delivery)
 
@@ -182,7 +182,7 @@ The most-cited recent qualitative work on the topic — Heath's 2025 OSS Burnout
 
 ### Louvain modularity Q as parallel community-detection pipeline
 
-The Code Health Meter paper ([CHM, ACM TOSEM 2025, DOI 10.1145/3737670](https://dl.acm.org/doi/10.1145/3737670)) ships a 6-dimensional module signature with Louvain modularity as an "architectural soundness" score. CodeLore already ships Leiden communities — a strict improvement (no resolution-limit pathology, deterministic, peer-reviewed superior partition quality). Adding a second community-detection pipeline for a 6D composite would (a) violate [`feedback_use_existing_conventions`](../../.claude/memory/feedback_use_existing_conventions.md) (no parallel patterns), (b) confuse users about which output to trust when Leiden and Louvain disagree on a partition, (c) most of CHM's other dimensions (Maintainability Index, Cyclomatic Complexity, duplication) are already covered by CodeLore's tree-sitter complexity scan + AST-hash clone detection. Skip.
+The Code Health Meter paper ([CHM, ACM TOSEM 2025, DOI 10.1145/3737670](https://dl.acm.org/doi/10.1145/3737670)) ships a 6-dimensional module signature with Louvain modularity as an "architectural soundness" score. CodeLore already ships Leiden communities — a strict improvement (no resolution-limit pathology, deterministic, peer-reviewed superior partition quality). Adding a second community-detection pipeline for a 6D composite would (a) violate `feedback_use_existing_conventions` (no parallel patterns), (b) confuse users about which output to trust when Leiden and Louvain disagree on a partition, (c) most of CHM's other dimensions (Maintainability Index, Cyclomatic Complexity, duplication) are already covered by CodeLore's tree-sitter complexity scan + AST-hash clone detection. Skip.
 
 ### AI-attribution productivity-impact / "AI-code ages differently" columns
 

@@ -539,7 +539,7 @@ Total worst-case growth at 5000-file repos: ~200 KB on a typical SPA payload of 
                         sparkline)
 ```
 
-The first-pass branch closes three F-findings (F90, F97, F98) as side effects of phases A/C/A respectively. This is the [feedback_improve_during_validation](../../.claude/memory/feedback_improve_during_validation.md) principle in action: implementing the new feature is the right moment to retire the old open finding because they share the same code surface.
+The first-pass branch closes three F-findings (F90, F97, F98) as side effects of phases A/C/A respectively. This is the `feedback_improve_during_validation` principle in action: implementing the new feature is the right moment to retire the old open finding because they share the same code surface.
 
 | Day | Items | Cumulative parity |
 |---|---|---|
@@ -572,11 +572,11 @@ Applying the [borrow-or-build principle](roadmap-v1.x-and-beyond.md#borrow-or-bu
 
 | CodeScene feature | Why not | Project memory |
 |---|---|---|
-| Inter-Project Dashboard | Multi-repo aggregation; CodeLore is single-repo by design | [`project_git_only_scope`](../../.claude/memory/project_git_only_scope.md) |
+| Inter-Project Dashboard | Multi-repo aggregation; CodeLore is single-repo by design | `project_git_only_scope` |
 | Sub-system / Service Evolution Monitor (TV mode) | Real-time updating; requires `codelore serve` | Deferred to roadmap v0.5.x phase 5.1 |
 | Goals / OKR tracking | Requires persistent server state | Out of scope; CodeLore is stateless |
 | Auto-detected "Early Warnings" | Vague composite without a clear single-signal definition | Would dilute the "every metric is peer-reviewed-grounded" brand |
-| Force-directed coupling graph as a *separate* widget | The sankey + this plan's arc overlay cover the same signal | [`feedback_validate_assumptions`](../../.claude/memory/feedback_validate_assumptions.md) — don't add redundant views |
+| Force-directed coupling graph as a *separate* widget | The sankey + this plan's arc overlay cover the same signal | `feedback_validate_assumptions` — don't add redundant views |
 
 ---
 
