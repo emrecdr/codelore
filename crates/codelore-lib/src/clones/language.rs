@@ -30,12 +30,15 @@ pub enum CloneLanguage {
 impl CloneLanguage {
     /// Map a file extension to its `CloneLanguage`. Returns `None` for
     /// non-Tier-1 files (we silently skip them during the clone pass).
+    /// Case-insensitive, `.pyi` included: stub functions carry `...` bodies
+    /// whose fingerprints fall below the node-count floor, so parity with
+    /// the complexity dispatcher costs no clone noise in practice.
     #[must_use]
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?;
-        match ext {
+        match ext.to_ascii_lowercase().as_str() {
             "rs" => Some(Self::Rust),
-            "py" => Some(Self::Python),
+            "py" | "pyi" => Some(Self::Python),
             "java" => Some(Self::Java),
             // tree-sitter-javascript's grammar accepts JSX natively, so
             // `.jsx` shares the JavaScript variant. This matches what the
