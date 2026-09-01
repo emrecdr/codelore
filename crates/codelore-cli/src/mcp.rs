@@ -769,10 +769,24 @@ impl CodeLoreServer {
         let filter_path = params.0.path.clone();
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
         self.blocking(move || {
-            memoized(&memo, &repo_path, "code_health", &params_json, |repo, head| {
+            // Fold the calibration-artifact identity into the memo key: the
+            // scores depend on that artifact's weights, and it can be
+            // regenerated without moving HEAD (see [`calibration_key_fragment`]).
+            let memo_input = format!(
+                "{params_json}\u{1f}{}",
+                calibration_key_fragment(defect_calibration.as_deref())
+            );
+            memoized(&memo, &repo_path, "code_health", &memo_input, |repo, head| {
+                // The server-resolved calibration threads into the analysis so
+                // this result matches a `codelore analyze --analysis code-health`
+                // run under the same startup flag (mirrors `check_gates`).
                 let opts = Options {
                     repo_path: repo_path.clone(),
+                    defect_calibration: defect_calibration.clone(),
+                    allow_foreign_calibration,
                     ..Options::default()
                 };
                 // A path outside the analyzed-file universe is a caller error, not
@@ -967,15 +981,30 @@ impl CodeLoreServer {
         let memo = self.memo.clone();
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
         self.blocking(move || {
+            // Fold the calibration-artifact identity into the memo key: the
+            // ranking's code-health component depends on that artifact's
+            // weights, and it can be regenerated without moving HEAD (see
+            // [`calibration_key_fragment`]).
+            let memo_input = format!(
+                "{params_json}\u{1f}{}",
+                calibration_key_fragment(defect_calibration.as_deref())
+            );
             memoized(
                 &memo,
                 &repo_path,
                 "refactoring_targets",
-                &params_json,
+                &memo_input,
                 |repo, head| {
+                    // The server-resolved calibration threads into the inner
+                    // code-health pass so this ranking matches a CLI run under
+                    // the same startup flag (mirrors `check_gates`).
                     let opts = Options {
                         repo_path: repo_path.clone(),
+                        defect_calibration: defect_calibration.clone(),
+                        allow_foreign_calibration,
                         ..Options::default()
                     };
                     let db =
@@ -1279,6 +1308,8 @@ impl CodeLoreServer {
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let cap = resolve_row_cap(params.0.limit);
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
         // Deliberately not memoized: the fusion joins the external-findings
         // sidecar, an on-disk store rewritten by `codelore ingest-sarif` with no
         // change to HEAD, and the DuckDB-backed sidecar exposes no cheap content
@@ -1301,8 +1332,13 @@ impl CodeLoreServer {
                 return serde_json::to_string(&note).map_err(internal);
             };
 
+            // The server-resolved calibration threads into the inner
+            // code-health pass so the fused bands match a CLI run under the
+            // same startup flag (mirrors `check_gates`).
             let opts = Options {
                 repo_path: repo_path.clone(),
+                defect_calibration,
+                allow_foreign_calibration,
                 ..Options::default()
             };
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
