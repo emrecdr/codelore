@@ -45,7 +45,7 @@ fn corpus() -> Corpus {
 
 /// Per-class corpus composition. Published in `docs/narrative-evidence-v1.md`;
 /// update both together.
-const EXPECTED_CLASS_COUNTS: [(&str, usize); 11] = [
+const EXPECTED_CLASS_COUNTS: [(&str, usize); 12] = [
     ("clean", 16),
     ("fabricated-value", 6),
     ("sign-inversion", 3),
@@ -57,6 +57,7 @@ const EXPECTED_CLASS_COUNTS: [(&str, usize); 11] = [
     ("fp-ci-bound", 3),
     ("fp-ordinal-percentile", 3),
     ("fp-derived-arithmetic", 3),
+    ("fp-function-span", 3),
 ];
 
 #[test]
@@ -80,11 +81,11 @@ fn corpus_entries_are_well_formed_and_match_their_pinned_verdicts() {
             entry.id,
             entry.lens
         );
-        assert_eq!(
-            entry.source, "authored",
-            "{}: v1 corpus entries are authored; model-generated entries use \
-             source \"model:<id>\" and join these assertions when collected",
-            entry.id
+        assert!(
+            entry.source == "authored" || entry.source.starts_with("model:"),
+            "{}: source must be \"authored\" or \"model:<id>\", got {}",
+            entry.id,
+            entry.source
         );
         assert!(!entry.notes.is_empty(), "{}: notes are mandatory", entry.id);
 
@@ -141,13 +142,13 @@ fn confusion_matrix_matches_the_published_numbers() {
 
     let expected: BTreeMap<&str, usize> = EXPECTED_CLASS_COUNTS.into_iter().collect();
     assert_eq!(class_counts, expected, "corpus composition moved");
-    assert_eq!(corpus.entries.len(), 56, "corpus size moved");
+    assert_eq!(corpus.entries.len(), 59, "corpus size moved");
 
     // Published in docs/narrative-evidence-v1.md §"Checker behavior on the
     // labelled corpus" — update the doc with any change here.
     assert_eq!(
         (tn, fp, tp, fn_),
-        (16, 16, 9, 15),
+        (16, 19, 9, 15),
         "confusion matrix (tn, fp, tp, fn) moved"
     );
 }
@@ -174,7 +175,7 @@ fn blind_spot_incidence_matches_the_published_numbers() {
     // update the doc with any change here.
     assert_eq!(
         (exempt_entries, exempt_tokens),
-        (17, 19),
+        (20, 28),
         "small-int exemption incidence moved"
     );
     assert_eq!(
