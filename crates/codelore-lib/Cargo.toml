@@ -57,7 +57,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 arrow = "59.1"
-gix = { version = "0.86", features = ["max-performance", "blob-diff"] }
+gix = { version = "0.87", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10505.0", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
