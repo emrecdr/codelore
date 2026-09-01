@@ -1243,7 +1243,13 @@ fn mcp_code_health_and_refactoring_targets_follow_the_server_defect_calibration(
         "code_health",
     );
     let base_rt = assert_tool_ok(
-        &call_tool(&mut stdin, &mut reader, 2, "refactoring_targets", &json!({})),
+        &call_tool(
+            &mut stdin,
+            &mut reader,
+            2,
+            "refactoring_targets",
+            &json!({}),
+        ),
         "refactoring_targets",
     );
     drop(stdin);
@@ -1262,7 +1268,13 @@ fn mcp_code_health_and_refactoring_targets_follow_the_server_defect_calibration(
         "code_health",
     );
     let cal_rt = assert_tool_ok(
-        &call_tool(&mut stdin, &mut reader, 2, "refactoring_targets", &json!({})),
+        &call_tool(
+            &mut stdin,
+            &mut reader,
+            2,
+            "refactoring_targets",
+            &json!({}),
+        ),
         "refactoring_targets",
     );
     drop(stdin);
