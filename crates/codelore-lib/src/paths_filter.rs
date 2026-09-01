@@ -123,3 +123,104 @@ pub fn is_git_metadata(rel_path: &Path) -> bool {
         .and_then(|c| c.as_os_str().to_str())
         == Some(".git")
 }
+
+// `tempfile`-backed like every fixture-writing unit module in this crate,
+// hence the `test-support` gate.
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use std::path::Path;
+
+    use super::{PathsFilter, is_git_metadata};
+    use crate::Options;
+
+    /// Build a filter over a tempdir seeded with the given ignore-family
+    /// files (`(rel_path, contents)`), plus `--exclude` patterns.
+    fn filter_with(
+        files: &[(&str, &str)],
+        exclude: &[&str],
+        include_ignored: bool,
+    ) -> (tempfile::TempDir, PathsFilter) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (rel, contents) in files {
+            let path = dir.path().join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(&path, contents).expect("write ignore file");
+        }
+        let opts = Options {
+            repo_path: dir.path().to_path_buf(),
+            exclude_patterns: exclude.iter().map(ToString::to_string).collect(),
+            include_ignored,
+            ..Options::default()
+        };
+        let filter = PathsFilter::from_opts(&opts).expect("build filter");
+        (dir, filter)
+    }
+
+    #[test]
+    fn gitignore_rules_apply_including_negation_and_ancestors() {
+        let (_dir, f) = filter_with(&[(".gitignore", "dist/\n*.log\n!keep.log\n")], &[], false);
+        // Directory-only rule excludes descendants via ancestor matching.
+        assert!(f.is_excluded(Path::new("dist/bundle.js"), false));
+        assert!(f.is_excluded(Path::new("debug.log"), false));
+        // Negation wins over the earlier wildcard, per gitignore semantics.
+        assert!(!f.is_excluded(Path::new("keep.log"), false));
+        assert!(!f.is_excluded(Path::new("src/main.rs"), false));
+    }
+
+    #[test]
+    fn git_info_exclude_applies_like_gitignore() {
+        // Untracked local-only ignore list — the load-bearing cache-key
+        // source (see `Options::canonical_json`): nothing else about a run
+        // moves when it is edited.
+        let (_dir, f) = filter_with(&[(".git/info/exclude", "scratch.txt\n")], &[], false);
+        assert!(f.is_excluded(Path::new("scratch.txt"), false));
+        assert!(!f.is_excluded(Path::new("src/lib.rs"), false));
+    }
+
+    #[test]
+    fn codeloreignore_extends_the_gitignore_set() {
+        let (_dir, f) = filter_with(
+            &[(".gitignore", "dist/\n"), (".codeloreignore", "locales/\n")],
+            &[],
+            false,
+        );
+        assert!(f.is_excluded(Path::new("dist/x.js"), false));
+        assert!(f.is_excluded(Path::new("locales/de.json"), false));
+        assert!(!f.is_excluded(Path::new("src/lib.rs"), false));
+    }
+
+    #[test]
+    fn include_ignored_disables_the_ignore_family_but_not_exclude_globs() {
+        let (_dir, f) = filter_with(
+            &[(".gitignore", "dist/\n"), (".codeloreignore", "locales/\n")],
+            &["**/*.gen.rs"],
+            true,
+        );
+        assert!(!f.is_excluded(Path::new("dist/x.js"), false));
+        assert!(!f.is_excluded(Path::new("locales/de.json"), false));
+        // `--exclude` is an explicit user instruction, not gitignore-derived
+        // — `--include-ignored` must not neuter it.
+        assert!(f.is_excluded(Path::new("src/api.gen.rs"), false));
+    }
+
+    #[test]
+    fn exclude_globs_match_as_plain_globset() {
+        let (_dir, f) = filter_with(&[], &["**/*.min.js", "vendor/**"], false);
+        assert!(f.is_excluded(Path::new("assets/app.min.js"), false));
+        assert!(f.is_excluded(Path::new("vendor/lib/x.c"), false));
+        assert!(!f.is_excluded(Path::new("src/app.js"), false));
+    }
+
+    #[test]
+    fn git_metadata_is_only_the_top_level_git_directory() {
+        assert!(is_git_metadata(Path::new(".git/config")));
+        assert!(is_git_metadata(Path::new(".git/objects/ab/cdef")));
+        // `.gitignore` starts with `.git` as a *string* but is a different
+        // first component; a nested `.git` under a vendored tree is not
+        // this repository's metadata.
+        assert!(!is_git_metadata(Path::new(".gitignore")));
+        assert!(!is_git_metadata(Path::new("vendor/.git/config")));
+    }
+}

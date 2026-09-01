@@ -82,7 +82,7 @@ pub fn evidence_for_path(
     Ok(rows)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     use crate::Options;

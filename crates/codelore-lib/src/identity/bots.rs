@@ -186,7 +186,7 @@ pub fn ai_attribution_with(
     "human"
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
 

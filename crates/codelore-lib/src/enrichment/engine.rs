@@ -165,7 +165,7 @@ fn fact_digest(fact_sheet_text: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::{NarrativeResult, SheetFacts, narrate, stamp};
     use crate::Result;

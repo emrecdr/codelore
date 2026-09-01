@@ -706,7 +706,7 @@ impl Default for Options {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::Options;
 

@@ -561,7 +561,7 @@ pub fn resolve_defect_calibration(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
 
