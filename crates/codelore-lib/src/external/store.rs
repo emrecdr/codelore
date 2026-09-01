@@ -8,8 +8,8 @@
 //! touched by automatic eviction.
 //!
 //! Each [`ExternalStore`] owns its own `duckdb::Connection`. The connection
-//! is `!Send + !Sync` — same constraint as `FactsDb`. Callers must keep the
-//! store on the thread that created it.
+//! is `!Sync`, and its statements borrow it and are `!Send` — same constraint
+//! as `FactsDb`. Callers must keep the store on the thread that created it.
 //!
 //! ## Read-only readers, single read-write writer
 //!
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS external_findings (
 );
 ";
 
-/// Sidecar `DuckDB` store owning its own `!Send + !Sync` `Connection`.
+/// Sidecar `DuckDB` store owning its own single-threaded `Connection`.
 pub struct ExternalStore {
     conn: Connection,
     /// Path to the `.duckdb-ext` file (used in error messages).

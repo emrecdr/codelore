@@ -40,7 +40,7 @@ graph TD
 
 ### Producer / consumer split
 
-DuckDB's `Connection` is `!Send + !Sync` (interior mutability via `RefCell`). To get parallelism without violating that constraint, the ingest path is event-sourced:
+DuckDB's `Connection` is `!Sync` (interior mutability via `RefCell`), and the `Appender`/`Statement` handles borrow it, making them `!Send` — so the connection and everything prepared on it stay on one thread by design. To get parallelism around that single-threaded core, the ingest path is event-sourced:
 
 - The **producer** walks the repo on a background thread and posts `CommitEvent` messages to a bounded `crossbeam-channel`. The walk reads metadata + per-commit changed-file lists; it does not touch DuckDB.
 - The **consumer** runs on the main connection-owning thread, draining the channel and batch-inserting via DuckDB's `Appender` API.

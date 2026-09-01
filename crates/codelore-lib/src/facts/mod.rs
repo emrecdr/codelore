@@ -77,7 +77,8 @@ pub struct FactsDb {
     /// (in its `memo` module) and reaches through [`Self::analysis_memo`],
     /// which lazily inserts one `T` per connection and hands back a shared
     /// `Rc<T>`. `RefCell` + `Rc<dyn Any>` (not a `Mutex`/`Arc`) because the
-    /// `DuckDB` `Connection` is `!Send + !Sync` and every analysis runs on the
+    /// `DuckDB` `Connection` is `!Sync` (and its `Statement`s borrow it, so
+    /// they are `!Send`) and every analysis runs on the
     /// single connection-owning thread. This field names no `analyses` type.
     analysis_memos: std::cell::RefCell<
         std::collections::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>,
