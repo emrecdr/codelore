@@ -1,19 +1,5 @@
 # CodeLore
 
-<!-- Primary topic discovery row (mirrors code-maat's own GitHub topics). -->
-[![Topic: behavioral-code-analysis](https://img.shields.io/badge/topic-behavioral--code--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/behavioral-code-analysis)
-[![Topic: code-analysis-tool](https://img.shields.io/badge/topic-code--analysis--tool-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-analysis-tool)
-[![Topic: repository-mining](https://img.shields.io/badge/topic-repository--mining-7048e8?style=flat-square&logo=github)](https://github.com/topics/repository-mining)
-[![Topic: technical-debt](https://img.shields.io/badge/topic-technical--debt-7048e8?style=flat-square&logo=github)](https://github.com/topics/technical-debt)
-[![Topic: code-maat](https://img.shields.io/badge/topic-code--maat-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-maat)
-
-<!-- Tech-stack + secondary discovery row -->
-[![Topic: rust](https://img.shields.io/badge/topic-rust-dea584?style=flat-square&logo=rust)](https://github.com/topics/rust)
-[![Topic: sarif](https://img.shields.io/badge/topic-sarif-7048e8?style=flat-square&logo=github)](https://github.com/topics/sarif)
-[![Topic: clone-detection](https://img.shields.io/badge/topic-clone--detection-7048e8?style=flat-square&logo=github)](https://github.com/topics/clone-detection)
-[![Topic: hotspot-analysis](https://img.shields.io/badge/topic-hotspot--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/hotspot-analysis)
-[![Topic: developer-tools](https://img.shields.io/badge/topic-developer--tools-7048e8?style=flat-square&logo=github)](https://github.com/topics/developer-tools)
-
 <!-- Live status + release + license meta -->
 [![CI](https://img.shields.io/github/actions/workflow/status/emrecdr/codelore/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/emrecdr/codelore/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/emrecdr/codelore?style=flat-square)](https://github.com/emrecdr/codelore/releases/latest)
@@ -21,6 +7,8 @@
 [![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 
 > **Read the lore of your codebase.**
+
+CodeLore mines your git history into hotspots, ownership risk, and architectural decay — locally, in seconds.
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
@@ -35,6 +23,94 @@ A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/a
 <p align="center"><a href="#quick-start">Quick start</a> · <a href="#the-analyses">The analyses</a> · <a href="#interactive-dashboard---format-spa">Interactive dashboard</a> · <a href="#agent-integration">MCP / agent integration</a> · <a href="#migrating-from-code-maat">Migrating from code-maat</a> · <a href="https://emrecdr.github.io/codelore/">Project site</a></p>
 
 ---
+
+## Quick start
+
+Pick whichever fits your machine:
+
+```bash
+# Homebrew (macOS or Linuxbrew, arm64 or x86_64):
+brew install emrecdr/codelore/codelore
+
+# Prebuilt binary via cargo-binstall (any Rust dev environment):
+cargo binstall codelore
+
+# From crates.io (Rust 1.96+ toolchain required). Compiles the bundled
+# DuckDB from source, so it's slower than Homebrew or cargo-binstall
+# above — those stay the recommended fast path:
+cargo install codelore
+
+# ...WITH the optional interactive dashboard emitter (`--format spa` —
+# Apache ECharts + d3-hierarchy fetched once at build time, SHA-pinned).
+# Requires internet on first build:
+cargo install codelore --features spa
+
+# Development build straight from the repo (same from-source compile):
+cargo install --git https://github.com/emrecdr/codelore codelore
+
+# Container (distroless; the entrypoint is the codelore binary):
+docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest \
+    analyze --analysis hotspots --repo /repo
+```
+
+Or grab a prebuilt archive straight from a [GitHub Release](https://github.com/emrecdr/codelore/releases/latest) — five targets ship per tag (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA Build L3 provenance attached.
+
+Verify a download before trusting it. Pinning `--signer-workflow` is what makes the check meaningful — it asserts the attestation came from the dedicated signing workflow, which runs no build code, rather than from anywhere in the repository:
+
+```bash
+gh attestation verify codelore-<tag>-<target>.tar.gz \
+  --owner emrecdr \
+  --signer-workflow emrecdr/codelore/.github/workflows/attest-artifact.yml
+```
+
+The rest of this README assumes `codelore` is on your PATH — substitute `./target/release/codelore` if you skipped the install step.
+
+```bash
+# Your first analysis: the top 10 hotspots in any git repo
+codelore analyze --analysis hotspots --repo . --min-revs 5 --rows 10
+```
+
+Before the analysis runs, codelore prints a pre-flight banner to stderr (auto-suppressed when piped; suppress explicitly with `--no-banner`):
+
+```
+────────────────────────────────────────────────────────────────────────
+ codelore                                 gix · duckdb
+────────────────────────────────────────────────────────────────────────
+ Repo:     /Users/you/code/your-project
+ Branch:   main @ a891295
+ Analysis: hotspots  (min-revs=5, rows=10)
+ Status:   ✓ ready
+────────────────────────────────────────────────────────────────────────
+```
+
+The banner doubles as a fail-fast gate: if the path isn't a git repo, the repo has no commits, or `--output` points at a directory that doesn't exist, the banner renders `Status: ✗ <reason>` with a one-line `Hint:` and codelore exits non-zero — before spending 5–30 seconds on ingest you'd have to abort anyway.
+
+Output (CSV, the default, on stdout — pipeable into other tools):
+
+```
+entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct
+src/auth/session.rs,87,42.00,60.00,9.1837,-12.40,0.0312,low,18.39
+src/db/migrate.rs,54,28.00,71.20,4.6125,24.85,0.4157,moderate,0.00
+src/api/handlers.rs,38,18.00,80.36,2.4310,58.11,0.7982,high,4.17
+```
+
+- `cognitive-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction). This is the hotspots analysis's own inline proxy, distinct from the `code-health` analysis's composite score.
+- `hotspot-score ∈ [0, 10]` — higher = more pressing refactor candidate. `9.18` means "near the top of the curve on revisions × complexity × poor health" — the canonical "on fire" file.
+- `mi` / `mi-rank` / `mi-band` — Maintainability Index with a repo-relative percentile rank and band (`low` / `moderate` / `high`); banding is percentile-based because the literature's absolute MI thresholds misclassify real-world file sizes.
+- `ai-pct` — share of the file's revisions coming from AI-assistant-attributed commits.
+
+The top row is the file to look at first: high churn × high complexity × low code health = highest score.
+
+When the analysis completes, codelore prints a footer summary to stderr (same TTY suppression rules):
+
+```
+────────────────────────────────────────────────────────────────────────
+ ✓ hotspots completed in 4.3s
+────────────────────────────────────────────────────────────────────────
+```
+
+---
+
 
 ## Why you need this
 
@@ -212,93 +288,6 @@ codelore schema <row-type>          # JSON Schema 2020-12 emit
 This repository is gated by its own product: the `self-gate` CI job runs `codelore check` against the committed [`.codelore-thresholds.toml`](.codelore-thresholds.toml) on every push and pull request, and blocks the merge on a violation — the gates in this repo are the product's own output.
 
 **Behavioral×static fusion:** `codelore ingest-sarif --repo . scan.sarif` ingests findings from any SARIF 2.1.0 producer (CodeQL, Semgrep, clippy-sarif) into a per-repo sidecar that survives fact-store cache eviction. `codelore analyze --analysis finding-hotspot-overlap` then joins those findings with the hotspot and code-health signal, producing a priority label (`act-now` / `plan` / `note`) for each flagged file. The `max_findings_in_hot_files` gate in `.codelore-thresholds.toml` enforces a ceiling on `act-now` count in CI; the `finding_hotspot_overlap` MCP tool exposes the same table to AI agents.
-
----
-
-## Quick start
-
-Pick whichever fits your machine:
-
-```bash
-# Homebrew (macOS or Linuxbrew, arm64 or x86_64):
-brew install emrecdr/codelore/codelore
-
-# Prebuilt binary via cargo-binstall (any Rust dev environment):
-cargo binstall codelore
-
-# From crates.io (Rust 1.96+ toolchain required). Compiles the bundled
-# DuckDB from source, so it's slower than Homebrew or cargo-binstall
-# above — those stay the recommended fast path:
-cargo install codelore
-
-# ...WITH the optional interactive dashboard emitter (`--format spa` —
-# Apache ECharts + d3-hierarchy fetched once at build time, SHA-pinned).
-# Requires internet on first build:
-cargo install codelore --features spa
-
-# Development build straight from the repo (same from-source compile):
-cargo install --git https://github.com/emrecdr/codelore codelore
-
-# Container (distroless; the entrypoint is the codelore binary):
-docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest \
-    analyze --analysis hotspots --repo /repo
-```
-
-Or grab a prebuilt archive straight from a [GitHub Release](https://github.com/emrecdr/codelore/releases/latest) — five targets ship per tag (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA Build L3 provenance attached.
-
-Verify a download before trusting it. Pinning `--signer-workflow` is what makes the check meaningful — it asserts the attestation came from the dedicated signing workflow, which runs no build code, rather than from anywhere in the repository:
-
-```bash
-gh attestation verify codelore-<tag>-<target>.tar.gz \
-  --owner emrecdr \
-  --signer-workflow emrecdr/codelore/.github/workflows/attest-artifact.yml
-```
-
-The rest of this README assumes `codelore` is on your PATH — substitute `./target/release/codelore` if you skipped the install step.
-
-```bash
-# Your first analysis: the top 10 hotspots in any git repo
-codelore analyze --analysis hotspots --repo . --min-revs 5 --rows 10
-```
-
-Before the analysis runs, codelore prints a pre-flight banner to stderr (auto-suppressed when piped; suppress explicitly with `--no-banner`):
-
-```
-────────────────────────────────────────────────────────────────────────
- codelore                                 gix · duckdb
-────────────────────────────────────────────────────────────────────────
- Repo:     /Users/you/code/your-project
- Branch:   main @ a891295
- Analysis: hotspots  (min-revs=5, rows=10)
- Status:   ✓ ready
-────────────────────────────────────────────────────────────────────────
-```
-
-The banner doubles as a fail-fast gate: if the path isn't a git repo, the repo has no commits, or `--output` points at a directory that doesn't exist, the banner renders `Status: ✗ <reason>` with a one-line `Hint:` and codelore exits non-zero — before spending 5–30 seconds on ingest you'd have to abort anyway.
-
-Output (CSV, the default, on stdout — pipeable into other tools):
-
-```
-entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct
-src/auth/session.rs,87,42.00,60.00,9.1837,-12.40,0.0312,low,18.39
-src/db/migrate.rs,54,28.00,71.20,4.6125,24.85,0.4157,moderate,0.00
-src/api/handlers.rs,38,18.00,80.36,2.4310,58.11,0.7982,high,4.17
-```
-
-- `cognitive-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction). This is the hotspots analysis's own inline proxy, distinct from the `code-health` analysis's composite score.
-- `hotspot-score ∈ [0, 10]` — higher = more pressing refactor candidate. `9.18` means "near the top of the curve on revisions × complexity × poor health" — the canonical "on fire" file.
-- `mi` / `mi-rank` / `mi-band` — Maintainability Index with a repo-relative percentile rank and band (`low` / `moderate` / `high`); banding is percentile-based because the literature's absolute MI thresholds misclassify real-world file sizes.
-- `ai-pct` — share of the file's revisions coming from AI-assistant-attributed commits.
-
-The top row is the file to look at first: high churn × high complexity × low code health = highest score.
-
-When the analysis completes, codelore prints a footer summary to stderr (same TTY suppression rules):
-
-```
-────────────────────────────────────────────────────────────────────────
- ✓ hotspots completed in 4.3s
-────────────────────────────────────────────────────────────────────────
-```
 
 ---
 
@@ -734,3 +723,20 @@ CodeLore stands on the shoulders of:
 - The **gitoxide** team for proving pure-Rust git reads can outperform libgit2.
 - **DuckDB Labs** for shipping an embeddable columnar SQL engine that just works.
 - The **tree-sitter** project + Mozilla's `rust-code-analysis` for cross-language AST parsing.
+
+---
+
+<!-- Topic badges live down here so the pitch, screenshot and Quick start stay above the fold. -->
+<!-- Primary topic discovery row (mirrors code-maat's own GitHub topics). -->
+[![Topic: behavioral-code-analysis](https://img.shields.io/badge/topic-behavioral--code--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/behavioral-code-analysis)
+[![Topic: code-analysis-tool](https://img.shields.io/badge/topic-code--analysis--tool-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-analysis-tool)
+[![Topic: repository-mining](https://img.shields.io/badge/topic-repository--mining-7048e8?style=flat-square&logo=github)](https://github.com/topics/repository-mining)
+[![Topic: technical-debt](https://img.shields.io/badge/topic-technical--debt-7048e8?style=flat-square&logo=github)](https://github.com/topics/technical-debt)
+[![Topic: code-maat](https://img.shields.io/badge/topic-code--maat-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-maat)
+
+<!-- Tech-stack + secondary discovery row -->
+[![Topic: rust](https://img.shields.io/badge/topic-rust-dea584?style=flat-square&logo=rust)](https://github.com/topics/rust)
+[![Topic: sarif](https://img.shields.io/badge/topic-sarif-7048e8?style=flat-square&logo=github)](https://github.com/topics/sarif)
+[![Topic: clone-detection](https://img.shields.io/badge/topic-clone--detection-7048e8?style=flat-square&logo=github)](https://github.com/topics/clone-detection)
+[![Topic: hotspot-analysis](https://img.shields.io/badge/topic-hotspot--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/hotspot-analysis)
+[![Topic: developer-tools](https://img.shields.io/badge/topic-developer--tools-7048e8?style=flat-square&logo=github)](https://github.com/topics/developer-tools)
