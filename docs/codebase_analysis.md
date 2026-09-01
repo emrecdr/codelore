@@ -119,7 +119,17 @@ Spec §3.1 + Kamei et al. 2013 (TSE). Implemented as five SQL UPDATE passes afte
 4. **History**: `ndev`, `nuc`, `age` — hash-joined UPDATE…FROM passes (O(N²) correlated-subquery has been rewritten)
 5. **Experience**: `exp`, `rexp`, `sexp` — same pattern
 
-## 8. Quality posture
+## 8. Advisory enrichment layer
+
+Opt-in (`--llm`) narrative layer over the deterministic dossiers — strictly outside the scoring path: no module in `analyses`, `quality_gates`, or `facts` imports it, and the `enrichment_isolation_test` integration test guards that one-way arrow.
+
+- **`enrichment/fact_sheet.rs`** — deterministic per-file and per-diff fact sheets: ordered sections of pre-formatted values; the canonical text is both the model's prompt input and the narrative-cache key, and `numeric_values()` extracts the fact set the citation check matches against
+- **`enrichment/client.rs`** — two-dialect chat client (Anthropic-native + OpenAI-compatible), configured through the environment only (`CODELORE_LLM_*`); the default endpoint is a local OpenAI-compatible server, so nothing leaves the machine without an explicit configuration change
+- **`enrichment/engine.rs::narrate`** — cache-or-generate orchestration over a sidecar narrative cache; cached narratives are re-verified with the *current* checker on read, so checker improvements reach warm caches
+- **`enrichment/citation.rs::check_citations`** — the deterministic numeric citation check behind the `grounded ✓` / `⚠ contains uncited claims` stamp, with diagnostics surfacing its two numeric blind spots (`exempt_small_ints`, `percent_fallback_only`)
+- **Evidence**: the check's false-positive/false-negative behavior is measured on a labelled corpus replayed in CI (`enrichment_citation_corpus_test`), plus a first model study of a pinned 3B local model — [`docs/narrative-evidence-v1.md`](narrative-evidence-v1.md)
+
+## 9. Quality posture
 
 - **MSRV**: Rust 1.96+
 - **`unsafe_code = "forbid"`** in `clippy.toml` (forbidden across the whole workspace)
@@ -128,9 +138,10 @@ Spec §3.1 + Kamei et al. 2013 (TSE). Implemented as five SQL UPDATE passes afte
 - **Gates**: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspace --all-features`, `cargo deny check`
 - **Release pipeline** (`.github/workflows/release.yml`): hand-rolled multi-target `cargo build --release` matrix (5 targets — macOS arm64+x86_64, Linux arm64+x86_64-gnu, Windows x86_64-msvc), SLSA Build L3 provenance via `actions/attest` running in a separate trusted-signer job (`.github/workflows/attest-artifact.yml`) so the signing token is unreachable from the jobs that execute `build.rs`, distroless OCI container at `ghcr.io/emrecdr/codelore` (separate `container.yml`), Homebrew formula regenerated and pushed to `emrecdr/homebrew-codelore` via SSH deploy key, `cargo binstall` falls back to the standard GitHub-Release scan — all fire on `v*` tag push
 
-## 9. Related documents
+## 10. Related documents
 
 - [`docs/advanced-usage.md`](advanced-usage.md) — the 30-minute developer manual (every flag explained, every output format documented)
+- [`docs/narrative-evidence-v1.md`](narrative-evidence-v1.md) — measured evidence for the advisory layer's citation check and model behavior
 - [`docs/improvement_suggestions.md`](improvement_suggestions.md) — forward-looking improvement backlog
 - [`docs/roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) — prioritized roadmap of larger initiatives
 - [`docs/RELEASING.md`](RELEASING.md) — SemVer policy + release procedure
