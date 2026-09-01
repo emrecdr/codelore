@@ -2732,7 +2732,7 @@ cognitive rank never got it. Needs a semantics decision
 (exclude-with-disclosure recommended) before code.
 
 
-### F333 (Active) — files past the AST byte cap are invisible everywhere
+### F333 (Fixed — Unreleased) — files past the AST byte cap are invisible everywhere
 
 Over-cap skips return `ScanOutcome::NotCounted` (excluded from the coverage
 denominator by design), log at `debug!` under a default `warn` filter, and
@@ -2743,6 +2743,13 @@ reintroduced one classification to the left. Cheap fixes: a disclosed
 skipped-oversize count in the aggregate line, and a documentation paragraph;
 a bytes-per-line minified-file heuristic would close the sub-cap hole
 without touching the vendored parser.
+
+**Resolution (disclosure half)**: oversize skips are now their own tallied
+outcome — still outside the loss ratio — and each pass warns once when they
+outnumber the scanned files, with the predicate tested directly. The cap and
+both aggregate warnings are documented in the user guide. The bytes-per-line
+sub-cap heuristic remains open as the (b) half; it changes which files are
+scanned and deserves its own pass.
 
 
 ### F334 (Active) — `diff_hunks` is a required trait method with zero production callers

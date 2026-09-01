@@ -56,12 +56,24 @@ pub(super) enum ScanOutcome<T> {
     Lost(&'static str),
     /// Eligible, and the scan succeeded. The payload may be empty.
     Scored(T),
+    /// No row, none owed by the loss ratio — but unlike `NotCounted`, worth
+    /// counting: a file that *looks* like eligible source, skipped only for
+    /// its size (past the AST byte cap). Deliberately not a loss — the cap
+    /// exists to skip generated/minified bundles, and bundle-carrying
+    /// repositories skip some routinely — but tracked, because a scan where
+    /// these outnumber the scanned files reads as 100% covered over a
+    /// near-empty table, which is the reads-as-improvement failure mode one
+    /// classification to the left of the one the loss ratio removes.
+    SkippedOversize,
 }
 
 /// How much of the eligible file set a pass actually covered.
 pub(super) struct ScanCoverage {
     eligible: usize,
     scored: usize,
+    /// Files skipped past the AST byte cap — outside the loss ratio, inside
+    /// the majority-oversize disclosure.
+    skipped_oversize: usize,
     /// Skip counts by reason, most frequent first when rendered.
     by_reason: Vec<(&'static str, usize)>,
 }
@@ -69,12 +81,14 @@ pub(super) struct ScanCoverage {
 impl ScanCoverage {
     pub(super) fn tally<T>(outcomes: &[ScanOutcome<T>]) -> Self {
         let mut scored = 0usize;
+        let mut skipped_oversize = 0usize;
         let mut counts: std::collections::BTreeMap<&'static str, usize> =
             std::collections::BTreeMap::new();
         for o in outcomes {
             match o {
                 ScanOutcome::Scored(..) => scored += 1,
                 ScanOutcome::Lost(reason) => *counts.entry(reason).or_default() += 1,
+                ScanOutcome::SkippedOversize => skipped_oversize += 1,
                 ScanOutcome::NotCounted => {}
             }
         }
@@ -84,6 +98,7 @@ impl ScanCoverage {
         Self {
             eligible: scored + lost,
             scored,
+            skipped_oversize,
             by_reason,
         }
     }
@@ -134,6 +149,36 @@ impl ScanCoverage {
             pct = self.ratio() * 100.0,
         );
     }
+
+    /// True when more of what looked like source was size-skipped than
+    /// scanned. The loss ratio cannot see this case — oversize skips are
+    /// deliberately not losses — so it is the predicate the oversize
+    /// disclosure fires on. Its own tests call it directly, so the warning
+    /// and the tests cannot drift apart.
+    pub(super) fn oversize_majority(&self) -> bool {
+        self.skipped_oversize > self.scored
+    }
+
+    /// Emit one aggregate warning when the size cap, not scan failure, is
+    /// what left the table thin. Same `warn!` rationale as
+    /// [`Self::warn_if_degraded`]; fires only on a majority so the routine
+    /// bundle-carrying repository stays quiet.
+    pub(super) fn warn_if_mostly_oversize(&self, scan: &str, table: &str) {
+        if !self.oversize_majority() {
+            return;
+        }
+        tracing::warn!(
+            "{scan} scan skipped {skipped} file(s) past the {cap}-byte AST \
+             cap — more than the {scored} it scanned. `{table}` describes a \
+             minority of what looks like source in this repository: the cap \
+             exists to skip generated/minified bundles, but at this share the \
+             skipped set IS the repository. Exclude bundle directories via \
+             `.codeloreignore` so the census reflects maintained code.",
+            skipped = self.skipped_oversize,
+            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+            scored = self.scored,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -147,6 +192,38 @@ mod tests {
 
     fn scored(path: &str) -> Outcome {
         ScanOutcome::Scored(path.to_string())
+    }
+
+    #[test]
+    fn oversize_skips_stay_out_of_the_loss_ratio() {
+        let outcomes: Vec<Outcome> = vec![
+            scored("a.rs"),
+            ScanOutcome::SkippedOversize,
+            ScanOutcome::SkippedOversize,
+        ];
+        let cov = ScanCoverage::tally(&outcomes);
+        assert!(
+            (cov.ratio() - 1.0).abs() < 1e-12,
+            "an oversize skip is deliberately not a loss — the cap exists to \
+             skip bundles, and bundle-carrying repositories skip routinely"
+        );
+    }
+
+    #[test]
+    fn the_oversize_disclosure_fires_on_a_strict_majority() {
+        let majority = ScanCoverage::tally::<String>(&[
+            scored("a.rs"),
+            ScanOutcome::SkippedOversize,
+            ScanOutcome::SkippedOversize,
+        ]);
+        assert!(
+            majority.oversize_majority(),
+            "two skipped vs one scanned is a majority-blind table"
+        );
+        let tie = ScanCoverage::tally::<String>(&[scored("a.rs"), ScanOutcome::SkippedOversize]);
+        assert!(!tie.oversize_majority(), "a tie is not a majority");
+        let none = ScanCoverage::tally::<String>(&[scored("a.rs")]);
+        assert!(!none.oversize_majority());
     }
 
     #[test]

@@ -83,7 +83,7 @@ impl FactsDb {
                             size = code.len(),
                             cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                         );
-                        return Ok(ScanOutcome::NotCounted);
+                        return Ok(ScanOutcome::SkippedOversize);
                     }
                     // A file that fingerprints to nothing is still fully
                     // covered — it was read and walked, it simply holds no
@@ -95,13 +95,17 @@ impl FactsDb {
             )
             .collect::<Result<Vec<_>>>()?;
 
-        ScanCoverage::tally(&outcomes).warn_if_degraded("clone", "clones");
+        let coverage = ScanCoverage::tally(&outcomes);
+        coverage.warn_if_degraded("clone", "clones");
+        coverage.warn_if_mostly_oversize("clone", "clones");
 
         let all_fns: Vec<_> = outcomes
             .into_iter()
             .filter_map(|o| match o {
                 ScanOutcome::Scored(fns) => Some(fns),
-                ScanOutcome::NotCounted | ScanOutcome::Lost(_) => None,
+                ScanOutcome::NotCounted | ScanOutcome::SkippedOversize | ScanOutcome::Lost(_) => {
+                    None
+                }
             })
             .flatten()
             .collect();

@@ -86,7 +86,7 @@ impl FactsDb {
                             size = code.len(),
                             cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                         );
-                        return ScanOutcome::NotCounted;
+                        return ScanOutcome::SkippedOversize;
                     }
                     match extract_imports(&code, lang) {
                         Ok(imports) => ScanOutcome::Scored((rel, imports)),
@@ -99,7 +99,9 @@ impl FactsDb {
             )
             .collect();
 
-        ScanCoverage::tally(&outcomes).warn_if_degraded("import", "imports");
+        let coverage = ScanCoverage::tally(&outcomes);
+        coverage.warn_if_degraded("import", "imports");
+        coverage.warn_if_mostly_oversize("import", "imports");
 
         // Import-free files are covered but contribute no rows, so the drain
         // filters them out here rather than the classifier above.
