@@ -502,10 +502,16 @@ pub fn window_net_movement<R: Repo>(
     let head_fns = head_function_metrics(db, paths)?;
     let empty: FnMetrics = HashMap::new();
     let mut out = HashMap::with_capacity(paths.len());
+    // One warm reader for the whole pass: `read_blob_at` re-resolves the rev
+    // and re-decodes its root tree per call from a cold cache, and this loop
+    // reads every red file at the same rev.
+    let mut base_reader = window_start.map(|rev| repo.blob_reader_at(rev));
     for path in paths {
         let head = head_fns.get(path).unwrap_or(&empty);
-        let base =
-            window_start.map_or_else(FnMetrics::new, |rev| base_function_metrics(repo, rev, path));
+        let base = match (base_reader.as_mut(), window_start) {
+            (Some(reader), Some(rev)) => base_function_metrics(reader.as_mut(), rev, path),
+            _ => FnMetrics::new(),
+        };
         out.insert(path.clone(), net_movement(head, &base));
     }
     Ok(out)
@@ -516,14 +522,18 @@ pub fn window_net_movement<R: Repo>(
 /// size-cap, or parse failure yields an empty baseline (every function reads as
 /// added) rather than aborting the analysis, matching the at-rev scan's
 /// resilience contract.
-fn base_function_metrics<R: Repo>(repo: &R, rev: &str, path: &str) -> FnMetrics {
+fn base_function_metrics(
+    reader: &mut dyn crate::repo::BlobReader,
+    rev: &str,
+    path: &str,
+) -> FnMetrics {
     use crate::complexity::{Tier1Language, compute_for_file};
 
     let mut out: FnMetrics = HashMap::new();
     let Some(lang) = Tier1Language::from_path(path) else {
         return out;
     };
-    let source = match repo.read_blob_at(rev, path) {
+    let source = match reader.read(path) {
         Ok(Some(b)) => b,
         Ok(None) => return out,
         Err(e) => {
@@ -624,12 +634,16 @@ fn decompose_red_churn<R: Repo>(
 
     let mut improving_churn = 0.0_f64;
     let mut red_churn = 0.0_f64;
+    // Same warm-reader hoist as `window_net_movement`: every iteration reads
+    // at the one window-start rev.
+    let mut base_reader = window_start.as_deref().map(|rev| repo.blob_reader_at(rev));
     for (path, churn) in &per_file {
         red_churn += churn;
         let head = head_fns.get(path).unwrap_or(&empty_fns);
-        let base = window_start
-            .as_deref()
-            .map_or_else(FnMetrics::new, |rev| base_function_metrics(repo, rev, path));
+        let base = match (base_reader.as_mut(), window_start.as_deref()) {
+            (Some(reader), Some(rev)) => base_function_metrics(reader.as_mut(), rev, path),
+            _ => FnMetrics::new(),
+        };
         if file_improved(head, &base) {
             improving_churn += churn;
         }

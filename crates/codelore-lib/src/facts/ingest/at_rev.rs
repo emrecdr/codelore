@@ -59,17 +59,21 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
     let live_paths: Vec<String> = live_paths.to_vec();
     let rev_owned = rev.to_string();
 
-    // Phase 1 (parallel): read blob at `rev` + tree-sitter parse.
+    // Phase 1 (parallel): read blob at `rev` + tree-sitter parse. One
+    // `BlobReader` per rayon worker (`map_init`) resolves the rev's root
+    // tree once and keeps a warm object-decode cache — mirroring the
+    // at-rev import scan in `analyses/architecture_trend.rs`, whose comment
+    // names the per-call `read_blob_at` path as the worse offender.
     // Per-file errors are logged + skipped — a single unreadable file does
     // not abort the scan, matching the same resilience contract as the HEAD
     // pass.
     let batches: Vec<Option<(String, Vec<crate::complexity::ComplexityEntity>)>> = live_paths
         .into_par_iter()
         .map_init(
-            || (),
-            |_state, path| {
+            || repo.blob_reader_at(&rev_owned),
+            |reader, path| {
                 let lang = Tier1Language::from_path(&path)?;
-                let source = match repo.read_blob_at(&rev_owned, &path) {
+                let source = match reader.read(&path) {
                     Ok(Some(b)) => b,
                     Ok(None) => {
                         tracing::debug!(
