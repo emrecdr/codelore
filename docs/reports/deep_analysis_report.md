@@ -275,7 +275,7 @@ The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and
 
 ##### F215 — Stringly-typed `format: &str` re-matched with `unreachable!()`
 *   **Location**: `codelore-cli/src/analyze.rs` — one `unreachable!("format validated by outer matches!()")` arm
-*   **Severity**: LOW · **Category**: type-safety / simplification (optional) · **Status**: Active (largely overtaken)
+*   **Severity**: LOW · **Category**: type-safety / simplification (optional) · **Status**: Closed, not fixed — the §13 cluster note is authoritative: exactly one `unreachable!` site remains, small enough that `enum Format` no longer carries its own weight; F244 absorbs any future registry-level version
 *   **Description**: `--format` is validated once then re-matched in dispatch, carrying an `unreachable!("format validated…")` arm — a hand-maintained invariant a parse-once `enum Format` would make compile-time-total.
 *   **Re-validated**: the finding was written against `main.rs` when it was a ~6700-line monolith and claimed ~11 such dispatchers. The monolith split dissolved most of that: **exactly one** `unreachable!` remains in the whole CLI crate. What is left is a one-site cleanup, not the cross-cutting refactor this entry was deferred as — and small enough that the `enum Format` argument no longer carries its own weight. Re-scope or close.
 
@@ -447,7 +447,7 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 **2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119) and **F246** (canvas keyboard a11y); **F245** (widgets.js module split) landed this pass.
 
-The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9); its 0.27.0 re-verification added **F284–F286**. The next sweep should re-open with F-IDs starting at **F288**; F287 was logged out of cycle (see §9).
+The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9); its 0.27.0 re-verification added **F284–F286**. Later sweeps allocated onward from here; the live next-ID marker is the one at the ledger tail.
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
@@ -492,9 +492,10 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 `clones/fingerprint.rs` stores a single SHA-256 digest (zero similarity signal); MinHash+LSH needs a
 shingled representation = new ingest. Re-scope the roadmap's "~100 LOC" estimate before scheduling.
 
-**Pointer:** `calibrate_defects` temporal train/validation positive-leakage (fully diagnosed in
-`2026-07-28-hardening-cycle-3.md` §A2-1, reconfirmed HIGH cycle-4) remains open — a rigor defect
-inside the calibration-honesty machinery; don't drop it when triaging.
+**Pointer (stale, corrected):** the `calibrate_defects` temporal train/validation
+positive-leakage named here was subsequently **fixed** (hardening cycle 6, H3;
+see `2026-08-06-hardening-cycle-6.md` and the shipped CHANGELOG entry) — this
+pointer predates that fix and no longer marks open work.
 
 ---
 
@@ -672,8 +673,8 @@ turned out to be mis-stated by the reports that logged them.
 
 Validated against the shipped 0.26.0 binary, not inferred. This section is
 the F-ledger and the record of the pass; `2026-08-06-first-run-ux-review.md`
-carries only what is still open — F276, F278, F279's remaining instances, and
-the deferred thresholds scaffold that F276 blocks.
+carried the then-open set — F276 (since Refuted), F278 and F279 (since Fixed);
+only the deferred thresholds scaffold remains live from that list.
 
 ### F273 (Fixed — v0.27.1) — the cache key carried the repo path as the user typed it
 
@@ -2617,4 +2618,147 @@ divergence on every percentile-annotated surface.
 *   **Small and mechanical**, but it widens the MCP flag surface — recorded
     for a deliberate pass rather than fixed alongside F322.
 
-The next sweep re-opens at **F324**.
+### F324 (Fixed — Unreleased) — two at-rev scans still paid the cold per-blob path
+
+`ingest_complexity_at_rev` kept `map_init(|| ())` + per-file `read_blob_at`
+(per-call rev resolution + root-tree decode, cold cache) while its sibling
+import scan in `architecture_trend` had already adopted the warm per-worker
+reader and named the cold path "the worse offender". Cost: once per file per
+sampled revision on every `health-trend`/`architecture-trend` timeline and
+every defect-calibration validation pass. `effort_exposure`'s window-start
+baseline had the serial version: one cold read per red file, all at one rev,
+in two loops. All three sites now hoist a warm reader; byte-identical by the
+reader's own equivalence test.
+
+
+### F325 (Fixed — Unreleased) — delivery-friction aggregated raw paths
+
+The one path-aggregating analysis in its cohort with no lineage opt-in: its
+complexity axis routed through `grouped_complexity::source_table`, its churn
+axis read `FROM changes` by raw path, so a rename split revisions/lead-time/
+WIP history at the rename point. Now `materialize_if_needed` +
+`lineage::rewrite`, the `stale-code` shape. Output moves only where flagged
+files carry renames.
+
+
+### F326 (Fixed — Unreleased) — the two backends disagreed on `is_shallow`
+
+`GixRepo` reads the grafts file; `GitCliRepo` silently inherited the trait's
+`false` default despite having a cheap check available
+(`git rev-parse --is-shallow-repository`, correct for linked worktrees). It
+was also the one hint method with zero differential coverage. Both fixed: the
+override mirrors gix, and the differential suite gains a `--depth=1`-clone
+probe (via `file://`, since git ignores `--depth` on plain local paths) that
+is self-proving — the old default answers `false` and fails the equality.
+
+
+### F327 (Fixed — Unreleased) — twelve `tempfile` test modules broke the bare test invocation
+
+`tempfile` is optional behind `test-support`, yet twelve unit-test modules
+used it under bare `#[cfg(test)]` — so `cargo test -p codelore-lib` failed to
+compile before running anything (the documented symptom blamed only
+`options::tests`; the census found twelve). All now carry
+`#[cfg(all(test, feature = "test-support"))]` like the two modules that had
+it right. In the same change `paths_filter` — load-bearing for the cache key
+— gained its first direct tests: ignore-source precedence, negation,
+ancestor rules, the `--include-ignored`-must-not-neuter-`--exclude` boundary,
+and `is_git_metadata` first-component semantics.
+
+
+### F328 (Refuted) — "churn analyses silently ignore `--time-bucket`"
+
+The lead: `churn.rs` carries a private copy of the lineage dispatcher that
+lacks the `time_bucket` branch the shared `lineage::source_table` has.
+Refuted as a correctness bug: the CLI hard-rejects `--time-bucket` for any
+analysis outside coupling/soc/hotspots/code-health (`analyze.rs`), so the
+missing branch is unreachable. What survives is the DRY hazard — a private
+duplicate of a shared dispatcher is exactly how the next such flag diverges
+silently. Unifying churn onto `crate::analyses::lineage` remains a valid
+non-correctness cleanup.
+
+
+### F329 (Refuted) — "stale-code silently ignores `--min-revs`"
+
+The lead: `run_stale_code` records `min_revs` in its tracing span but never
+binds it, while sibling `code-age` binds it. Refuted: the documented contract
+(alive at HEAD ∧ untouched ≥ 12 months ∧ `max(cognitive) ≤ 5`) never
+promises a revision floor — and semantically must not have one, since rarely
+touched files are exactly the analysis's subject. Three other analyses carry
+`min_revs` in their spans unused as blanket telemetry convention; not a lie,
+a uniform field.
+
+
+### F330 (Active) — the knowledge-shares guard ignores the options it was built under
+
+`is_knowledge_shares_built` is a bare bool: the first caller's `opts`
+(window, lineage source) bake the temp tables, and later callers with
+different opts silently reuse them. Divergent per-analysis opts inside one
+dashboard build is a live pattern (`delivery_metrics` clones opts with
+`include_merges = true`). Needs validation of whether any current caller
+pair actually diverges on shares-affecting fields; the fix shape is the
+same as the lineage guard (key the guard on the inputs).
+
+
+### F331 (Active) — refactoring-targets leans on a biomarker-table side effect that call order barely protects
+
+`run_refactoring_targets` reads `code_health_biomarkers_v1` expecting the
+HEAD pass that its own `run_code_health` call materialised — but
+`health_trend`'s sampled passes `CREATE OR REPLACE` the same table with
+historical data, and in the SPA build the trend loop runs first. Correct
+today only because refactoring-targets re-materialises. Any future
+code-health memo that early-returns on a hit hands it the last trend
+sample's biomarkers. The memo (a real SPA-render win: five full passes per
+render today) must re-assert the temp table, or refactoring-targets must
+materialise explicitly.
+
+
+### F332 (Active) — hotspots scores unsupported-language files as perfectly healthy
+
+`joined` LEFT JOINs complexity and `COALESCE(fc.cognitive, 0)`, so a
+non-Tier-1 file enters the ranking with cognitive 0 → `pr_cx = 0`, score 0,
+`cognitive_health = 100`. The most-churned Go file in a polyglot repo ranks
+below every trivial Rust file and reads as a verdict, not a coverage gap —
+while `code-health`'s INNER JOIN silently *drops* the same file: two
+opposite silent semantics side by side. The `mi_rank` CTE already models the
+care needed ("files without an `mi` MUST NOT skew the distribution"); the
+cognitive rank never got it. Needs a semantics decision
+(exclude-with-disclosure recommended) before code.
+
+
+### F333 (Active) — files past the AST byte cap are invisible everywhere
+
+Over-cap skips return `ScanOutcome::NotCounted` (excluded from the coverage
+denominator by design), log at `debug!` under a default `warn` filter, and
+the cap appears nowhere in the docs. A bundle-heavy repository therefore
+reports 100% clone coverage over an empty `clones` table — the
+reads-as-improvement failure mode the coverage sentinel exists to prevent,
+reintroduced one classification to the left. Cheap fixes: a disclosed
+skipped-oversize count in the aggregate line, and a documentation paragraph;
+a bytes-per-line minified-file heuristic would close the sub-cap hole
+without touching the vendored parser.
+
+
+### F334 (Active) — `diff_hunks` is a required trait method with zero production callers
+
+Hunks attach inline during the walk (both backends), so `Repo::diff_hunks`
+is dead surface that every future backend must still implement and the
+differential suite still pays to cross-check. Adjacent divergence:
+`GitCliRepo::walk_commits` always emits `hunks: []` while `GixRepo`
+populates them, and no differential assertion compares the field — an
+unenforced corner of the parity guarantee. Needs a remove-or-repurpose
+decision; if removed, the differential hunk test retires with it, and if
+kept, the field comparison joins the gate.
+
+
+### F335 (Active) — the ignored-flag warning table trails the flag surface
+
+`ignored_flag_warnings` hand-lists 7 analysis-scoped flags; 9 more
+(the coupling and clone families) warn nothing when set on an unrelated
+analysis. Sibling paper cut: `CalibrateDefectsArgs::window_days` shares a
+name with `Options::window_days` under different ranges and semantics.
+Sibling structural gap: nothing ties `Gates`/`DiffGates` fields to
+evaluator branches or `RatchetMetrics` — a gate added to config but not the
+evaluator (or ratchet) fails nothing. One enforcement test per pair is the
+cheap form.
+
+The next sweep re-opens at **F336**.
