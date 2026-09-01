@@ -1104,9 +1104,32 @@ fn mcp_explain_file_returns_fact_sheet_and_narrative_error_without_llm() {
 /// `active_weights` (consulted by the dossier's code-health section)
 /// requires of a well-formed artifact.
 fn write_foreign_defect_artifact(dir: &std::path::Path) -> std::path::PathBuf {
+    use codelore_lib::defect_calibration::validate::default_weights;
+    write_foreign_defect_artifact_with(dir, default_weights())
+}
+
+/// A foreign artifact whose weights are a deliberate permutation of the
+/// defaults — the value column reversed across the canonical smell order,
+/// sum preserved — so any firing biomarker yields observably different
+/// structural risk than the built-in weights do.
+fn write_skewed_foreign_defect_artifact(dir: &std::path::Path) -> std::path::PathBuf {
+    use codelore_lib::defect_calibration::validate::default_weights;
+    let mut weights = default_weights();
+    let mut values: Vec<f64> = weights.iter().map(|(_, value)| *value).collect();
+    values.reverse();
+    for (slot, value) in weights.iter_mut().zip(values) {
+        slot.1 = value;
+    }
+    write_foreign_defect_artifact_with(dir, weights)
+}
+
+fn write_foreign_defect_artifact_with(
+    dir: &std::path::Path,
+    weights: Vec<(String, f64)>,
+) -> std::path::PathBuf {
     use codelore_lib::defect_calibration::{
         DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
-        ValidationMetrics, save, validate::default_weights,
+        ValidationMetrics, save,
     };
     let artifact = DefectArtifact {
         format_version: DEFECT_FORMAT_VERSION,
@@ -1126,7 +1149,7 @@ fn write_foreign_defect_artifact(dir: &std::path::Path) -> std::path::PathBuf {
             sample_dates: vec!["2026-01-01".to_string()],
             excluded_no_data: 0,
         },
-        weights: default_weights(),
+        weights,
         tuning: TuningDecision::DefaultsKept {
             reason: "insufficient evidence for weight tuning".to_string(),
             auc_validation_default: None,
@@ -1183,6 +1206,99 @@ fn mcp_explain_file_defect_calibration_adds_defect_evidence_section() {
 
     drop(stdin);
     let _ = child.wait();
+}
+
+/// Collect `path -> field` from a tool's row array.
+fn scores_by_path(rows: &Value, field: &str) -> std::collections::BTreeMap<String, f64> {
+    rows.as_array()
+        .expect("tool returns a row array")
+        .iter()
+        .filter_map(|row| Some((row["path"].as_str()?.to_string(), row[field].as_f64()?)))
+        .collect()
+}
+
+/// The server-level `--defect-calibration` must reach every tool whose result
+/// embeds code-health scores, not just `check_gates`/`explain_file`. Two
+/// servers over the same worsened fixture — one default, one with a
+/// weight-permuted artifact — must agree on the file set but disagree on at
+/// least one structural risk. Identical outputs would mean the artifact
+/// silently never reached the analysis (the exact regression this pins).
+#[test]
+fn mcp_code_health_and_refactoring_targets_follow_the_server_defect_calibration() {
+    let repo = delivery_repo::build();
+    let root = repo.dir.path();
+    let repo_path = root.to_str().unwrap();
+    // Biomarkers are what the weights weigh: commit a fired biomarker (the
+    // monster) plus the cohort the per-language rank needs, or both servers
+    // would agree trivially at structural_risk = 0.
+    worsen_file(root, "src/core.rs");
+    commit_cohort_fillers(root, 10);
+
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = write_skewed_foreign_defect_artifact(artifact_dir.path());
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let base_ch = assert_tool_ok(
+        &call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({})),
+        "code_health",
+    );
+    let base_rt = assert_tool_ok(
+        &call_tool(
+            &mut stdin,
+            &mut reader,
+            2,
+            "refactoring_targets",
+            &json!({}),
+        ),
+        "refactoring_targets",
+    );
+    drop(stdin);
+    let _ = child.wait();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp_with_args(
+        repo_path,
+        &[
+            "--defect-calibration",
+            artifact_path.to_str().unwrap(),
+            "--allow-foreign-calibration",
+        ],
+    );
+    let cal_ch = assert_tool_ok(
+        &call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({})),
+        "code_health",
+    );
+    let cal_rt = assert_tool_ok(
+        &call_tool(
+            &mut stdin,
+            &mut reader,
+            2,
+            "refactoring_targets",
+            &json!({}),
+        ),
+        "refactoring_targets",
+    );
+    drop(stdin);
+    let _ = child.wait();
+
+    for (tool, base_rows, cal_rows) in [
+        ("code_health", &base_ch, &cal_ch),
+        ("refactoring_targets", &base_rt, &cal_rt),
+    ] {
+        let base = scores_by_path(base_rows, "structural_risk");
+        let calibrated = scores_by_path(cal_rows, "structural_risk");
+        assert!(!base.is_empty(), "{tool}: baseline returned no rows");
+        assert_eq!(
+            base.keys().collect::<Vec<_>>(),
+            calibrated.keys().collect::<Vec<_>>(),
+            "{tool}: the artifact must reweight scores, not change the file set"
+        );
+        assert!(
+            base.iter()
+                .any(|(path, risk)| (calibrated[path] - risk).abs() > 1e-9),
+            "{tool}: permuted smell weights moved no structural_risk — the \
+             server's --defect-calibration never reached the analysis"
+        );
+    }
 }
 
 /// MCP process must exit immediately with code 4 when started with a

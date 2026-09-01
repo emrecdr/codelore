@@ -2560,4 +2560,51 @@ do not.
     corrective is small. Recorded rather than fixed inline, per the standing
     rule on latent bugs found during unrelated work.
 
-The next sweep re-opens at **F322**.
+### F322 (Fixed — Unreleased) — three MCP tools scored with default smell weights regardless of the server's `--defect-calibration`
+
+`codelore mcp` resolves the defect-calibration artifact once at startup and
+stores it on `CodeLoreServer`, and the tools whose contracts promise
+calibration awareness thread it: `check_gates`, `explain_file`,
+`change_context`, `gate_changes`. The other seven handlers built their
+`Options` with `..Options::default()` — harmless for the four whose analyses
+never read the artifact (`repo_overview`, `hotspots`, `delta_health`,
+`function_xray`: only the code-health pass consumes the weights), and a live
+divergence for the three that embed code-health scores: `code_health`,
+`refactoring_targets`, `finding_hotspot_overlap`.
+
+*   **Impact**: within one server session, `code_health` and `check_gates`
+    answered with two different weight regimes; the MCP `code_health` result
+    silently diverged from `codelore analyze --analysis code-health
+    --defect-calibration` on identical repository state. An agent using the
+    triage tool and the verdict tool together compared incomparable numbers.
+*   **Fix (shipped)**: the three handlers thread `defect_calibration` and
+    `allow_foreign_calibration` exactly as `check_gates` does; the two
+    memoized ones fold the artifact's content identity into their memo keys
+    the way `explain_file` already did, so a regenerated artifact cannot
+    serve a stale score without moving HEAD. The four artifact-blind tools
+    are deliberately unchanged — threading the field there would only
+    invalidate their memos on artifact regeneration for no observable
+    difference.
+*   **Proof**: the regression test runs two servers over one worsened
+    fixture (default weights against a value-permuted artifact), asserting
+    the file set agrees and at least one structural risk moves; probed
+    against the unfixed handlers it fails with the intended message.
+
+Found by an MCP options audit, which also surfaced the sibling gap recorded
+as F323.
+
+
+### F323 (Active) — MCP has no corpus-lens calibration surface at all
+
+`CodeLoreServer` carries `defect_calibration` but no `calibration` field, and
+no MCP flag exists to supply one: every MCP tool result that consults corpus
+percentiles reads the embedded world artifact only, while the CLI accepts
+`--calibration` everywhere. A team with a custom corpus artifact gets CLI/MCP
+divergence on every percentile-annotated surface.
+
+*   **Fix**: a `--calibration` startup flag on `codelore mcp`, threaded like
+    `--defect-calibration` now is (F322), including the memo-key fragment.
+*   **Small and mechanical**, but it widens the MCP flag surface — recorded
+    for a deliberate pass rather than fixed alongside F322.
+
+The next sweep re-opens at **F324**.
