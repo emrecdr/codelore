@@ -97,10 +97,29 @@ mod tests {
     #[test]
     fn the_three_language_dispatchers_agree_on_every_probe() {
         let probes = [
-            "a.rs", "A.RS", "b.py", "c.pyi", "C.PYI", "d.java", "D.JAVA",
-            "e.js", "f.jsx", "g.mjs", "h.cjs", "i.ts", "I.TS", "j.tsx",
-            "J.TSX", "dir/nested.Rs", "Makefile", "noext", ".rs", ".pyi",
-            "x.go", "y.rb", "z.c",
+            "a.rs",
+            "A.RS",
+            "b.py",
+            "c.pyi",
+            "C.PYI",
+            "d.java",
+            "D.JAVA",
+            "e.js",
+            "f.jsx",
+            "g.mjs",
+            "h.cjs",
+            "i.ts",
+            "I.TS",
+            "j.tsx",
+            "J.TSX",
+            "dir/nested.Rs",
+            "Makefile",
+            "noext",
+            ".rs",
+            ".pyi",
+            "x.go",
+            "y.rb",
+            "z.c",
         ];
         for probe in probes {
             let complexity = Tier1Language::from_path(probe).is_some();
