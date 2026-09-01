@@ -162,7 +162,12 @@ pub fn run_delivery_friction(db: &FactsDb, opts: &Options) -> Result<Vec<Deliver
     // bug `grouped_complexity::source_table` was built to prevent for
     // hotspots / code_health / god_classes / stale_code.
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);
-    let sql = SQL.replace("{cm_src}", cm_src);
+    // Rename-aware like every other path-aggregating analysis: without the
+    // lineage rewrite, a renamed file splits its revisions / lead-time /
+    // WIP-age history at the rename (the old path is dead at HEAD, the new
+    // one starts from one revision). Same shape as `stale-code`.
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(&SQL.replace("{cm_src}", cm_src), opts);
     super::query::explain_if_requested(
         db,
         &sql,
