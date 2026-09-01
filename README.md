@@ -2,6 +2,7 @@
 
 <!-- Live status + release + license meta -->
 [![CI](https://img.shields.io/github/actions/workflow/status/emrecdr/codelore/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/emrecdr/codelore/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/emrecdr/codelore?label=OpenSSF%20Scorecard&style=flat-square)](https://scorecard.dev/viewer/?uri=github.com/emrecdr/codelore)
 [![Latest release](https://img.shields.io/github/v/release/emrecdr/codelore?style=flat-square)](https://github.com/emrecdr/codelore/releases/latest)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
 [![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
