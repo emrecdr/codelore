@@ -96,6 +96,7 @@ fn run() -> Result<()> {
 fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
     mcp::run_mcp_server(
         args.repo.clone(),
+        args.calibration.clone(),
         args.defect_calibration.clone(),
         args.allow_foreign_calibration,
     )

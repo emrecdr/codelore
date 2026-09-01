@@ -1301,6 +1301,133 @@ fn mcp_code_health_and_refactoring_targets_follow_the_server_defect_calibration(
     }
 }
 
+/// A one-language corpus artifact whose single `cyclomatic` pool is a linear
+/// ramp to one million — any real file sits at a vanishing percentile, so its
+/// lens output is observably different from the embedded world corpus.
+fn write_corpus_artifact(dir: &std::path::Path) -> std::path::PathBuf {
+    use codelore_lib::calibration::{
+        CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles, Stratum,
+    };
+    let quantiles: Vec<f64> = (0..=1000).map(|i| f64::from(i) * 1000.0).collect();
+    let artifact = CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-mcp-lens".to_string(),
+        generated_at: "2026-09-01T00:00:00Z".to_string(),
+        repos_included: 3,
+        repos_attempted: 3,
+        languages: vec![LanguageTable {
+            language: "rust".to_string(),
+            sample_functions: 4_000,
+            strata: vec![Stratum {
+                sloc_min: 0,
+                sloc_max: u64::MAX,
+                metrics: vec![MetricQuantiles {
+                    metric: "cyclomatic".to_string(),
+                    quantiles,
+                }],
+            }],
+        }],
+        repo_metrics: None,
+    };
+    let path = dir.join("world.calib.json");
+    std::fs::write(
+        &path,
+        serde_json::to_string(&artifact).expect("serialize artifact"),
+    )
+    .expect("write artifact");
+    path
+}
+
+/// The server-level `--calibration` must reach every lens-consuming tool: the
+/// embedded world corpus and a custom artifact must disagree on
+/// `corpus_percentile` somewhere while agreeing on which files carry the
+/// annotation. Identical outputs would mean the startup flag silently never
+/// reached the analysis — the corpus-lens twin of the defect-calibration
+/// regression above.
+#[test]
+fn mcp_code_health_lens_follows_the_server_calibration() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = write_corpus_artifact(artifact_dir.path());
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let base = assert_tool_ok(
+        &call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({})),
+        "code_health",
+    );
+    drop(stdin);
+    let _ = child.wait();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp_with_args(
+        repo_path,
+        &["--calibration", artifact_path.to_str().unwrap()],
+    );
+    let lensed = assert_tool_ok(
+        &call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({})),
+        "code_health",
+    );
+    drop(stdin);
+    let _ = child.wait();
+
+    let base = scores_by_path(&base, "corpus_percentile");
+    let lensed = scores_by_path(&lensed, "corpus_percentile");
+    assert!(
+        !base.is_empty(),
+        "the embedded world corpus must annotate at least one rust file"
+    );
+    assert_eq!(
+        base.keys().collect::<Vec<_>>(),
+        lensed.keys().collect::<Vec<_>>(),
+        "the artifact must re-rank the lens, not change which files carry it"
+    );
+    assert!(
+        base.iter()
+            .any(|(path, pct)| (lensed[path] - pct).abs() > 1e-9),
+        "a ramp-to-a-million corpus moved no corpus_percentile — the server's \
+         --calibration never reached the analysis"
+    );
+}
+
+/// A malformed `--calibration` file must be a startup error (exit 4, before
+/// the tokio runtime starts and stdin is read), not a failure surfaced on the
+/// first lens-consuming call — the corpus twin of the foreign-defect startup
+/// guard below.
+#[test]
+fn mcp_refuses_to_start_on_a_malformed_calibration_artifact() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let bad = artifact_dir.path().join("world.calib.json");
+    std::fs::write(&bad, b"{ this is not a calibration artifact").expect("write bad artifact");
+
+    let bin = assert_cmd::cargo::cargo_bin("codelore");
+    let mut builder = Command::new(&bin);
+    builder
+        .args([
+            "mcp",
+            "--repo",
+            repo_path,
+            "--calibration",
+            bad.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for var in LLM_ENV_VARS {
+        builder.env_remove(var);
+    }
+    let output = builder.output().expect("spawn codelore mcp");
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "expected exit 4 for a malformed --calibration artifact, got {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// MCP process must exit immediately with code 4 when started with a
 /// foreign defect-calibration artifact and no `--allow-foreign-calibration`
 /// override. The foreign artifact is rejected before the tokio runtime starts,
