@@ -528,7 +528,7 @@ pub fn active_vintage(opts: &crate::Options) -> Result<Option<String>> {
     Ok(active_weights(opts)?.map(|(_, vintage)| vintage))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
 

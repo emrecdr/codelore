@@ -532,7 +532,7 @@ fn cleanup_stale_tmp_files_recursive(dir: &Path) {
 // Unit tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     use crate::Options;

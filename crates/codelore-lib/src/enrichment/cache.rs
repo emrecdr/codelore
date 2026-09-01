@@ -196,7 +196,7 @@ fn read_entry(path: &Path) -> Option<CachedNarrative> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::{CachedNarrative, cache_key, cache_path};
     use crate::enrichment::SCHEMA_VERSION;

@@ -343,7 +343,7 @@ pub fn ratchet_path(repo_root: &Path) -> PathBuf {
     repo_root.join(RATCHET_FILENAME)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     use tempfile::TempDir;

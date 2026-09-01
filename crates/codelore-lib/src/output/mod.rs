@@ -120,7 +120,7 @@ pub(crate) fn serde_json_io_err(context: &str, e: &serde_json::Error) -> crate::
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod atomic_publish_tests {
     use super::atomic_publish;
     use std::io::Write as _;

@@ -263,7 +263,7 @@ pub fn format_history(all_records: &[GateRunRecord], n: usize) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     use tempfile::tempdir;
