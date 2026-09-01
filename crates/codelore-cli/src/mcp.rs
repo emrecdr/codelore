@@ -1,8 +1,9 @@
 //! MCP server for `CodeLore` (`codelore mcp`).
 //!
 //! Exposes `CodeLore` analyses as MCP tools over stdio. Each tool call opens
-//! its own [`FactsDb`] via the warm-cache path so the `!Send + !Sync` `DuckDB`
-//! connection never crosses thread or await boundaries.
+//! its own [`FactsDb`] via the warm-cache path so the `!Sync` `DuckDB`
+//! connection (whose statements are `!Send`) never crosses thread or await
+//! boundaries.
 //!
 //! Every tool carries MCP annotations so a client can reason about it without
 //! calling it. `read_only_hint` is scoped to the user's repository and files:
@@ -281,7 +282,7 @@ fn calibration_key_fragment(path: Option<&Path>) -> String {
 }
 
 /// Process-lifetime memo of committed-state MCP tool outputs (serialized JSON or
-/// text — `String` is `Send`, unlike the `!Send` `DuckDB` connection that produced
+/// text — `String` is `Send`, unlike the connection-bound `DuckDB` machinery that produced
 /// it). Keyed by `(tool, canonical params)` and scoped to a single HEAD sha: the
 /// first access at a new HEAD drops every entry, so a stored result can only ever
 /// describe the commit that is currently HEAD. Working-tree-dependent tools

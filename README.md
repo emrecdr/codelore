@@ -650,6 +650,8 @@ cargo run --release -p codelore --features spa -- \
 | If you want… | Read |
 |---|---|
 | All analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
+| Why each analysis is trustworthy — the research each formula stands on | [`docs/research-foundations.md`](docs/research-foundations.md) |
+| The GitHub Action: inputs, outputs, versioning, recipes | [`docs/github-action.md`](docs/github-action.md) |
 | The full 27-feature implementation plan + validation | [`docs/maximum-feature-plan.md`](docs/maximum-feature-plan.md) |
 | CodeScene visual parity strategy + design decisions | [`docs/codescene-parity-plan.md`](docs/codescene-parity-plan.md) |
 | The architecture overview (workspace shape, pipeline data flow, threading model) | [`docs/codebase_analysis.md`](docs/codebase_analysis.md) |

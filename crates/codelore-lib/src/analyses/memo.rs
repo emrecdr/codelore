@@ -10,8 +10,8 @@
 //! Every memo stores the FULL, un-row-limited result: callers re-apply their
 //! own `rows_limit` after the lookup so a `--rows N` choice never poisons the
 //! shared entry. `RefCell` (not a `Mutex`) because the `DuckDB` `Connection`
-//! is `!Send + !Sync` and every analysis runs on the single connection-owning
-//! thread.
+//! is `!Sync` — its statements borrow it and are `!Send` — and every analysis
+//! runs on the single connection-owning thread.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
