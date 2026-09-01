@@ -248,6 +248,47 @@ fn grants_signing(scopes: &[String]) -> Vec<&String> {
         .collect()
 }
 
+/// Push a violation for every signing scope a non-signer file grants, and
+/// return how many step-running jobs it declares. One carve-out: an OIDC
+/// consumer may hold `id-token` alone — `attestations`, the scope that
+/// actually persists provenance, stays forbidden for it like everywhere
+/// else.
+fn check_nonsigner_scopes(
+    rel: &str,
+    wf: &Workflow,
+    oidc_consumer: bool,
+    violations: &mut Vec<String>,
+) -> usize {
+    let permitted = |scope: &str| oidc_consumer && scope == "id-token";
+    let mut step_jobs = 0usize;
+
+    for scope in grants_signing(&wf.top_level_permissions) {
+        if permitted(scope) {
+            continue;
+        }
+        violations.push(format!(
+            "  {rel}: workflow-level `permissions:` grants `{scope}` — every \
+             job in the file inherits it by default"
+        ));
+    }
+
+    for job in &wf.jobs {
+        if job.runs_steps {
+            step_jobs += 1;
+            for scope in grants_signing(&job.permissions) {
+                if permitted(scope) {
+                    continue;
+                }
+                violations.push(format!(
+                    "  {rel}:{}: job `{}` runs steps and grants `{scope}`",
+                    job.line, job.name
+                ));
+            }
+        }
+    }
+    step_jobs
+}
+
 #[test]
 fn signing_permissions_are_reachable_only_from_trusted_signers() {
     let root = workspace_root();
@@ -304,35 +345,7 @@ fn signing_permissions_are_reachable_only_from_trusted_signers() {
         if oidc_consumer {
             oidc_consumers_seen += 1;
         }
-        // An OIDC consumer may hold `id-token` alone; `attestations` — the
-        // scope that actually persists provenance — stays forbidden for it
-        // like everywhere else.
-        let permitted = |scope: &str| oidc_consumer && scope == "id-token";
-
-        for scope in grants_signing(&wf.top_level_permissions) {
-            if permitted(scope) {
-                continue;
-            }
-            violations.push(format!(
-                "  {rel}: workflow-level `permissions:` grants `{scope}` — every \
-                 job in the file inherits it by default"
-            ));
-        }
-
-        for job in &wf.jobs {
-            if job.runs_steps {
-                step_jobs += 1;
-                for scope in grants_signing(&job.permissions) {
-                    if permitted(scope) {
-                        continue;
-                    }
-                    violations.push(format!(
-                        "  {rel}:{}: job `{}` runs steps and grants `{scope}`",
-                        job.line, job.name
-                    ));
-                }
-            }
-        }
+        step_jobs += check_nonsigner_scopes(&rel, &wf, oidc_consumer, &mut violations);
     }
 
     assert!(
