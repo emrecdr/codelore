@@ -1,6 +1,6 @@
 # CodeLore — Codebase Analysis
 
-A descriptive technical overview of the CodeLore codebase: what it is, how it's structured, and how data flows through it. Companion document to [`docs/improvement_suggestions.md`](improvement_suggestions.md), which catalogs forward-looking enhancements.
+A descriptive technical overview of the CodeLore codebase: what it is, how it's structured, and how data flows through it.
 
 ## 1. What CodeLore is
 
@@ -142,7 +142,6 @@ Opt-in (`--llm`) narrative layer over the deterministic dossiers — strictly ou
 
 - [`docs/advanced-usage.md`](advanced-usage.md) — the 30-minute developer manual (every flag explained, every output format documented)
 - [`docs/narrative-evidence-v1.md`](narrative-evidence-v1.md) — measured evidence for the advisory layer's citation check and model behavior
-- [`docs/improvement_suggestions.md`](improvement_suggestions.md) — forward-looking improvement backlog
 - [`docs/roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) — prioritized roadmap of larger initiatives
 - [`docs/RELEASING.md`](RELEASING.md) — SemVer policy + release procedure
 - [`docs/superpowers/specs/2026-06-06-codelore-design.md`](superpowers/specs/2026-06-06-codelore-design.md) — original design spec
