@@ -30,7 +30,7 @@ impl ImportLanguage {
     #[must_use]
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?;
-        match ext {
+        match ext.to_ascii_lowercase().as_str() {
             "rs" => Some(Self::Rust),
             "py" | "pyi" => Some(Self::Python),
             "java" => Some(Self::Java),
@@ -81,5 +81,71 @@ impl ImportLanguage {
                 &["import_statement", "export_statement", "call_expression"]
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImportLanguage;
+    use crate::clones::language::CloneLanguage;
+    use crate::complexity::language::Tier1Language;
+    use std::path::Path;
+
+    /// The three Tier-1 dispatchers are hand-mirrored — this test is the
+    /// only thing holding them together. Every probe must classify
+    /// identically (recognised vs not) across all three.
+    #[test]
+    fn the_three_language_dispatchers_agree_on_every_probe() {
+        let probes = [
+            "a.rs",
+            "A.RS",
+            "b.py",
+            "c.pyi",
+            "C.PYI",
+            "d.java",
+            "D.JAVA",
+            "e.js",
+            "f.jsx",
+            "g.mjs",
+            "h.cjs",
+            "i.ts",
+            "I.TS",
+            "j.tsx",
+            "J.TSX",
+            "dir/nested.Rs",
+            "Makefile",
+            "noext",
+            ".rs",
+            ".pyi",
+            "x.go",
+            "y.rb",
+            "z.c",
+        ];
+        for probe in probes {
+            let complexity = Tier1Language::from_path(probe).is_some();
+            let clones = CloneLanguage::from_path(Path::new(probe)).is_some();
+            let imports = ImportLanguage::from_path(Path::new(probe)).is_some();
+            assert_eq!(
+                complexity, clones,
+                "complexity vs clones disagree on {probe}"
+            );
+            assert_eq!(
+                complexity, imports,
+                "complexity vs imports disagree on {probe}"
+            );
+        }
+    }
+
+    /// Positive pins so the parity test cannot rot into all-`None`
+    /// agreement: mixed case resolves for all three, and a dotfile-shaped
+    /// name resolves for none.
+    #[test]
+    fn case_folding_and_dotfile_semantics_are_pinned() {
+        assert!(Tier1Language::from_path("A.RS").is_some());
+        assert!(CloneLanguage::from_path(Path::new("C.PYI")).is_some());
+        assert!(ImportLanguage::from_path(Path::new("I.TS")).is_some());
+        assert!(Tier1Language::from_path(".rs").is_none());
+        assert!(CloneLanguage::from_path(Path::new(".rs")).is_none());
+        assert!(ImportLanguage::from_path(Path::new(".rs")).is_none());
     }
 }

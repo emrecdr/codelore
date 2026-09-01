@@ -2093,7 +2093,7 @@ four agree today and nothing checks that they continue to.
     label. That is a public-API addition and a user-visible output change, not a
     cleanup, which is why it is recorded here rather than done in passing.
 
-### F311 (Active) — three extension tables claim to mirror each other and do not
+### F311 (Fixed — Unreleased) — three extension tables claim to mirror each other and do not
 
 Found while assessing [F310]. `Tier1Language`, `CloneLanguage` and
 `ImportLanguage` each map a file extension to a language, and the latter two
@@ -2527,7 +2527,7 @@ pins the default, because the first compares two explicit contexts and would
 keep passing if the default silently reverted.
 
 
-### F321 (Active) — an uppercase source extension gets complexity but no imports
+### F321 (Fixed — Unreleased) — an uppercase source extension gets complexity but no imports
 
 `Tier1Language::from_path` lowercases before matching
 (`ext.to_ascii_lowercase()`); `ImportLanguage::from_path` matches the raw
@@ -2559,6 +2559,16 @@ do not.
 *   **Not urgent**: no evidence of a real repository hitting it, and the
     corrective is small. Recorded rather than fixed inline, per the standing
     rule on latent bugs found during unrelated work.
+*   **Resolution (with F311)**: all three dispatchers now fold case over
+    `Path::extension` semantics — the dotfile divergence resolved
+    deliberately toward std (`.rs` has no extension, so no language) — and
+    clones accepts `.pyi`, whose stub fingerprints fall below the node-count
+    floor and so cost no clone noise. A parity test in `imports::language`
+    probes all three over mixed-case, dotfile, and non-Tier-1 names, with
+    positive pins so it cannot rot into all-`None` agreement. `CACHE_EPOCH`
+    moved to `schema_v20`: entries ingested under case-sensitive dispatch
+    hold correct-but-incomplete `clones`/`imports` tables for repositories
+    carrying such files.
 
 ### F322 (Fixed — Unreleased) — three MCP tools scored with default smell weights regardless of the server's `--defect-calibration`
 

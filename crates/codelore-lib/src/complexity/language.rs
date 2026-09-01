@@ -21,9 +21,13 @@ pub enum Tier1Language {
 
 impl Tier1Language {
     /// Returns the language for a path, if it's a Tier-1 file extension.
+    /// Matching is ASCII-case-insensitive over `Path::extension` semantics
+    /// (a dotfile like `.rs` has no extension), in deliberate parity with
+    /// the clones and imports dispatchers — the parity test in
+    /// `imports::language` holds the three together.
     #[must_use]
     pub fn from_path(path: &str) -> Option<Self> {
-        let ext = path.rsplit('.').next()?;
+        let ext = std::path::Path::new(path).extension()?.to_str()?;
         match ext.to_ascii_lowercase().as_str() {
             "rs" => Some(Self::Rust),
             "py" | "pyi" => Some(Self::Python),

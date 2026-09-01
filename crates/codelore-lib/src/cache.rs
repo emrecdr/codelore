@@ -25,7 +25,12 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v19`) orphans every entry written while the
+/// The current epoch (`schema_v20`) orphans entries whose `clones` and
+/// `imports` tables were ingested under case-sensitive extension dispatch
+/// that also skipped `.pyi` stubs for clones — repositories carrying such
+/// files hold correct-but-incomplete facts under the old epoch.
+///
+/// The prior epoch (`schema_v19`) orphans every entry written while the
 /// options hash covered analysis-only thresholds. Those entries are not wrong —
 /// the facts they hold are correct — but they were keyed under a classification
 /// this build no longer uses, so they would linger unreachable and consume
@@ -39,7 +44,7 @@ use crate::Options;
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v19";
+pub const CACHE_EPOCH: &str = "schema_v20";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
