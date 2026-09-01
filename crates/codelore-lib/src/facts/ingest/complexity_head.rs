@@ -86,7 +86,7 @@ impl FactsDb {
                                 size = source.len(),
                                 cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                             );
-                            return ScanOutcome::NotCounted;
+                            return ScanOutcome::SkippedOversize;
                         }
                         // Path only used for error reporting in compute_for_file;
                         // the repo-relative form is more useful than the absolute
@@ -116,6 +116,7 @@ impl FactsDb {
         // them put this repository at 86% on a scan that lost nothing.
         let coverage = ScanCoverage::tally(&outcomes);
         coverage.warn_if_degraded("complexity", "complexity_metrics");
+        coverage.warn_if_mostly_oversize("complexity", "complexity_metrics");
 
         // Collapse back to the shape the serial drain already consumes. The
         // drain is unchanged; only the classification above is new.
@@ -123,7 +124,9 @@ impl FactsDb {
             .into_iter()
             .map(|o| match o {
                 ScanOutcome::Scored((path, entities)) => Some((path, entities)),
-                ScanOutcome::NotCounted | ScanOutcome::Lost(_) => None,
+                ScanOutcome::NotCounted | ScanOutcome::SkippedOversize | ScanOutcome::Lost(_) => {
+                    None
+                }
             })
             .collect();
 

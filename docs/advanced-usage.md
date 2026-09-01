@@ -1253,6 +1253,26 @@ Tree-sitter parsing + AST traversal dominate RSS for the Tier-1 file complexity 
 
 The complexity-extraction pass uses Rayon by default (one task per source file). On the `medium_repo` fixture (25 Rust files), parallel vs serial measure within bench noise (≈ 56 ms either way) because the bottleneck is the commit walk + change-feature enrichment SQL, not the parse pass. The parallel pass beats serial measurably on codebases with hundreds of Tier-1 files. Set `RAYON_NUM_THREADS=1` in the env before invoking `codelore` to force serial mode for comparison runs.
 
+### Scan coverage and the AST size cap
+
+The three HEAD-time passes (complexity, clones, imports) keep a per-pass
+census. Two aggregate warnings can fire from it, both at the default log
+level:
+
+- **Degraded coverage** — a pass that *failed* to read or parse ≥10% of the
+  eligible source files warns with the loss breakdown. The usual cause is a
+  blobless partial clone (`git clone --filter=blob:none`, or
+  `actions/checkout` with a filter), which the shallow-clone check cannot
+  detect because such a clone has complete commit history.
+- **Majority oversize** — files larger than the AST byte cap (2 MiB) are
+  skipped by design: real hand-written source essentially never reaches that
+  size, and parsing generated or minified bundles would cost memory for
+  meaningless metrics. Those skips are deliberately *not* counted as losses,
+  so a bundle-carrying repository stays quiet — but when the skipped files
+  outnumber the scanned ones, the pass warns: the fact table describes a
+  minority of what looks like source. Exclude bundle directories via
+  `.codeloreignore` so the census reflects the code you maintain.
+
 ## 11. CI/CD integration patterns
 
 ### GitHub Actions (the canonical pattern)
