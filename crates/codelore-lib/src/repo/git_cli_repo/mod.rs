@@ -275,6 +275,21 @@ impl Repo for GitCliRepo {
         }
     }
 
+    fn is_shallow(&self) -> bool {
+        // `git rev-parse --is-shallow-repository` prints `true`/`false` and
+        // handles linked worktrees (where the `shallow` grafts file lives in
+        // the shared common dir, not this checkout's `.git`). Mirrors
+        // `GixRepo::is_shallow` so the differential suite can hold the two
+        // backends to one answer; errors swallowed per the trait's
+        // hint-not-contract convention (`false` on detection failure).
+        match self.run_git(&["rev-parse", "--is-shallow-repository"]) {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim() == "true"
+            }
+            _ => false,
+        }
+    }
+
     fn merge_or_rebase_in_progress(&self) -> bool {
         // `MERGE_HEAD`, `CHERRY_PICK_HEAD`, and `REVERT_HEAD` are files;
         // `rebase-merge` and `rebase-apply` are directories — `Path::exists`

@@ -594,6 +594,52 @@ fn is_worktree_dirty_ignores_untracked_file() {
     );
 }
 
+/// `--depth=1` clone: the one repository state where the two backends'
+/// `is_shallow` hints could diverge (`GixRepo` reads the grafts file;
+/// `GitCliRepo` asks `git rev-parse --is-shallow-repository`). Clones
+/// through a `file://` URL because `--depth` on a plain local path silently
+/// degrades to a full hardlink clone and git ignores the flag.
+#[test]
+fn is_shallow_matches_on_a_depth_one_clone() {
+    let source = codelore_lib::test_support::differential_repo::build();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_url = format!("file://{}", source.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(dir.path())
+        .status()
+        .expect("spawn git clone --depth=1");
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let gix = GixRepo::open(dir.path()).expect("GixRepo::open");
+    let cli = GitCliRepo::open(dir.path()).expect("GitCliRepo::open");
+    assert!(
+        gix.is_shallow(),
+        "a --depth=1 clone must report shallow per GixRepo",
+    );
+    assert_eq!(
+        gix.is_shallow(),
+        cli.is_shallow(),
+        "GixRepo and GitCliRepo disagree on is_shallow for a --depth=1 clone",
+    );
+}
+
+/// The everyday state: a full clone is not shallow in either backend.
+#[test]
+fn is_shallow_matches_on_a_full_clone() {
+    let (gix, cli) = open_both();
+    assert!(
+        !gix.is_shallow(),
+        "the differential fixture is a full clone per GixRepo",
+    );
+    assert_eq!(
+        gix.is_shallow(),
+        cli.is_shallow(),
+        "GixRepo and GitCliRepo disagree on is_shallow for a full clone",
+    );
+}
+
 /// Editing a tracked file without staging it (worktree vs. index differ)
 /// must mark both backends dirty.
 #[test]
