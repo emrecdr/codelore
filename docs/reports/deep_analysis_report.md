@@ -2775,4 +2775,19 @@ evaluator branches or `RatchetMetrics` — a gate added to config but not the
 evaluator (or ratchet) fails nothing. One enforcement test per pair is the
 cheap form.
 
-The next sweep re-opens at **F336**.
+### F336 (Active) — `dependabot-auto-merge` grants both jobs the union of their scopes, and its comment claims the union is irreducible
+
+The workflow-level block grants `contents: write`, `pull-requests: write`
+and `actions: write` to both jobs, with a comment stating both jobs need
+them and the grants "cannot be narrowed". Source says otherwise:
+`mark-eligible` only creates a label and labels the PR — it never merges,
+pushes, or dispatches, so it uses neither `contents: write` nor
+`actions: write`; only `merge-on-green` exercises all three. The over-grant
+sits on the `pull_request_target` job — exactly the trigger whose token
+privilege the header mitigates by never checking out PR code; per-job
+blocks would turn that mitigation from documented discipline into a token
+that cannot do the dangerous thing at all. Narrowing is untestable until
+the next Dependabot PR fires (labeling runs only under the live token),
+which is why this is recorded rather than fixed inline.
+
+The next sweep re-opens at **F337**.

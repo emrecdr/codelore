@@ -37,6 +37,10 @@ on:
         required: true
         type: string
 
+# Jobs declare every scope they use; the workflow-level default grants
+# nothing, so a future job starts from zero instead of the platform default.
+permissions: {}
+
 jobs:
   attest:
     runs-on: ubuntu-latest

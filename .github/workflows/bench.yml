@@ -9,6 +9,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false  # bench results are timeline data; don't drop runs
 
+# Jobs declare every scope they use; the workflow-level default grants
+# nothing, so a future job starts from zero instead of the platform default.
+permissions: {}
+
 jobs:
   bench:
     runs-on: ubuntu-latest

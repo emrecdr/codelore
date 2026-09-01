@@ -45,6 +45,10 @@ concurrency:
 # address)` errors during toolchain extraction. Native arm64 runners are
 # available, free for public repos, and finish in ~7 minutes.
 
+# Jobs declare every scope they use; the workflow-level default grants
+# nothing, so a future job starts from zero instead of the platform default.
+permissions: {}
+
 jobs:
   build:
     # Publishing is a tag-ref property, not a trigger property: a dispatch
