@@ -32,6 +32,13 @@ updates:
     # at release-cut time.
     ignore:
       - dependency-name: "dtolnay/rust-toolchain"
+    # Wait out the window in which a freshly-published compromised release
+    # gets caught and yanked before any bot pulls it in. GitHub defaults to
+    # a silent 3-day cooldown; stating it explicitly makes the policy
+    # auditable and tunable. Security updates bypass cooldown by design, so
+    # this delays convenience bumps only, never CVE fixes.
+    cooldown:
+      default-days: 7
 
   # Cargo lockfile + crate versions. Same grouping rationale.
   - package-ecosystem: cargo
@@ -58,6 +65,15 @@ updates:
     ignore:
       - dependency-name: "tree-sitter"
       - dependency-name: "tree-sitter-*"
+    # Same rationale as the github-actions cooldown above, tuned for crates:
+    # the registry-side equivalent (Cargo's own min-publish-age) is not yet
+    # enforceable client-side, so the bot-side wait is the available lever.
+    # Majors wait longest — they carry the most new code and the least
+    # scrutiny overlap with the previous release. Security updates bypass
+    # cooldown by design.
+    cooldown:
+      default-days: 5
+      semver-major-days: 15
 
   # Docker / container-image digests are NOT handled here, and cannot
   # be: Dependabot's `docker` ecosystem only detects `Dockerfile` /

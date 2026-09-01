@@ -1,0 +1,47 @@
+# OpenSSF Scorecard — automated supply-chain-posture scoring (0-10 across
+# 18 checks: token permissions, pinned dependencies, branch protection,
+# SAST, dangerous workflows, ...). Two consumers:
+#   1. The public score + badge via `publish_results: true` (needs
+#      `id-token: write` — the OIDC attestation is how scorecard.dev
+#      verifies the result came from this repository's own CI).
+#   2. GitHub code scanning, via the SARIF upload, so any regression
+#      surfaces as a code-scanning alert next to CodeLore's own findings.
+#
+# Weekly + on pushes to main: the score reacts to workflow/branch-rule
+# changes, which is when a regression is cheapest to catch. The schedule
+# hour is offset from ci.yml's weekly cron to avoid runner contention.
+name: scorecard
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '43 7 * * 2'  # Tuesdays 07:43 UTC
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Needed to upload the SARIF to code scanning.
+      security-events: write
+      # Needed by scorecard.dev to verify + publish the result.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: results.sarif

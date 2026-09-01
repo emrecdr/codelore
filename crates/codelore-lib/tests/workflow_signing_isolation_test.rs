@@ -50,6 +50,23 @@ fn is_trusted_signer(rel: &str) -> bool {
     rel.ends_with("attest-artifact.yml") || rel.ends_with("attest-digest.yml")
 }
 
+/// Workflows permitted to hold `id-token` ALONE — OIDC consumers, not
+/// signers. Scorecard's `publish_results` requires an OIDC token so
+/// scorecard.dev can verify which repository's CI produced the score.
+///
+/// Membership is not a free pass, twice over. First, `attestations` stays
+/// forbidden here (asserted in the main loop): that is the scope that
+/// persists GitHub provenance, and `id-token` without it cannot write an
+/// attestation at all. Second, an OIDC token minted in one of these jobs
+/// asserts *this workflow's* identity — and the documented release
+/// verification (the README's `gh attestation verify` snippet) pins
+/// `--signer-workflow` to the trusted signers above, so a consumer-minted
+/// signature can never verify as release provenance. The consumer count is
+/// asserted below so deleting the workflow retires the exemption loudly.
+fn is_oidc_consumer(rel: &str) -> bool {
+    rel.ends_with("scorecard.yml")
+}
+
 #[derive(Debug)]
 struct Job {
     name: String,
@@ -231,6 +248,47 @@ fn grants_signing(scopes: &[String]) -> Vec<&String> {
         .collect()
 }
 
+/// Push a violation for every signing scope a non-signer file grants, and
+/// return how many step-running jobs it declares. One carve-out: an OIDC
+/// consumer may hold `id-token` alone — `attestations`, the scope that
+/// actually persists provenance, stays forbidden for it like everywhere
+/// else.
+fn check_nonsigner_scopes(
+    rel: &str,
+    wf: &Workflow,
+    oidc_consumer: bool,
+    violations: &mut Vec<String>,
+) -> usize {
+    let permitted = |scope: &str| oidc_consumer && scope == "id-token";
+    let mut step_jobs = 0usize;
+
+    for scope in grants_signing(&wf.top_level_permissions) {
+        if permitted(scope) {
+            continue;
+        }
+        violations.push(format!(
+            "  {rel}: workflow-level `permissions:` grants `{scope}` — every \
+             job in the file inherits it by default"
+        ));
+    }
+
+    for job in &wf.jobs {
+        if job.runs_steps {
+            step_jobs += 1;
+            for scope in grants_signing(&job.permissions) {
+                if permitted(scope) {
+                    continue;
+                }
+                violations.push(format!(
+                    "  {rel}:{}: job `{}` runs steps and grants `{scope}`",
+                    job.line, job.name
+                ));
+            }
+        }
+    }
+    step_jobs
+}
+
 #[test]
 fn signing_permissions_are_reachable_only_from_trusted_signers() {
     let root = workspace_root();
@@ -245,6 +303,7 @@ fn signing_permissions_are_reachable_only_from_trusted_signers() {
     let mut violations: Vec<String> = Vec::new();
     let mut step_jobs = 0usize;
     let mut signers_seen = 0usize;
+    let mut oidc_consumers_seen = 0usize;
 
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -282,24 +341,11 @@ fn signing_permissions_are_reachable_only_from_trusted_signers() {
             continue;
         }
 
-        for scope in grants_signing(&wf.top_level_permissions) {
-            violations.push(format!(
-                "  {rel}: workflow-level `permissions:` grants `{scope}` — every \
-                 job in the file inherits it by default"
-            ));
+        let oidc_consumer = is_oidc_consumer(&rel);
+        if oidc_consumer {
+            oidc_consumers_seen += 1;
         }
-
-        for job in &wf.jobs {
-            if job.runs_steps {
-                step_jobs += 1;
-                for scope in grants_signing(&job.permissions) {
-                    violations.push(format!(
-                        "  {rel}:{}: job `{}` runs steps and grants `{scope}`",
-                        job.line, job.name
-                    ));
-                }
-            }
-        }
+        step_jobs += check_nonsigner_scopes(&rel, &wf, oidc_consumer, &mut violations);
     }
 
     assert!(
@@ -312,6 +358,12 @@ fn signing_permissions_are_reachable_only_from_trusted_signers() {
         "expected both trusted signers to be present; attestation has moved \
          or a signer was renamed — re-check the pipeline before adjusting \
          `is_trusted_signer`"
+    );
+    assert_eq!(
+        oidc_consumers_seen, 1,
+        "expected exactly one OIDC-consumer workflow; if scorecard.yml was \
+         removed or renamed, retire or update `is_oidc_consumer` with it \
+         rather than leaving a dormant exemption"
     );
 
     assert!(
