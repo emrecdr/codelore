@@ -297,6 +297,14 @@ pub struct McpArgs {
     #[arg(short, long, default_value = ".")]
     pub repo: std::path::PathBuf,
 
+    /// Corpus-calibration artifact for the percentile lens (the
+    /// `world.calib.json` shape; build one with `codelore calibrate`).
+    /// Replaces the embedded world corpus for every lens-consuming tool,
+    /// matching the CLI's `--calibration`. Hard error at server startup if
+    /// the file is missing or malformed.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
+
     /// Own-repo defect-calibration artifact (build one with `codelore
     /// calibrate-defects`). Adds a `defect-evidence` section to `explain_file`
     /// fact sheets. Hard error at server startup if the artifact was mined

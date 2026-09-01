@@ -2605,7 +2605,7 @@ Found by an MCP options audit, which also surfaced the sibling gap recorded
 as F323.
 
 
-### F323 (Active) — MCP has no corpus-lens calibration surface at all
+### F323 (Fixed — Unreleased) — MCP has no corpus-lens calibration surface at all
 
 `CodeLoreServer` carries `defect_calibration` but no `calibration` field, and
 no MCP flag exists to supply one: every MCP tool result that consults corpus
@@ -2617,6 +2617,13 @@ divergence on every percentile-annotated surface.
     `--defect-calibration` now is (F322), including the memo-key fragment.
 *   **Small and mechanical**, but it widens the MCP flag surface — recorded
     for a deliberate pass rather than fixed alongside F322.
+*   **Resolution**: `codelore mcp --calibration <path>`, mirroring
+    `--defect-calibration` end to end — startup fail-fast load, threading
+    into every lens-consuming tool, memo-key content fragments for the
+    memoized ones (`gate_changes` needs none: its report cache keys through
+    `Options::canonical_json`, which already folds the digest). Pinned by a
+    two-server lens-divergence test and a malformed-artifact startup
+    rejection test.
 
 ### F324 (Fixed — Unreleased) — two at-rev scans still paid the cold per-blob path
 

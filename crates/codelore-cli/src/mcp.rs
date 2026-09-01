@@ -392,6 +392,9 @@ const MAX_CONCURRENT_CALLS: usize = 4;
 #[derive(Clone)]
 pub struct CodeLoreServer {
     repo: PathBuf,
+    /// Corpus-calibration artifact for the percentile lens; `None` means the
+    /// embedded world corpus, matching the CLI default.
+    calibration: Option<PathBuf>,
     defect_calibration: Option<PathBuf>,
     allow_foreign_calibration: bool,
     /// Shared across every concurrent tool call (hence `Arc`); see [`ResultMemo`].
@@ -719,10 +722,21 @@ impl CodeLoreServer {
         // an oversized `limit` cannot blow the caller's token budget.
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let calibration = self.calibration.clone();
         self.blocking(move || {
-            memoized(&memo, &repo_path, "hotspots", &params_json, |repo, head| {
+            // Fold the corpus-artifact identity into the memo key: the lens
+            // annotations depend on it, and it can be regenerated without
+            // moving HEAD (see [`calibration_key_fragment`]).
+            let memo_input = format!(
+                "{params_json}\u{1f}{}",
+                calibration_key_fragment(calibration.as_deref())
+            );
+            memoized(&memo, &repo_path, "hotspots", &memo_input, |repo, head| {
+                // The server-resolved corpus artifact threads into the lens so
+                // annotations match a CLI run under the same startup flag.
                 let opts = Options {
                     repo_path: repo_path.clone(),
+                    calibration: calibration.clone(),
                     ..Options::default()
                 };
                 let db =
@@ -770,6 +784,7 @@ impl CodeLoreServer {
         let filter_path = params.0.path.clone();
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         self.blocking(move || {
@@ -777,8 +792,9 @@ impl CodeLoreServer {
             // scores depend on that artifact's weights, and it can be
             // regenerated without moving HEAD (see [`calibration_key_fragment`]).
             let memo_input = format!(
-                "{params_json}\u{1f}{}",
-                calibration_key_fragment(defect_calibration.as_deref())
+                "{params_json}\u{1f}{}\u{1f}{}",
+                calibration_key_fragment(defect_calibration.as_deref()),
+                calibration_key_fragment(calibration.as_deref())
             );
             memoized(&memo, &repo_path, "code_health", &memo_input, |repo, head| {
                 // The server-resolved calibration threads into the analysis so
@@ -786,6 +802,7 @@ impl CodeLoreServer {
                 // run under the same startup flag (mirrors `check_gates`).
                 let opts = Options {
                     repo_path: repo_path.clone(),
+                    calibration: calibration.clone(),
                     defect_calibration: defect_calibration.clone(),
                     allow_foreign_calibration,
                     ..Options::default()
@@ -982,6 +999,7 @@ impl CodeLoreServer {
         let memo = self.memo.clone();
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         self.blocking(move || {
@@ -990,8 +1008,9 @@ impl CodeLoreServer {
             // weights, and it can be regenerated without moving HEAD (see
             // [`calibration_key_fragment`]).
             let memo_input = format!(
-                "{params_json}\u{1f}{}",
-                calibration_key_fragment(defect_calibration.as_deref())
+                "{params_json}\u{1f}{}\u{1f}{}",
+                calibration_key_fragment(defect_calibration.as_deref()),
+                calibration_key_fragment(calibration.as_deref())
             );
             memoized(
                 &memo,
@@ -1004,6 +1023,7 @@ impl CodeLoreServer {
                     // the same startup flag (mirrors `check_gates`).
                     let opts = Options {
                         repo_path: repo_path.clone(),
+                        calibration: calibration.clone(),
                         defect_calibration: defect_calibration.clone(),
                         allow_foreign_calibration,
                         ..Options::default()
@@ -1118,6 +1138,7 @@ impl CodeLoreServer {
     ) -> Result<Json<GateSummary>, ErrorData> {
         let cap = resolve_row_cap(params.0.limit);
         let repo_path = self.repo.clone();
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         // Deliberately not memoized: the verdict depends on the current contents
@@ -1141,6 +1162,7 @@ impl CodeLoreServer {
             // repo `[calibration]` section or startup flag.
             let opts = Options {
                 repo_path: repo_path.clone(),
+                calibration,
                 defect_calibration,
                 allow_foreign_calibration,
                 ..Options::default()
@@ -1309,6 +1331,7 @@ impl CodeLoreServer {
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let cap = resolve_row_cap(params.0.limit);
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         // Deliberately not memoized: the fusion joins the external-findings
@@ -1338,6 +1361,7 @@ impl CodeLoreServer {
             // same startup flag (mirrors `check_gates`).
             let opts = Options {
                 repo_path: repo_path.clone(),
+                calibration,
                 defect_calibration,
                 allow_foreign_calibration,
                 ..Options::default()
@@ -1390,6 +1414,7 @@ impl CodeLoreServer {
         let memo = self.memo.clone();
         let target = params.0.path.clone();
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         self.blocking(move || {
@@ -1401,8 +1426,9 @@ impl CodeLoreServer {
             let key = memo_key(
                 "explain_file",
                 &format!(
-                    "{params_json}\u{1f}{}",
-                    calibration_key_fragment(defect_calibration.as_deref())
+                    "{params_json}\u{1f}{}\u{1f}{}",
+                    calibration_key_fragment(defect_calibration.as_deref()),
+                    calibration_key_fragment(calibration.as_deref())
                 ),
             );
 
@@ -1429,6 +1455,7 @@ impl CodeLoreServer {
             let opts = Options {
                 repo_path: repo_path.clone(),
                 min_revs: 1,
+                calibration,
                 defect_calibration,
                 allow_foreign_calibration,
                 ..Options::default()
@@ -1520,6 +1547,7 @@ impl CodeLoreServer {
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let memo = self.memo.clone();
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         let paths = params.0.paths.clone();
@@ -1535,9 +1563,10 @@ impl CodeLoreServer {
             // before the lookup so a mid-process change misses the prior entry.
             let merge = repo.merge_or_rebase_in_progress();
             let cal = calibration_key_fragment(defect_calibration.as_deref());
+            let corpus_cal = calibration_key_fragment(calibration.as_deref());
             let key = memo_key(
                 "change_context",
-                &format!("{params_json}\u{1f}merge={merge}\u{1f}{cal}"),
+                &format!("{params_json}\u{1f}merge={merge}\u{1f}{cal}\u{1f}{corpus_cal}"),
             );
             if let Some(hit) = memo.get(&head, &key) {
                 return Ok(hit);
@@ -1547,6 +1576,7 @@ impl CodeLoreServer {
             let opts = Options {
                 repo_path: repo_path.clone(),
                 min_revs: 1,
+                calibration,
                 defect_calibration,
                 allow_foreign_calibration,
                 ..Options::default()
@@ -1590,6 +1620,7 @@ impl CodeLoreServer {
         _params: Parameters<GateChangesParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         // Deliberately not memoized: this is a working-tree tool — it projects the
@@ -1599,6 +1630,7 @@ impl CodeLoreServer {
         self.blocking(move || {
             let opts = Options {
                 repo_path: repo_path.clone(),
+                calibration,
                 defect_calibration,
                 allow_foreign_calibration,
                 ..Options::default()
@@ -1793,6 +1825,7 @@ impl rmcp::handler::server::ServerHandler for CodeLoreServer {}
 /// server startup rather than surfacing on the first tool call.
 pub fn run_mcp_server(
     repo: PathBuf,
+    calibration: Option<PathBuf>,
     defect_calibration: Option<PathBuf>,
     allow_foreign_calibration: bool,
 ) -> Result<()> {
@@ -1805,12 +1838,21 @@ pub fn run_mcp_server(
         let artifact = defect_calibration::load(path)?;
         defect_calibration::check_repo_identity(&artifact, &repo, allow_foreign_calibration)?;
     }
+    // Same fail-fast contract for the corpus artifact: a bad `--calibration`
+    // path is a startup error, not a failure surfaced on the first
+    // lens-consuming call. (No repo-identity guard — a corpus artifact is
+    // repo-agnostic by construction.) The parsed artifact is discarded here;
+    // each call loads it again via `Options`, like `--defect-calibration`.
+    if let Some(path) = &calibration {
+        codelore_lib::calibration::load(path)?;
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(async move {
             let server = CodeLoreServer {
                 repo,
+                calibration,
                 defect_calibration,
                 allow_foreign_calibration,
                 memo: Arc::new(ResultMemo::default()),
