@@ -73,8 +73,8 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
 
     let opts = Options {
         repo_path: args.repo.clone(),
-        // Same threading as `check` and the MCP `gate_changes` twin — F323
-        // fixed the MCP-missing direction of this asymmetry; this closes
+        // Same threading as `check` and the MCP `gate_changes` twin — the
+        // MCP-side fix covered its direction of this asymmetry; this closes
         // the CLI-missing one, so the two surfaces share one cache entry.
         calibration: args.calibration.clone(),
         defect_calibration: resolved_defect_calibration,

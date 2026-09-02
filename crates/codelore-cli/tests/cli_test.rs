@@ -5119,7 +5119,7 @@ fn explain_file_llm_live_against_local_ollama() {
         .stdout(predicate::str::contains(model.as_str()));
 }
 
-/// The CLI/MCP calibration symmetry, in the direction F323 left open: the
+/// The CLI/MCP calibration symmetry, in the direction the MCP-side fix left open: the
 /// MCP `explain_file` twin threads `--calibration`, and without this flag
 /// `codelore explain <path>` printed a DIFFERENT corpus percentile for the
 /// same file at the same HEAD under a custom corpus — the number the
