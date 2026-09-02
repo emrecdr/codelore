@@ -909,12 +909,12 @@ mod tests {
         }
     }
 
-    /// A FULLY empty artifact — no languages and no repo_metrics pools — is
-    /// rejected at load time: it would pass every structural check while
+    /// A FULLY empty artifact — no languages and no `repo_metrics` pools —
+    /// is rejected at load time: it would pass every structural check while
     /// turning the corpus lens into a silent no-op, indistinguishable at
     /// lookup time from a file genuinely absent from the corpus. An artifact
-    /// carrying only repo_metrics pools stays valid — a real shape, since the
-    /// architecture percentiles need no per-language pools.
+    /// carrying only `repo_metrics` pools stays valid — a real shape, since
+    /// the architecture percentiles need no per-language pools.
     #[test]
     fn fully_empty_artifact_is_rejected_but_pools_only_is_not() {
         let mut art = CalibrationArtifact::from_slice(EMBEDDED_WORLD_BYTES)
