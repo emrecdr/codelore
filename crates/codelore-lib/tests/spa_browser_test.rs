@@ -3768,3 +3768,147 @@ fn desktop_width_pairs_half_widgets() {
         );
     }
 }
+
+/// Every colour lens's field must survive `buildFsHierarchy`'s metrics copy —
+/// that literal is the SOLE producer of the circle-pack's `metrics`, and the
+/// AI lens rendered the whole map "no data" grey for as long as `ai_pct` was
+/// missing from it while the table two panels down showed real percentages.
+/// Pinned at the d3 data binding: every leaf's metrics object must carry the
+/// lens keys, so a field dropped from the copy fails here by name.
+#[test]
+fn circle_pack_metrics_carry_every_colour_lens_field() {
+    let fixture = differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+    let dash = SpaDashboard {
+        hotspots: run_hotspots(&db, &opts).expect("hotspots"),
+        summary: run_summary(&db, &opts).expect("summary"),
+        ..SpaDashboard::default()
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore AI Lens Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    // The circle-pack draws to an ECharts CANVAS — there are no DOM leaves
+    // to query — so the pin drives the exposed builder hook directly with a
+    // synthetic row and asserts every colour-lens field survives the
+    // metrics copy (the sole producer the AI lens reads).
+    // Primitives only across the evaluate boundary: the probe returns a
+    // joined string ('' = every field present).
+    let missing: String = eval_json(
+        &tab,
+        "(() => { \
+            const root = window._codeloreBuildFsHierarchy([{ \
+              path: 'src/probe.rs', revisions: 3, cognitive: 7.5, \
+              cognitive_health: 88.0, hotspot_score: 0.4, \
+              ai_pct: 42.0, mi: 71.0, mi_rank: 0.5 }]); \
+            let leaf = root; \
+            while (leaf && leaf.children && leaf.children.length) { \
+              leaf = leaf.children[0]; \
+            } \
+            if (!leaf || !leaf.metrics) return '<no leaf metrics built>'; \
+            return ['revisions','cognitive','cognitive_health','hotspot_score',\
+                    'ai_pct','mi','mi_rank'] \
+              .filter(k => !(k in leaf.metrics)).join(','); \
+         })()",
+    );
+    assert!(
+        missing.is_empty(),
+        "buildFsHierarchy dropped colour-lens fields from metrics: {missing}"
+    );
+}
+
+/// Escape must close the detail drawer: it opens non-modally (`.show()`),
+/// so the platform installs no close watcher and only the
+/// `@keydown.escape.window` directive provides the universal convention.
+#[test]
+fn escape_closes_the_detail_drawer() {
+    let fixture = differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        age_time_now: Some(time::macros::date!(2099 - 01 - 01)),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+    assert!(
+        !knowledge_islands.is_empty(),
+        "fixture produced no knowledge-island rows; the drawer cannot open"
+    );
+    let dash = SpaDashboard {
+        hotspots: run_hotspots(&db, &opts).expect("hotspots"),
+        summary: run_summary(&db, &opts).expect("summary"),
+        knowledge_islands,
+        ..SpaDashboard::default()
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore Escape Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    tab.wait_for_element("tr.ki-row")
+        .expect("at least one knowledge-islands row should render");
+    tab.evaluate(
+        "(() => { const r = document.querySelector('tr.ki-row'); \
+         r.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()",
+        false,
+    )
+    .expect("open drawer via Enter");
+    std::thread::sleep(Duration::from_millis(300));
+    let open: bool = eval_json(
+        &tab,
+        "document.getElementById('file-detail-drawer').open === true",
+    );
+    assert!(
+        open,
+        "drawer did not open; Escape assertion would be vacuous"
+    );
+
+    tab.evaluate(
+        "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))",
+        false,
+    )
+    .expect("dispatch Escape");
+    std::thread::sleep(Duration::from_millis(300));
+    let closed: bool = eval_json(
+        &tab,
+        "document.getElementById('file-detail-drawer').open === false",
+    );
+    assert!(
+        closed,
+        "Escape must close the non-modal drawer via the @keydown.escape.window directive"
+    );
+}

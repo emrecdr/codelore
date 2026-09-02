@@ -409,7 +409,7 @@ impl AnalysisName {
     /// the `commits` JOIN for `rev` equality. These four are the only
     /// analyses that semantically MAKE SENSE under bucketing (they're
     /// all about co-change, which `--time-bucket` is designed to
-    /// smooth). The other 50 are either per-file or per-author
+    /// smooth). The rest are either per-file or per-author
     /// aggregations where bucketing is semantically a no-op or
     /// outright invalid.
     ///

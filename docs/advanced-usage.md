@@ -22,7 +22,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## 1. The analyses (what they tell you)
 
-CodeLore ships **dozens of behavioral analyses** across four tiers (the registry is the authoritative count — `codelore analyze --analysis <bogus>` prints the full valid list). The table below is split into the code-maat-parity analyses (drop-in successors to legacy code-maat), a modern signal (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), modern additions marked ★ (the SARIF-backed differentiators including `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, `refactoring-targets`, and `finding-hotspot-overlap`), graph-analytics analyses marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and architecture-analytics analyses marked ★★ (god-classes + architecture-violations + dependency-cycles + cycle-health + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
+CodeLore ships **dozens of behavioral analyses** across four tiers (the registry is the authoritative count — `codelore analyze --analysis <bogus>` prints the full valid list). The table below is split into the code-maat-parity analyses (drop-in successors to legacy code-maat), a modern signal (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), modern additions marked ★ (the SARIF-backed differentiators including `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, `refactoring-targets`, and `finding-hotspot-overlap`), graph-analytics analyses marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and architecture-analytics analyses marked ★★ (the full membership is the table below — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -47,7 +47,7 @@ CodeLore ships **dozens of behavioral analyses** across four tiers (the registry
 | `soc` | "Sum of Coupling — how central is each file in the change-coupling graph?" | Σ(N−1) over each commit of size N the file appears in | Find systemic-coupling hubs (high `SoC`) |
 | `messages` | "Which entities co-occur with commits matching this message regex?" | Server-side `regexp_matches(message, --expression-to-match)` join with `changes` | Bug-fix density, label-driven hotspots |
 
-### Modern additions (6 ★)
+### Modern additions (★)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
@@ -57,6 +57,8 @@ CodeLore ships **dozens of behavioral analyses** across four tiers (the registry
 | `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
 | `hotspot-velocity` ★ | "Which files are *accelerating* in churn?" | Recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
 | `refactoring-targets` ★ | "Where should I refactor first for maximum ROI?" | `priority = (structural_risk × hotspot_score) / max(loc, 25)`; rows carry `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
+| `finding-hotspot-overlap` ★ | "Which external-scanner findings land in my hotspots?" | External findings (from `codelore ingest-sarif`) JOIN the hotspot ranking | Prioritizes scanner noise: one finding inside a hotspot outranks a hundred in dormant files |
+| `defect-validation` | "Does the health score predict where defects land here?" | Reads a defect-calibration artifact instead of the fact store — AUC, precision@10, per-band change shares | The receipts behind the calibrated gate — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) |
 
 ### Graph-analytics tier (7 ★)
 
@@ -146,7 +148,7 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `json` | Programmatic consumption | Pretty-printed; serde-derived |
 | `ndjson` | Streaming consumers (`jq -c`, CI log pipelines, LSP integrations) | Newline-delimited JSON — one compact object per line, stream-parseable as rows arrive |
 | `markdown` | `$GITHUB_STEP_SUMMARY` in CI | GFM tables; one analysis per `# CodeLore <name>` header |
-| `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
+| `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, plus `codelore diff` and `codelore check` — their rule sets are documented below |
 | `gha` | Inline PR annotations in GitHub Actions without a SARIF upload step | Emits `::error` / `::warning` / `::notice` workflow commands to stdout; the runner renders each finding as a diff annotation |
 | `html` | Shareable single-file report of one analysis run | Self-contained static HTML (inline CSS + vanilla JS, no CDN); the analysis rows are embedded as a JSON block |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
@@ -154,7 +156,7 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` optional (defaults to `.codelore/spa.html`); ~1.5 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
 | `step-summary` | GitHub Actions `$GITHUB_STEP_SUMMARY`. Single GFM Markdown summary with KPI table, top-10 hotspots (MI band emoji), MI band breakdown (unicode bars), behavioral coupling density, knowledge islands `<details>` collapsible. | Streams to stdout by default; redirect with `>> $GITHUB_STEP_SUMMARY` in CI. Typical 2–10 KB; well under GitHub's 1 MB step-summary cap. Same composite-dashboard inputs as `--format spa` so a single ingest run can emit BOTH (run `--format step-summary` first to stdout, then `--format spa` to file). Requires the same `spa` Cargo feature as `--format spa`. |
 
-Every file output (except SQLite, where the provenance table lives inside the DB, and SPA, where it's embedded as a JSON block in the page) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
+Every file output (except SQLite, where the provenance table lives inside the DB, and SPA, where it's embedded as a JSON block in the page) emits a `{output}.provenance.json` sidecar with the codelore/gix/arrow/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
 
 ### `--format spa` widget surface
 
@@ -554,10 +556,11 @@ The step summary appears at the bottom of the workflow run page in the GitHub Ac
 
 | Rule ID | Tags | When it fires |
 |---|---|---|
-| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = max(0.1, (100 − cognitive_health) / 4)` (range 0.1–10 — health is bounded to [60, 100], so /4 spans the full scale); `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
+| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = max(0.1, (100 − cognitive_health) / 4)` (range 0.1–10 — health is bounded to [60, 100], so /4 spans the full scale); `level` derived from severity band (≥7 = error, ≥4 = warning, else note). As emitted by `analyze`/`check`; `codelore diff`'s emitter still carries an older severity shape (an active ledger finding) |
 | `CODELORE-CLONE` | `behavioral`, `clone`, `type-1`, `type-2` | One result per clone family; `security-severity = 3 + family_size`, capped at 6 |
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
-| `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
+| `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `absent-change-pattern`, `pr-diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
+| `CODELORE-DELTA-HEALTH` | `behavioral`, `health`, `pr-diff` | One result per function whose health degraded across the PR range (`codelore diff` only; `warning` level) |
 
 Every `codelore diff --format sarif` result carries these versioned `partialFingerprints` keys so cross-run identity stays stable and GitHub Code Scanning deduplicates alerts:
 
@@ -579,7 +582,9 @@ codelore analyze [OPTIONS]
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
                                 csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa | step-summary
-  -o, --output PATH             Write to file instead of stdout
+  -o, --output PATH             Write to file instead of stdout; `-` also
+                                means stdout (rejected for parquet |
+                                sqlite | spa, which need a real path)
       --min-revs N              Min revisions per entity [default: 5]
       --rows N                  Cap output to N rows
       --complexity-sample STRATEGY
@@ -642,7 +647,10 @@ codelore analyze [OPTIONS]
                                 the analyses that opt in — `coupling`, `soc`,
                                 `hotspots`, and `code-health` — through it.
                                 Non-overlapping buckets — no commit-duplication
-                                artifact.
+                                artifact. Rejected (exit 2) for analyses
+                                outside the opt-in set, and for the
+                                composite --format spa / step-summary,
+                                which fan out to non-bucketed analyses.
 
   # ── Code-age cutoff ───────────────────────────────────────────────
       --age-time-now YYYY-MM-DD Override "now" for the `code-age` analysis
@@ -665,12 +673,16 @@ codelore analyze [OPTIONS]
   # ── Architectural grouping ────────────────────────────────────────
   -g, --group-file PATH         Architectural grouping definition file with
                                 full lookaround regex support (powered by
-                                fancy-regex 0.14). Rewrites file paths at
+                                fancy-regex). Rewrites file paths at
                                 ingest BEFORE coupling/hotspot/code-health
                                 aggregation, so groups show up as first-class
                                 entities. First-match-wins; plain-text LHS is
                                 escaped + prefix-anchored + slash-bound;
                                 explicit ^...$ regex on LHS is used as-is.
+                                Rejected (exit 2) for clone-coupling,
+                                crossing, and function-hotspots — their
+                                joins key on real paths, and grouped
+                                output would be silently empty.
 
       --strict-grouping         When set, fail-fast if any change path matches
                                 no group rule (default: paths with no rule are
@@ -768,7 +780,7 @@ codelore diff <RANGE> [OPTIONS]
       --base-cache PATH     JSON file cache for the BASE rev analysis
                             (cuts dual-analysis cost in half across PRs)
   -f, --format FORMAT       text | json | sarif | markdown [default: text]
-  -o, --output PATH         Write to file instead of stdout
+  -o, --output PATH         Write to file instead of stdout (`-` = stdout)
       --fail-on CONDITION   Exit 1 (gate violation) when condition fires:
                             none (default) | rank-entrant | score-increase | any
       --absence-min-shared N
@@ -1202,7 +1214,7 @@ The posture is local-first: with nothing configured but a model name, requests g
 | `CODELORE_LLM_PROVIDER` | `anthropic` or `openai-compat`. Unset: always the local-first OpenAI-compatible dialect — an ambient `ANTHROPIC_API_KEY` without this variable is an error, never a silent redirect to the hosted endpoint. | unset |
 | `ANTHROPIC_API_KEY` | Credential for the Anthropic dialect (required on it). | unset |
 | `CODELORE_LLM_BASE_URL` | Base URL for the OpenAI-compatible endpoint (ollama, llama.cpp, LM Studio, vLLM, OpenAI, OpenRouter). | `http://localhost:11434/v1` |
-| `CODELORE_LLM_API_KEY` | Optional bearer token for the OpenAI-compatible endpoint; local runners typically need none. | unset |
+| `CODELORE_LLM_API_KEY` | Optional bearer token for the OpenAI-compatible endpoint; local runners typically need none. Refused over plain `http://` unless the host is loopback — it would cross the network unencrypted. | unset |
 | `CODELORE_LLM_MODEL` | Model name. **Required** on the OpenAI-compatible dialect (any name from `ollama list` works); on the Anthropic dialect it overrides the default model. | none on OpenAI-compatible; a Sonnet-class default on Anthropic |
 
 Note: `provider=anthropic` always pins the Anthropic API base URL — `CODELORE_LLM_BASE_URL` applies to the OpenAI-compatible dialect only and is ignored on the Anthropic path.
@@ -1213,6 +1225,7 @@ export CODELORE_LLM_MODEL=llama3.2        # any model from `ollama list`
 codelore explain src/core/engine.rs --repo . --llm
 
 # Hosted Anthropic endpoint (explicit opt-in):
+export CODELORE_LLM_PROVIDER=anthropic
 export ANTHROPIC_API_KEY=sk-ant-…
 codelore explain src/core/engine.rs --repo . --llm
 ```
@@ -1436,7 +1449,7 @@ On a pass, the document contains zero results (valid SARIF; the GitHub Code Scan
 
 #### What the evidence chain contains
 
-For each per-file gate violation (paths that are not `(repo-wide)` or `(degraded)`), the SARIF result carries a **commit evidence chain**: the top-5 commits that most recently touched that file, newest-first (ordered by commit date, then revision, for deterministic ties). Each entry's message reads `{date} {author}: {message} (+{churn} lines)`, combining:
+For each per-file gate violation (paths that are not `(repo-wide)` or `(degraded)`), the SARIF result carries a **commit evidence chain**: the top-5 commits that most recently touched that file, newest-first (ordered by commit date, same-second ties broken deterministically by the ingest's newest-first rowid convention). Each entry's message reads `{date} {author}: {message} (+{churn} lines)`, combining:
 
 - The ISO date
 - The canonical (mailmap-resolved) author
@@ -1461,7 +1474,7 @@ Each result also carries two `partialFingerprints` keys:
 | `gateFinding/v1` | Stable identity of this finding across check runs (SHA-256 of gate name, file path, and HEAD SHA). Changes when the HEAD SHA changes — expected. |
 | `primaryLocationLineHash` | The key GitHub uses to deduplicate alerts across SARIF uploads (SHA-256 of repo root + path). Stable across HEADs as long as the violation stays on the same file. |
 
-Both keys are versioned (`/v1`) as required by the SARIF 2.1.0 spec (§3.5.4.2).
+`gateFinding` is versioned (`/v1`) as SARIF 2.1.0 §3.5.4.2 requires; `primaryLocationLineHash` stays deliberately unversioned — it is GitHub's cross-tool deduplication key, matched by name.
 
 #### GitHub Actions upload
 
@@ -1562,7 +1575,9 @@ This does not add a network dependency — the artifact is a local JSON file pro
 
 Pass `--calibration <path>` (built with `codelore calibrate`) to replace the embedded world corpus with your own corpus-calibration artifact for every lens-consuming tool — the same override the CLI's `--calibration` applies on `analyze`/`check`. It is startup-only in the same way: the artifact is loaded when the server starts, and a missing or malformed file is a startup error, never a failure on a later tool call. Unlike defect calibration, a corpus artifact is repo-agnostic — it pools distributions from many repositories and applies anywhere, so there is no repo-identity guard to satisfy.
 
-`--allow-foreign-calibration` is the third startup flag: it skips the defect artifact's repo-identity guard so an artifact mined from a different repository (a fork, a moved checkout) can be applied — the same semantics the flag has on the CLI.
+`--allow-foreign-calibration` skips the defect artifact's repo-identity guard so an artifact mined from a different repository (a fork, a moved checkout) can be applied — the same semantics the flag has on the CLI.
+
+`--cache-dir` and `--temp-dir` complete the startup surface for containerized or CI-hosted servers: the first overrides the platform cache root the fact store persists under, the second points DuckDB's spill files at a directory that must already exist and be writable — one root, resolved once, serves every tool for the server's lifetime. Startup is also where the repository itself is validated: the server opens the repo and resolves HEAD before serving, so a typo'd path in an MCP client config is a startup error naming the fix, never a healthy-looking server that fails on every tool call.
 
 ### Client configuration
 
@@ -1743,7 +1758,7 @@ Each tool call opens its own `FactsDb` connection via the warm-cache path. This 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Server not appearing in client tool list | Client config path wrong or JSON syntax error | Check the config file location for your client; validate JSON syntax; restart the client |
-| `repo path does not exist` error on first tool call | Absolute path required; relative paths are resolved at server startup, not at call time | Use an absolute path in `args` |
+| Server exits at startup with `cannot serve MCP for …` | The repo is opened and HEAD resolved before serving, so a typo'd or unusable path in the client config fails immediately, not on the first tool call | Fix the path in `args` (absolute paths are safest; relative ones resolve at server startup) |
 | First tool call is very slow (30 s+) | Cold-cache ingest running — normal for large repos | Wait for it to complete; subsequent calls in the same session use the warm cache |
 | `delta_health` returns a tool error for a valid branch | Branch name is valid locally but not yet fetched | Run `git fetch` in the repo, then retry |
 | Tools return stale data after commits | The cache key includes HEAD SHA; new commits produce a new cache entry automatically | No action needed — the next call after a commit will re-ingest |
@@ -1759,7 +1774,7 @@ Each tool call opens its own `FactsDb` connection via the warm-cache path. This 
 | Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Rename-aware aggregation is off for this run — `--no-canonical-lineage` was passed, or `--code-maat-compat` implied it | Drop those flags; by default a file's pre-rename history is merged onto its current canonical path |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
 | `--format parquet` fails with "requires --output" | Binary format can't stream to stdout | Pass `--output FILE.parquet` |
-| `--format sarif` fails with "supported: hotspots, clones, clone-coupling" | Other analyses don't have a SARIF rule yet | Use one of the supported analyses, or `--format json` |
+| `--format sarif` fails with `<analysis> analysis supports <formats>; got "sarif"` | Only `hotspots`, `clones`, and `clone-coupling` carry analyze-mode SARIF rules; the gate fires before ingest (exit 2) | Use one of those analyses, or `--format json` |
 | Disk space warning during `cargo test` | DuckDB bundled build is heavy (~3-4 GB target dir) | `cargo clean -p codelore-lib` to free; the next build is faster than a full clean |
 | `cargo bench` errors on parallel/serial benches | rayon `build_global()` can only run once per process | The bench file uses per-iteration `pool.install()` which sidesteps this; only an issue if you write your own bench |
 

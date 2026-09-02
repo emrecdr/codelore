@@ -210,8 +210,9 @@ impl ChatClient for OpenAiCompatClient {
 /// derived impl would print them through any `{:?}` or `tracing` sink.
 #[derive(Clone, Default)]
 pub struct LlmEnv {
-    /// `CODELORE_LLM_PROVIDER` — `anthropic` or `openai-compat`; unset lets the
-    /// presence of an Anthropic key (else the local default) decide.
+    /// `CODELORE_LLM_PROVIDER` — `anthropic` or `openai-compat`; unset selects
+    /// the local OpenAI-compatible dialect, and an ambient Anthropic key
+    /// without it is an error, never an implicit upgrade.
     pub provider: Option<String>,
     /// `ANTHROPIC_API_KEY` — the Anthropic dialect's credential.
     pub anthropic_key: Option<String>,

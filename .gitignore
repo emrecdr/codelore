@@ -65,8 +65,9 @@ CLAUDE.md
 # no value in tracking them and each graph.json is 100k+ lines.
 graphify-out/
 
-# Generated SPA dashboard (default --format spa --output path)
-/.codelore/
+# Generated SPA dashboard (default --format spa --output path) — matched at
+# any depth: dogfood runs inside crate dirs generate nested copies too
+.codelore/
 
 # Subagent-execution scratch (ledgers, task reports) — session artifacts, never shipped
 .superpowers/
