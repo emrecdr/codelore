@@ -2868,4 +2868,25 @@ longer chronologically wrong at ties. The seeded regression uses two
 same-second commits whose SHAs sort AGAINST chronology, so the old
 tiebreaks fail it by construction.
 
-The next sweep re-opens at **F342**.
+### F342 (Fixed — Unreleased) — knowledge signals counted dead and renamed-away paths as live
+
+Two liveness holes in the knowledge family. `knowledge_shares` excluded
+deletion *events* (`change_type != 'deleted'`) but never deleted *paths*,
+so a long-deleted file kept its pre-deletion contributions and flowed
+into every consumer — coordination-needs emitted an output row per dead
+file and code-familiarity counted authors who only ever touched deleted
+files; the reviewer-credit query could re-introduce a dead path even
+after the authored rows were filtered. Separately, the knowledge
+prevalence tile's denominator (`count_live_files`) ran over raw `changes`,
+where a renamed-away source path's most recent own event is its
+pre-rename row — live forever — while the numerator was lineage-aware:
+unlike populations in one ratio. The materializer now drops dead paths at
+both stages, and the denominator reads the same lineage-aware source as
+its numerator (raw paths on both sides when lineage is off). Seeded
+regressions pin a dead path staying out of shares beside a live control
+and the renamed-away fold under lineage against the lineage-off
+population. The ingest-side `query_live_paths` shares the renamed-away
+shape but only wastes blob lookups (correctly bucketed `NotCounted`) and
+is deliberately unchanged.
+
+The next sweep re-opens at **F343**.

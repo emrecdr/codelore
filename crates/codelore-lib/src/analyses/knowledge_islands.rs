@@ -368,18 +368,29 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
 ///
 /// Returns [`CodeLoreError::Analysis`] on `DuckDB` prepare, query, or
 /// row-mapping failure.
-pub fn count_live_files(db: &FactsDb) -> Result<u64> {
+pub fn count_live_files(db: &FactsDb, opts: &Options) -> Result<u64> {
+    // Same source as the numerator: the departed-island count above is
+    // lineage-aware, so this denominator must be too. On the raw `changes`
+    // table a renamed-away source path's most recent own event is its
+    // pre-rename 'modified' row — it reads live forever and inflates the
+    // count; under the lineage view the retired name folds onto its
+    // canonical target and only genuinely live paths remain. With lineage
+    // off, both sides consistently use raw paths.
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let src = crate::analyses::lineage::source_table(opts);
     db.query_row(
-        "SELECT COUNT(*) FROM (
-            SELECT c.path,
-                   arg_max(
-                       c.change_type,
-                       ROW(commits.date, -commits.rowid)
-                   ) AS change_type
-            FROM changes c
-            INNER JOIN commits ON commits.rev = c.rev
-            GROUP BY c.path
-        ) WHERE change_type != 'deleted'",
+        &format!(
+            "SELECT COUNT(*) FROM (
+                SELECT c.path,
+                       arg_max(
+                           c.change_type,
+                           ROW(commits.date, -commits.rowid)
+                       ) AS change_type
+                FROM {src} c
+                INNER JOIN commits ON commits.rev = c.rev
+                GROUP BY c.path
+            ) WHERE change_type != 'deleted'",
+        ),
         [],
         |r| r.get::<_, u64>(0),
     )

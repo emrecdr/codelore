@@ -1806,7 +1806,7 @@ fn build_spa_dashboard(
             // gate). Degrades to a zero count on query failure, which the
             // factor constructor treats as "no denominator" → tile omitted.
             let total_live_files =
-                codelore_lib::cli_api::analyses::knowledge_islands::count_live_files(db)
+                codelore_lib::cli_api::analyses::knowledge_islands::count_live_files(db, opts)
                     .unwrap_or_else(|e| {
                         tracing::warn!(
                             "dashboard: live-file count for knowledge tile failed; skipping: {e}"
