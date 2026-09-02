@@ -1037,6 +1037,39 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ));
 }
 
+/// `--time-bucket` combined with a composite format must be rejected at the
+/// CLI boundary. The per-analysis gate keys on the NAMED analysis, but the
+/// spa / step-summary composites fan out to dozens of analyses with the same
+/// options; under bucketing their rev-keyed joins match zero rows and the
+/// per-widget degradation wrappers catch `Err`, not empty — half the
+/// dashboard silently rendered blank. Exit 2, `InvalidOptions`.
+#[test]
+fn time_bucket_rejected_for_composite_formats() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    for format in ["spa", "step-summary"] {
+        codelore_cmd()
+            .args([
+                "analyze",
+                "--analysis",
+                "hotspots", // bucket-aware, so the per-analysis gate passes
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--format",
+                format,
+                "--no-banner",
+                "--no-cache",
+                "--time-bucket",
+                "week",
+            ])
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "--time-bucket cannot be combined with --format",
+            ));
+    }
+}
+
 /// `--group-file` combined with `function-hotspots` must be rejected at the
 /// CLI boundary. Grouping rewrites the `changes` table but discards the hunks
 /// of collapsed paths, and `function-hotspots` ranks over the raw `hunks`

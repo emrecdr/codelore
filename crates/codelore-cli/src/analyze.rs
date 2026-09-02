@@ -149,6 +149,26 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         .into());
     }
 
+    // The per-analysis gate above keys on the NAMED analysis, but the
+    // composite formats fan out to dozens of analyses with these same
+    // options. Under `--time-bucket` their `lineage::source_table` resolves
+    // to `changes_bucketed`, whose `rev` is a date-truncated string, so
+    // every `JOIN commits USING (rev)` matches zero rows — and the
+    // composite's per-widget degradation wrappers catch `Err`, not empty,
+    // so half the dashboard renders blank with no signal. Reject the
+    // combination outright: a bucketed multi-analysis composite has no
+    // defined meaning.
+    if opts.time_bucket.is_some() && matches!(format, "spa" | "step-summary") {
+        return Err(CodeLoreError::InvalidOptions(format!(
+            "--time-bucket cannot be combined with --format {format}: the \
+             composite formats run many analyses that do not support \
+             bucketing and would silently render empty. Use --format csv, \
+             json, or markdown with one of the bucket-aware analyses \
+             (coupling, soc, hotspots, code-health), or drop --time-bucket."
+        ))
+        .into());
+    }
+
     // `--group-file` collapses/drops paths in the `changes` table, but
     // `function-hotspots` ranks over the raw `hunks` table, whose rows are
     // NOT path-rewritten by grouping (line-range semantics don't translate to
