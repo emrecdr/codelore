@@ -524,32 +524,32 @@
       "source": "authored",
       "class": "fp-ci-bound",
       "narrative": "## Diagnosis\nCorpus standing 0.88, with a 95% interval spanning 0.62 to 0.81.",
-      "fact_values": [35.26, 0.42, 0.97, 0.88, 412, 0.72, 0.15, 0, 0.33, 0.5, 0.08, 0.61, 0.27, 1, 0.91, 42, 0.66, 0.0003, 187, 0.55],
+      "fact_values": [35.26, 0.42, 0.97, 0.88, 412, 0.72, 0.15, 0, 0.33, 0.5, 0.08, 0.61, 0.27, 1, 0.91, 42, 0.66, 0.0003, 187, 0.55, 0.62, 0.81],
       "faithful": true,
       "expect_grounded": false,
-      "notes": "The interval bounds render on the sheet as one en-dash string and never enter the value set; the 95 confidence level is not a sheet value either. Three tokens flag on a faithful narrative."
+      "notes": "The interval endpoints parse into the fact set and ground; the 95 confidence level is not a printed sheet value and still flags. One token flags on a faithful narrative."
     },
     {
-      "id": "fp-ci-bound-02",
+      "id": "clean-17",
       "lens": "file",
       "source": "authored",
-      "class": "fp-ci-bound",
+      "class": "clean",
       "narrative": "## Diagnosis\nThe corpus percentile interval is 0.62–0.81.",
-      "fact_values": [35.26, 0.42, 0.97, 0.88, 412, 0.72, 0.15, 0, 0.33, 0.5, 0.08, 0.61, 0.27, 1, 0.91, 42, 0.66, 0.0003, 187, 0.55],
+      "fact_values": [35.26, 0.42, 0.97, 0.88, 412, 0.72, 0.15, 0, 0.33, 0.5, 0.08, 0.61, 0.27, 1, 0.91, 42, 0.66, 0.0003, 187, 0.55, 0.62, 0.81],
       "faithful": true,
-      "expect_grounded": false,
-      "notes": "A verbatim quote of the sheet's own en-dash CI string still flags: composite values never parse into the fact set."
+      "expect_grounded": true,
+      "notes": "A verbatim quote of the sheet's en-dash CI string grounds: both endpoints of a composite value parse into the fact set."
     },
     {
-      "id": "fp-ci-bound-03",
+      "id": "clean-18",
       "lens": "file",
       "source": "authored",
-      "class": "fp-ci-bound",
+      "class": "clean",
       "narrative": "## Diagnosis\nCorpus interval 0.28–0.44 around percentile 0.35.",
-      "fact_values": [78.4, 0.12, 0.35, 96, 0.05, 0.4, 0.22, 0, 0.1, 0.31, 0, 0.18, 23, 0.81],
+      "fact_values": [78.4, 0.12, 0.35, 96, 0.05, 0.4, 0.22, 0, 0.1, 0.31, 0, 0.18, 23, 0.81, 0.28, 0.44],
       "faithful": true,
-      "expect_grounded": false,
-      "notes": "Both bounds flag while the point value matches."
+      "expect_grounded": true,
+      "notes": "Both bounds ground beside the point value once the composite splits into the fact set."
     },
     {
       "id": "fp-ordinal-percentile-01",

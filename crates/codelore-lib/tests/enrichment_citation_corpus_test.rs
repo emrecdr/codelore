@@ -46,7 +46,7 @@ fn corpus() -> Corpus {
 /// Per-class corpus composition. Published in `docs/narrative-evidence-v1.md`;
 /// update both together.
 const EXPECTED_CLASS_COUNTS: [(&str, usize); 12] = [
-    ("clean", 16),
+    ("clean", 18),
     ("fabricated-value", 6),
     ("sign-inversion", 3),
     ("fn-small-int", 5),
@@ -54,7 +54,7 @@ const EXPECTED_CLASS_COUNTS: [(&str, usize); 12] = [
     ("fn-wrong-attachment", 5),
     ("fp-version-fragment", 4),
     ("fp-date-fragment", 3),
-    ("fp-ci-bound", 3),
+    ("fp-ci-bound", 1),
     ("fp-ordinal-percentile", 3),
     ("fp-derived-arithmetic", 3),
     ("fp-function-span", 3),
@@ -148,7 +148,7 @@ fn confusion_matrix_matches_the_published_numbers() {
     // labelled corpus" — update the doc with any change here.
     assert_eq!(
         (tn, fp, tp, fn_),
-        (16, 19, 9, 15),
+        (18, 17, 9, 15),
         "confusion matrix (tn, fp, tp, fn) moved"
     );
 }
