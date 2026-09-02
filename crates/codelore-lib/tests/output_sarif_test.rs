@@ -60,12 +60,15 @@ fn sarif_level_warning_above_threshold() {
     //   ≥ 7.0 → error
     //   ≥ 4.0 → warning
     //   < 4.0 → note
-    // For "warning" we need cognitive_health ≤ 60.
+    // severity = (100 − health) / 4 on the REAL health range [60, 100], so
+    // warning needs health ∈ (72, 84]. The old /10 divisor could only reach
+    // this band with out-of-range fixture health values — which is exactly
+    // how the unreachable error band went unnoticed.
     let rows = vec![HotspotRow {
         path: "src/lib.rs".into(),
         revisions: 5,
         cognitive: 10.0,
-        cognitive_health: 55.0, // → severity 4.5 → warning band
+        cognitive_health: 80.0, // → severity (100−80)/4 = 5.0 → warning band
         hotspot_score: 0.6,
         mi: Some(68.0),
         mi_rank: None,
@@ -88,12 +91,14 @@ fn sarif_level_warning_above_threshold() {
 
 #[test]
 fn sarif_level_error_for_severe_findings() {
-    // Severity ≥ 7.0 → error level (the most severe SARIF band).
+    // Severity ≥ 7.0 → error level (the most severe SARIF band) — reachable
+    // from an IN-RANGE health value (health ≤ 72), which the old /10 divisor
+    // made impossible: it capped severity at 4.0 for health ≥ 60.
     let rows = vec![HotspotRow {
         path: "src/severe.rs".into(),
         revisions: 50,
         cognitive: 100.0,
-        cognitive_health: 20.0, // → severity 8.0 → error band
+        cognitive_health: 64.0, // → severity 8.0 → error band
         hotspot_score: 0.9,
         mi: Some(40.0),
         mi_rank: None,
@@ -147,7 +152,7 @@ fn sarif_security_severity_proxy() {
         path: "src/danger.rs".into(),
         revisions: 30,
         cognitive: 100.0,
-        cognitive_health: 20.0,
+        cognitive_health: 64.0,
         hotspot_score: 0.9,
         mi: Some(35.0),
         mi_rank: None,
@@ -165,9 +170,42 @@ fn sarif_security_severity_proxy() {
 
     let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
     let result = &parsed["runs"][0]["results"][0];
-    // (100 - 20) / 10 = 8.0
+    // (100 - 64) / 4 = 9.0
     let sev = result["properties"]["security-severity"].as_f64().unwrap();
-    assert!((sev - 8.0).abs() < 1e-9, "expected 8.0, got {sev}");
+    assert!((sev - 9.0).abs() < 1e-9, "expected 9.0, got {sev}");
+    assert_eq!(result["level"], "error");
+}
+
+#[test]
+fn sarif_severity_floors_at_a_tenth_for_a_structurally_healthy_hotspot() {
+    // health = 100 → raw severity 0.0, which GitHub maps to "no severity";
+    // the emitter floors at 0.1 so every emitted hotspot carries a grade.
+    let rows = vec![HotspotRow {
+        path: "src/healthy_but_hot.rs".into(),
+        revisions: 40,
+        cognitive: 1.0,
+        cognitive_health: 100.0,
+        hotspot_score: 0.5,
+        mi: Some(90.0),
+        mi_rank: None,
+        ai_pct: None,
+        hotspot_score_anchored: None,
+    }];
+    let mut buf = Vec::new();
+    write_hotspots_sarif(
+        &rows,
+        "https://github.com/example/repo",
+        &mut Cursor::new(&mut buf),
+    )
+    .expect("write");
+    let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
+    let result = &parsed["runs"][0]["results"][0];
+    let sev = result["properties"]["security-severity"].as_f64().unwrap();
+    assert!(
+        (sev - 0.1).abs() < 1e-9,
+        "expected the 0.1 floor, got {sev}"
+    );
+    assert_eq!(result["level"], "note");
 }
 
 #[test]
