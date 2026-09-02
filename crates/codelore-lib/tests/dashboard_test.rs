@@ -126,3 +126,54 @@ fn trends_sparkline_covers_pre_rename_history_under_lineage() {
         "head path should aggregate ≥2 revisions (pre-rename + post-rename); got {on_sum}"
     );
 }
+
+/// Same-second ties must resolve to the NEWER commit in newest-first
+/// queries. Convention (documented at the ingest): gix walks
+/// reverse-chronologically, so smaller `rowid` = newer commit. The revs
+/// here are chosen so SHA-lex order INVERTS chronology — the older commit
+/// sorts lexicographically last — which is exactly the case where the
+/// previous `rowid DESC` / `rev DESC` tiebreaks picked the wrong commit.
+#[test]
+fn same_second_ties_resolve_to_the_newer_commit_in_newest_first_queries() {
+    let db = FactsDb::new_in_memory().expect("db");
+    let commit = |rev: &str| {
+        format!(
+            "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+             canonical_author, date, committer_date, message, is_merge, parent_count, \
+             la, ld, nf, nd, ndev, nuc, exp, entropy, fix) \
+             VALUES ('{rev}', 'a@x', 'A', 'a@x', 'a@x', \
+             '2026-03-05 12:00:00', '2026-03-05 12:00:00', 'm', false, 1, \
+             1, 0, 1, 1, 1, 1, 1, 0.0, false)"
+        )
+    };
+    // Newest inserted FIRST (smaller rowid = newer, per the walk order).
+    for stmt in [
+        commit("aaa_newer"),
+        commit("zzz_older"),
+        "INSERT INTO changes VALUES ('aaa_newer', 'f.rs', 'modified', NULL, 2, 1)".to_string(),
+        "INSERT INTO changes VALUES ('zzz_older', 'f.rs', 'added', NULL, 5, 0)".to_string(),
+    ] {
+        db.execute_batch(&stmt).expect("seed");
+    }
+
+    // Newest-first LIMIT 1: must be the newer commit, not the one whose
+    // rowid (or SHA) sorts higher.
+    let kamei = run_kamei_risk(&db, 1).expect("kamei");
+    assert_eq!(
+        kamei[0].rev, "aaa_newer",
+        "kamei sparkline's last-N must start at the NEWER of a same-second pair"
+    );
+
+    let opts = codelore_lib::Options {
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    let evidence = codelore_lib::quality_gates::evidence::evidence_for_path(&db, &opts, "f.rs", 5)
+        .expect("evidence");
+    let revs: Vec<&str> = evidence.iter().map(|e| e.rev.as_str()).collect();
+    assert_eq!(
+        revs,
+        vec!["aaa_newer", "zzz_older"],
+        "evidence chain must list the newer commit first at a same-second tie"
+    );
+}

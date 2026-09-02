@@ -444,7 +444,7 @@ pub fn window_start_rev(db: &FactsDb, wd: u32) -> Result<Option<String>> {
     let sql = format!(
         "SELECT rev FROM commits
          WHERE date < (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days'
-         ORDER BY date DESC, rev DESC
+         ORDER BY date DESC, rowid ASC
          LIMIT 1"
     );
     match db.conn().query_row(&sql, [], |r| r.get::<_, String>(0)) {

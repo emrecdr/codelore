@@ -2851,4 +2851,21 @@ an object-header size probe before their bytes load, and a differential
 test generates a multi-megabyte text file at test time pinning both
 backends to identical, nonzero per-file counts.
 
-The next sweep re-opens at **F341**.
+### F341 (Fixed — Unreleased) — six chronology tiebreaks violated or ignored the rowid convention
+
+The ingest documents that gix walks reverse-chronologically (smaller
+`rowid` = newer commit) and defines the tiebreak idiom; six query sites
+diverged: coordination-needs' author-interleave LAG window visited
+same-second commits newest-first inside an ascending scan (flipping
+`prev` and corrupting the interleave count at ties), cycle-origins and
+architecture-trend inverted their historical walks the same way, the
+Kamei sparkline's last-N picked the OLDER of a same-second pair, and two
+newest-first lookups — `window_start_rev` (shared with the `[new_code]`
+gate) and the SARIF evidence chain — tiebroke on SHA lex order, which the
+ingest comments call topologically meaningless. All six now follow the
+documented rowid direction; deterministic before and after, just no
+longer chronologically wrong at ties. The seeded regression uses two
+same-second commits whose SHAs sort AGAINST chronology, so the old
+tiebreaks fail it by construction.
+
+The next sweep re-opens at **F342**.
