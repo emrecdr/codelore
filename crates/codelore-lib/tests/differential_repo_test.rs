@@ -4,6 +4,7 @@
 //! parallel-build race between tests.
 
 use codelore_lib::Options;
+use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::{GitCliRepo, GixRepo, Repo};
 use codelore_lib::test_support::delivery_repo::DeliveryRepo;
 use codelore_lib::test_support::differential_repo::DifferentialRepo;
@@ -1671,4 +1672,73 @@ fn large_text_file_line_counts_match_between_backends() {
             .any(|(m, added, deleted)| m == "append big" && *added == 3 && *deleted == 0),
         "the append must count exactly 3 added lines; got {gix_counts:?}"
     );
+}
+
+/// The gate CLAUDE.md promises: both backends must produce IDENTICAL fact
+/// stores, per-table, via the shared row-digest engine (dynamic table
+/// discovery + its own anti-vacuity floor). Until now no test ever ingested
+/// through `GitCliRepo` at all — the differential suite stopped at the trait
+/// boundary, comparing selected fields with tolerances.
+///
+/// Named exclusion, with the reason on the row:
+/// - `hunks`: the ledger records that `GitCliRepo::walk_commits` emits no
+///   hunks while `GixRepo` populates them — a recorded divergence awaiting a
+///   remove-or-repurpose decision on the trait method. Excluding it BY NAME
+///   keeps every other table byte-exact instead of hiding the whole gate
+///   behind one known gap.
+#[test]
+fn ingested_fact_stores_are_identical_across_backends() {
+    let path = fixture_path();
+    let opts = opts_with_merges();
+
+    let gix_db = FactsDb::new_in_memory().expect("gix db");
+    gix_db
+        .ingest(&GixRepo::open(path).expect("gix open"), &opts)
+        .expect("gix ingest");
+    let cli_db = FactsDb::new_in_memory().expect("cli db");
+    cli_db
+        .ingest(&GitCliRepo::open(path).expect("cli open"), &opts)
+        .expect("cli ingest");
+
+    let gix_digest = codelore_lib::test_support::fact_store_digest(&gix_db);
+    let cli_digest = codelore_lib::test_support::fact_store_digest(&cli_db);
+
+    let excluded = ["hunks"];
+    let filter = |v: Vec<(String, String)>| -> Vec<(String, String)> {
+        v.into_iter()
+            .filter(|(t, _)| !excluded.contains(&t.as_str()))
+            .collect()
+    };
+    let hunks_diverge = {
+        let d = |v: &[(String, String)]| {
+            v.iter()
+                .find(|(t, _)| t == "hunks")
+                .map(|(_, digest)| digest.clone())
+        };
+        d(&gix_digest) != d(&cli_digest)
+    };
+    assert!(
+        hunks_diverge,
+        "the `hunks` tables are identical across backends — the named \
+         exclusion below is vacuous; remove it and let the gate cover hunks"
+    );
+    let gix_digest = filter(gix_digest);
+    let cli_digest = filter(cli_digest);
+    assert_eq!(
+        gix_digest.len(),
+        cli_digest.len(),
+        "backends produced different table sets"
+    );
+    assert!(
+        gix_digest.len() > 3,
+        "digest covered suspiciously few tables ({}) — vacuity floor",
+        gix_digest.len()
+    );
+    for ((table, g), (table2, c)) in gix_digest.iter().zip(cli_digest.iter()) {
+        assert_eq!(table, table2, "table lists diverged");
+        assert_eq!(
+            g, c,
+            "fact table `{table}` differs between GixRepo and GitCliRepo ingests"
+        );
+    }
 }

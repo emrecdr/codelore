@@ -487,33 +487,11 @@ fn head_only_ingest_persists_its_cache_entry() {
     );
 }
 
-/// Digest every row of every fact table, so a difference anywhere is caught
-/// rather than only in the tables the author thought to check. Table discovery
-/// is dynamic for the same reason — a new table joins the comparison without
-/// anyone remembering to add it.
+/// Delegates to the shared [`codelore_lib::test_support::fact_store_digest`]
+/// (also the engine of the cross-backend differential gate) so the digest
+/// logic and its anti-vacuity floor live in exactly one place.
 fn fact_store_digest(db: &FactsDb) -> Vec<(String, String)> {
-    let tables = db
-        .query_one_value(
-            "SELECT COALESCE(string_agg(table_name, ',' ORDER BY table_name), '') \
-             FROM information_schema.tables WHERE table_schema = 'main'",
-        )
-        .expect("list tables");
-    assert!(
-        !tables.is_empty(),
-        "no fact tables found — the comparison would be vacuously equal"
-    );
-    tables
-        .split(',')
-        .map(|t| {
-            let digest = db
-                .query_one_value(&format!(
-                    "SELECT COALESCE(md5(string_agg(r, '|' ORDER BY r)), 'empty') \
-                     FROM (SELECT CAST({t} AS VARCHAR) AS r FROM {t})"
-                ))
-                .unwrap_or_else(|e| panic!("digest {t}: {e}"));
-            (t.to_string(), digest)
-        })
-        .collect()
+    codelore_lib::test_support::fact_store_digest(db)
 }
 
 /// The equivalence proof behind splitting the cache key: changing every
