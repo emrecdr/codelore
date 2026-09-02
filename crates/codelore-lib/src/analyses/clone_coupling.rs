@@ -295,11 +295,7 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     rows.sort_by(|a, b| {
         b.at_risk
             .cmp(&a.at_risk)
-            .then_with(|| {
-                b.combined_score
-                    .partial_cmp(&a.combined_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .then_with(|| b.combined_score.total_cmp(&a.combined_score))
             .then_with(|| a.clone_group_id.cmp(&b.clone_group_id))
             .then_with(|| a.file_a.cmp(&b.file_a))
             .then_with(|| a.file_b.cmp(&b.file_b))

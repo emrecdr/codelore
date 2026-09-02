@@ -1927,11 +1927,9 @@ fn build_spa_dashboard(
                     Vec::new()
                 });
         cn.sort_by(|a, b| {
-            tier_rank(&b.tier).cmp(&tier_rank(&a.tier)).then(
-                b.cochange_entropy
-                    .partial_cmp(&a.cochange_entropy)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
+            tier_rank(&b.tier)
+                .cmp(&tier_rank(&a.tier))
+                .then(b.cochange_entropy.total_cmp(&a.cochange_entropy))
         });
         cn.truncate(10);
         cn

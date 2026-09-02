@@ -85,11 +85,7 @@ pub fn run_instability(db: &FactsDb, opts: &Options) -> Result<Vec<InstabilityRo
     // Most depended-upon first; then most unstable; then path.
     out.sort_by(|a, b| {
         b.ca.cmp(&a.ca)
-            .then_with(|| {
-                b.instability
-                    .partial_cmp(&a.instability)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .then_with(|| b.instability.total_cmp(&a.instability))
             .then_with(|| a.path.cmp(&b.path))
     });
     if let Some(limit) = opts.rows_limit {

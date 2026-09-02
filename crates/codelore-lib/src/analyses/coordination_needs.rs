@@ -313,8 +313,7 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
     // sort deterministically regardless of the SQL engine's incoming order.
     rows.sort_by(|a, b| {
         b.fragmentation
-            .partial_cmp(&a.fragmentation)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.fragmentation)
             .then_with(|| a.path.cmp(&b.path))
     });
 

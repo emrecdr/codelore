@@ -160,12 +160,7 @@ pub fn compute_centrality(pairs: &[CouplingRow]) -> Vec<CentralityRow> {
         .collect();
     // Sort by PageRank desc as the primary; secondary by path for
     // deterministic ordering when scores tie (common on tiny graphs).
-    out.sort_by(|a, b| {
-        b.pagerank
-            .partial_cmp(&a.pagerank)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.path.cmp(&b.path))
-    });
+    out.sort_by(|a, b| b.pagerank.total_cmp(&a.pagerank).then(a.path.cmp(&b.path)));
     out
 }
 

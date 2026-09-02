@@ -114,6 +114,40 @@ fn prune_repo_cache_removes_oldest_beyond_max() {
     );
 }
 
+/// The keep-path is exempt from eviction even when the cap still binds after
+/// every other entry is gone — the ingest path re-opens the entry it just
+/// wrote immediately after pruning, so the pruner deleting it fails the run
+/// that produced it.
+#[test]
+fn prune_global_cache_never_evicts_the_keep_path() {
+    use codelore_lib::cache::prune_global_cache;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo_dir = root.path().join("codelore").join("aabbccdd");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+
+    for i in 0..3u64 {
+        let path = repo_dir.join(format!("{i:016x}.duckdb"));
+        std::fs::write(&path, b"0123456789").unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let just_written = repo_dir.join(format!("{:016x}.duckdb", 2u64));
+
+    // A zero cap demands deleting everything; the keep-path must survive.
+    prune_global_cache(root.path(), 0, Some(&just_written));
+
+    assert!(
+        just_written.exists(),
+        "the just-written entry was evicted by the pruner that ran right before its re-open"
+    );
+    for i in 0..2u64 {
+        assert!(
+            !repo_dir.join(format!("{i:016x}.duckdb")).exists(),
+            "older entry {i} should have been evicted"
+        );
+    }
+}
+
 /// Global-cache pruner: create files exceeding the byte cap, assert they are pruned.
 #[test]
 fn prune_global_cache_removes_oldest_beyond_byte_cap() {
@@ -132,7 +166,7 @@ fn prune_global_cache_removes_oldest_beyond_byte_cap() {
     }
 
     // Prune with a cap of 15 bytes — should remove the 1 oldest file to get under cap.
-    prune_global_cache(root.path(), 15);
+    prune_global_cache(root.path(), 15, None);
 
     let remaining = std::fs::read_dir(&repo_dir)
         .unwrap()

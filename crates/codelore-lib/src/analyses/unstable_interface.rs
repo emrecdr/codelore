@@ -130,8 +130,7 @@ pub fn run_unstable_interface(db: &FactsDb, opts: &Options) -> Result<Vec<Unstab
     // Rank by composite score; tie-break on path for determinism.
     out.sort_by(|a, b| {
         b.instability_score
-            .partial_cmp(&a.instability_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.instability_score)
             .then_with(|| a.path.cmp(&b.path))
     });
     if let Some(limit) = opts.rows_limit {

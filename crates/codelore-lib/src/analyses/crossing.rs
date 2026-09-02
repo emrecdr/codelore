@@ -128,8 +128,7 @@ pub fn run_crossing(db: &FactsDb, opts: &Options) -> Result<Vec<CrossingRow>> {
 
     out.sort_by(|a, b| {
         b.crossing_score
-            .partial_cmp(&a.crossing_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.crossing_score)
             .then_with(|| a.path.cmp(&b.path))
     });
     if let Some(limit) = opts.rows_limit {
