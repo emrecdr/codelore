@@ -3194,10 +3194,16 @@ Equal-on-NaN is intransitive and modern sorts may detect and panic.
 ingest renaming the just-written entry into place and re-opening it,
 so a still-binding byte cap deleted the file the run was about to
 read. Probe: without the keep-path the zero-cap test loses the entry.
-(4) `CalibrationArtifact::validate` rejects `languages: []` — it
-passed every structural check while making every percentile lookup
-report "not in corpus" with no signal; `calibrate` already refused to
-write one, now a hand-built one cannot be read. Probe: with the check
-removed, the rejection test's `expect_err` fails on `Ok`.
+(4) `CalibrationArtifact::validate` rejects the fully empty artifact
+(no `languages` pools AND no `repo_metrics` pools) — it passed every
+structural check while making every lookup report "not in corpus"
+with no signal; `calibrate` already refused to write one, now a
+hand-built one cannot be read. First cut rejected `languages: []`
+alone and CI caught three tests legitimately exercising pools-only
+artifacts — the architecture percentiles need no per-language pools,
+so that shape stays valid and the two no-pools test stand-ins now
+carry the language entry their real-world counterparts have. Probe:
+with the check removed, the rejection test's `expect_err` fails on
+`Ok`; the same test pins the pools-only acceptance each run.
 
 The next sweep re-opens at **F361**.

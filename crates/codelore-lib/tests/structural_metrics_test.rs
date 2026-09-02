@@ -14,7 +14,8 @@
 use codelore_lib::analyses::architecture_metrics::run_architecture_metrics;
 use codelore_lib::analyses::instability::run_instability;
 use codelore_lib::calibration::{
-    CALIBRATION_FORMAT_VERSION, CalibrationArtifact, RepoMetrics, attach_repo_metrics,
+    CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles, RepoMetrics,
+    Stratum, attach_repo_metrics,
 };
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
@@ -398,14 +399,28 @@ fn architecture_metrics_additivity_without_repo_metrics_pool() {
     let (_dir, db, mut opts) = ingested_cycle_repo();
 
     // A valid artifact with no `repo_metrics` key at all — serialization
-    // omits the `None` field, matching pre-section artifacts on disk.
+    // omits the `None` field, matching pre-section artifacts on disk. Those
+    // artifacts carry per-language pools (a fully empty lens is rejected at
+    // load), so this stand-in carries one too.
+    let quantiles: Vec<f64> = (0..=1000).map(|i| f64::from(i) * 10.0).collect();
     let artifact = CalibrationArtifact {
         format_version: CALIBRATION_FORMAT_VERSION,
         corpus_vintage: "test-corpus-no-pools".to_string(),
         generated_at: "2026-07-14T00:00:00Z".to_string(),
         repos_included: 1,
         repos_attempted: 1,
-        languages: vec![],
+        languages: vec![LanguageTable {
+            language: "rust".to_string(),
+            sample_functions: 4_000,
+            strata: vec![Stratum {
+                sloc_min: 0,
+                sloc_max: u64::MAX,
+                metrics: vec![MetricQuantiles {
+                    metric: "cyclomatic".to_string(),
+                    quantiles,
+                }],
+            }],
+        }],
         repo_metrics: None,
     };
     let path = write_temp_calibration_artifact(&artifact);

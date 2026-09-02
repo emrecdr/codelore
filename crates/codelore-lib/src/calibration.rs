@@ -220,10 +220,11 @@ impl CalibrationArtifact {
                 self.format_version
             ));
         }
-        if self.languages.is_empty() {
+        if self.languages.is_empty() && self.repo_metrics.is_none() {
             return Err(
-                "artifact contains no languages — every percentile lookup would silently \
-                 report \"not in corpus\"; regenerate it from a non-empty corpus"
+                "artifact contains no languages and no repo_metrics pools — every lookup \
+                 would silently report \"not in corpus\"; regenerate it from a non-empty \
+                 corpus"
                     .to_string(),
             );
         }
@@ -908,18 +909,25 @@ mod tests {
         }
     }
 
-    /// An artifact with an empty `languages` array is rejected at load time:
-    /// it would pass every structural check while turning the corpus lens
-    /// into a silent no-op, indistinguishable at lookup time from a file
-    /// genuinely absent from the corpus.
+    /// A FULLY empty artifact — no languages and no repo_metrics pools — is
+    /// rejected at load time: it would pass every structural check while
+    /// turning the corpus lens into a silent no-op, indistinguishable at
+    /// lookup time from a file genuinely absent from the corpus. An artifact
+    /// carrying only repo_metrics pools stays valid — a real shape, since the
+    /// architecture percentiles need no per-language pools.
     #[test]
-    fn empty_languages_artifact_is_rejected() {
+    fn fully_empty_artifact_is_rejected_but_pools_only_is_not() {
         let mut art = CalibrationArtifact::from_slice(EMBEDDED_WORLD_BYTES)
             .expect("embedded world corpus must be a valid artifact");
         art.languages.clear();
+        if art.repo_metrics.is_some() {
+            art.validate()
+                .expect("languages-empty with pools present must stay valid");
+        }
+        art.repo_metrics = None;
         let err = art
             .validate()
-            .expect_err("an empty-languages artifact must not validate");
+            .expect_err("a fully empty artifact must not validate");
         assert!(err.contains("no languages"), "unexpected message: {err}");
     }
 
