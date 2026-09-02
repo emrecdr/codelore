@@ -64,16 +64,27 @@ fn render_canonical(sections: &[Section]) -> String {
     out
 }
 
-/// Every value that parses whole as a finite float, in section then key order —
-/// the fact-value set the narrative citation check matches against.
+/// Every value that parses whole as a finite float — plus both endpoints of a
+/// composite `lo–hi` value whose halves do, the shape the code-health CI
+/// renders — in section then key order: the fact-value set the narrative
+/// citation check matches against. A narrative quoting an endpoint of a
+/// printed range is quoting the sheet, so the endpoints must be citable.
 fn collect_numeric(sections: &[Section]) -> Vec<f64> {
     let mut out = Vec::new();
     for (_, facts) in sections {
         for (_, value) in facts {
-            if let Ok(n) = value.trim().parse::<f64>()
+            let value = value.trim();
+            if let Ok(n) = value.parse::<f64>()
                 && n.is_finite()
             {
                 out.push(n);
+            } else if let Some((lo, hi)) = value.split_once('–')
+                && let (Ok(lo), Ok(hi)) = (lo.parse::<f64>(), hi.parse::<f64>())
+                && lo.is_finite()
+                && hi.is_finite()
+            {
+                out.push(lo);
+                out.push(hi);
             }
         }
     }
@@ -477,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn numeric_values_parses_only_whole_number_values() {
+    fn numeric_values_parses_whole_number_values() {
         let sheet = FileFactSheet {
             path: "x.rs".to_string(),
             sections: vec![
@@ -498,6 +509,39 @@ mod tests {
             ],
         };
         assert_eq!(sheet.numeric_values(), vec![87.5, 0.5, 3.0]);
+    }
+
+    #[test]
+    fn numeric_values_splits_an_en_dash_composite_into_both_endpoints() {
+        let sheet = FileFactSheet {
+            path: "x.rs".to_string(),
+            sections: vec![(
+                "code-health".to_string(),
+                vec![
+                    ("corpus_percentile_ci".to_string(), "0.62–0.81".to_string()),
+                    ("band".to_string(), "green".to_string()),
+                ],
+            )],
+        };
+        assert_eq!(sheet.numeric_values(), vec![0.62, 0.81]);
+    }
+
+    #[test]
+    fn numeric_values_ignores_composites_without_two_numeric_halves() {
+        // Hyphenated strings (`defects-2026-07-15`) carry no en-dash, and a
+        // range with one non-numeric side is not the CI shape: neither
+        // contributes anything.
+        let sheet = FileFactSheet {
+            path: "x.rs".to_string(),
+            sections: vec![(
+                "defect-evidence".to_string(),
+                vec![
+                    ("vintage".to_string(), "defects-2026-07-15".to_string()),
+                    ("note".to_string(), "0.62–fast".to_string()),
+                ],
+            )],
+        };
+        assert!(sheet.numeric_values().is_empty());
     }
 
     #[test]
