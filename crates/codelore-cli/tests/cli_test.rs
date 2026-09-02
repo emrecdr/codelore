@@ -1265,6 +1265,49 @@ fn unknown_names_exit_2_on_every_surface() {
         .stderr(predicate::str::contains("unknown topic"));
 }
 
+/// `--output -` spells stdout for step-summary, which streams by default.
+/// The dash gate at the CLI boundary rejects it only for parquet/sqlite/spa
+/// — formats that genuinely cannot stream — so step-summary reached the
+/// publish branch and wrote a file named `-` into the working directory
+/// while the caller's redirect captured nothing. The two documented idioms
+/// (`--output -` on `diff`, bare streaming on step-summary) each work alone;
+/// this pins the crossing of them.
+#[cfg(feature = "spa")]
+#[test]
+fn step_summary_treats_dash_as_stdout_and_writes_no_dash_file() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let cwd = tempfile::tempdir().unwrap();
+    let assert = codelore_cmd()
+        .current_dir(cwd.path())
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "step-summary",
+            "--no-banner",
+            "--no-cache",
+            "--min-revs",
+            "1",
+            "--output",
+            "-",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("CodeLore"),
+        "the summary must reach stdout, got {} bytes: {stdout:?}",
+        stdout.len()
+    );
+    assert!(
+        !cwd.path().join("-").exists(),
+        "a file literally named `-` was created instead of streaming to stdout"
+    );
+}
+
 /// `--time-bucket` combined with a composite format must be rejected at the
 /// CLI boundary. The per-analysis gate keys on the NAMED analysis, but the
 /// spa / step-summary composites fan out to dozens of analyses with the same

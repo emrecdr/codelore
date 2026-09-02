@@ -3235,6 +3235,69 @@ A sweep of every `anyhow!` interpolation in the CLI found only these two
 sites. The two remaining ones wrap `rmcp` transport failures, which carry
 no `CodeLoreError` to preserve, so their fallback to 1 is correct.
 
+### F362 (Fixed — Unreleased) — `--format step-summary --output -` wrote a file named `-`
+
+The dash gate in `analyze.rs` rejects `-` for `parquet | sqlite | spa`,
+formats that cannot stream at all. `step-summary` streams to stdout by
+default, so the dash is meaningful for it — but `run_step_summary_dispatch`
+passed `args.output` straight into `atomic_publish` without the filter its
+sibling `emit_to_output_or_stdout` applies to the identical
+`Option<&Path>`, so the dash took the file branch and created `./-` while
+the caller's redirect captured nothing.
+
+Neither documented recipe reaches this on its own: `docs/advanced-usage.md`
+uses bare streaming for step-summary, and the README's `--output -` example
+is on the `diff` path, which routes through the filtering emitter. The
+defect needs the two idioms crossed, which the docs invite by teaching the
+dash as the conventional spelling of stdout in one place and default
+streaming in another. Recorded because the inconsistency, not the recipe,
+is the bug: two output-routing paths in one file disagreed about what `-`
+means.
+
+Fixed by applying the same filter. Probe: removing it fails the new test,
+which pins both that the summary reaches stdout and that no `-` file is
+left in the working directory. No test previously exercised step-summary's
+output routing at all — the format's only prior appearance in the CLI suite
+was the time-bucket rejection.
+
+### F363 (Active) — the advisory layer's request timeout is a hardcoded constant with no operator override
+
+`enrichment/client.rs::build_agent` gives the shared `ureq` agent a single
+`timeout_global` of `REQUEST_TIMEOUT_SECS`, a `pub const` fixed at 120,
+documented as covering connect through body read. There are no retries,
+so that constant is the entire budget a generation gets. Every other knob
+the chat client reads is an environment variable resolved through
+`LlmEnv` — provider, base URL, API key, model — and the timeout alone is
+not; there is no CLI flag for it either. `advanced-usage` §8 describes it
+only as "a single bounded timeout and no retries", naming no way to move
+it, which is accurate precisely because no way exists.
+
+The ceiling is not theoretical. An independent evaluation of the advisory
+layer — 612 generations across six repositories through an
+OpenAI-compatible gateway, published against the narrative-receipts issue
+with its raw per-run records — recorded a maximum request of 117.7s
+against the 120s bound, 98% of the budget, on a model whose mean was
+23.6s. Its authors patched the constant and rebuilt before they could
+evaluate a slower model at all, and disclosed that patch as a protocol
+deviation. The failure mode this predicts for an ordinary user is sharp:
+`--llm` against a reasoning model, a cold local runtime, or a loaded
+gateway aborts the run, and the only remedy in a released binary is
+editing source and recompiling. `MAX_TOKENS` already bounds a runaway
+generation independently, so the timeout is not what protects against
+unbounded output — it only decides how slow a *legitimate* response may be.
+
+Left open rather than fixed inline, deliberately. The fix introduces a
+new public environment variable, which is API surface the project has to
+live with, and the shape is a design decision rather than a correction:
+whether one `CODELORE_LLM_TIMEOUT_SECS` is the right granularity when
+`timeout_global` bundles connect and read; whether an unparseable, zero,
+or absurd value is rejected at the `Options::validate` boundary in the
+style of the other cross-field rules or clamped silently; and whether the
+default should move at the same time, given that the one measurement in
+evidence sat at 98% of it. Naming that ceiling in the documentation is
+worth doing regardless of which shape wins, since today a user meeting it
+has no way to learn it exists.
+
 ### F364 (Fixed — Unreleased) — PR-mode SARIF kept the pre-correction severity scale
 
 `diff_output.rs` computed `((100 - cognitive_health) / 10).clamp(0, 10)`
