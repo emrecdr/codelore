@@ -52,6 +52,8 @@ The findings appear in the PR's **Security** tab and the **Files changed** view,
 |---|---|
 | `result-path` | Absolute path to the generated file (empty when streaming to stdout). Always empty for `command: check`/`gate`/`diff` — `check` and `gate` stream their report and have no output file, and `diff` writes its own `--output` path, which the Action does not report back |
 | `version-used` | The actual codelore version downloaded (resolved from `latest` or pinned) |
+| `result` | For `command: check`/`gate` — the gate verdict: `pass` or `fail`. Empty for `analyze`/`diff`, which emit no verdict. |
+| `violations` | For `command: check`/`gate` — the number of gate violations behind the verdict. Empty for `analyze`/`diff`. |
 
 ## Common patterns
 
@@ -83,7 +85,7 @@ jobs:
           path: knowledge-islands.html
 ```
 
-### Live clones SARIF on PRs (T9 at-risk column auto-prioritised)
+### Live clones SARIF on PRs (at-risk clones sort first)
 
 ```yaml
 - uses: emrecdr/codelore@v1
@@ -98,7 +100,7 @@ jobs:
     category: codelore-clone-coupling
 ```
 
-Clones that intersect with knowledge-island files get a higher severity automatically (T9 `at_risk` field bumps the SARIF `security-severity`). Reviewers see the most actionable debt findings first.
+Clones that intersect with knowledge-island files sort first in the document, because `at_risk` is the primary sort key — so the most actionable debt is at the top of the run. Severity itself is `combined_score × 10` and does not read `at_risk`. Reviewers see the most actionable debt findings first.
 
 ### Multiple analyses in one workflow
 

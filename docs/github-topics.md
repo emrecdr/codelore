@@ -21,7 +21,7 @@ GitHub allows up to 20 topics per repository. We use 18 — leaves headroom for 
 | Topic | Why |
 |---|---|
 | `rust` | Language of implementation. Highest-traffic topic for OSS Rust tools. |
-| `sarif` | SARIF 2.1.0 is CodeLore's primary CI/CD output format (3 rules ship). |
+| `sarif` | SARIF 2.1.0 is CodeLore's primary CI/CD output format (5 rules ship). |
 | `clone-detection` | We ship Type 1 + Type 2 clone detection via tree-sitter AST hashing. |
 | `hotspot-analysis` | Headline output of `hotspots` + `code-health` analyses. |
 | `change-coupling` | A headline analysis in the published registry + the live-clone differentiator. |

@@ -177,7 +177,7 @@ The dashboard composes its widgets in one HTML file — grouped into the six tit
 13. **Health improvements & regressions feed** — two clickable lists of signal-bearing band transitions (entering red or leaving green = regressed; leaving red or entering green = improved) across the top hotspot files, newest-first; clicking a row brushes the file across all widgets.
 14. **Guided tour** — a four-step walkthrough over the hero circle-pack map that sets the colour lens and optional brush for each step (see [Guided tour](#guided-tour) below).
 
-**Linked brushing:** selecting a file in any of these views highlights it across all of them at once (and announces it to screen readers); the health×activity legend also supports a set-brush. The **file detail drawer** groups its sections into Overview / Coupling / People tabs (keyboard-navigable). One shared focus; highlight, not hide.
+**Linked brushing:** selecting a file in any of these views highlights it across all of them at once (and announces it to screen readers); the health×activity legend also supports a set-brush. The **file detail drawer** groups its sections into Overview / Coupling / People tabs, plus Health and X-Ray when the file has a health series or function-level data (keyboard-navigable). One shared focus; highlight, not hide.
 
 Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter + selection/brush buses) + Apache ECharts + d3-hierarchy. All four vendored at build time, SHA-pinned in `build.rs`; bundle stays fully self-contained (~1.9 MB rendered SPA, no CDN at runtime).
 
@@ -439,7 +439,7 @@ corpus_percentile_max = 0.9
 
 **When the gate skips (read this carefully).** The gate records a `skipped` verdict — neither pass nor fail — whenever **no code-health row resolves a corpus percentile**. That happens in more than one situation, and the honest description is: *there is no percentile data to gate on.* Concretely, the skip fires when
 
-- no calibration artifact is active (no `--calibration` file and the embedded corpus is a not-yet-built placeholder), **or**
+- no calibration artifact is active — the embedded world corpus ships by default, so this needs `--no-corpus-lens` or a build with the artifact disabled, **or**
 - an artifact *is* active, but none of the analyzed files produce a percentile — e.g. every covered language was pooled below the 500-function trust floor, every file is in a language the corpus doesn't cover, or the health scan produced no rows at all.
 
 The stderr notice printed on skip mentions passing `--calibration`, but the underlying condition is broader than "no artifact": it is "no row carried a percentile." If you see a skip while an artifact is embedded, check that your repository's languages are covered *and* cleared the sample floor in that artifact.
@@ -1003,10 +1003,10 @@ Each commit is classified into one of three buckets and stamped in the `commits.
 | Class | Trigger (in priority order) |
 |---|---|
 | `ai-authored` | Author or committer matches one of the bot patterns above |
-| `ai-assisted` | Commit message contains `Co-Authored-By: Claude`, `Co-Authored-By: Copilot`, or `Co-Authored-By: GitHub Copilot` |
+| `ai-assisted` | Commit message carries a `Co-Authored-By:` trailer naming an AI assistant — Claude, Copilot, Cursor, Cody, Continue, Codeium, Windsurf, Devin, Tabnine, Amazon Q, or Aider |
 | `human` | Default — no AI signals found |
 
-The bot list and the assisted-trailer list are intentionally narrow; tools that don't publish a standardized trailer (or that you don't want to count as AI-assisted) won't be detected. The classification is informational today — no published analysis filters by it — but every commit carries the column so you can query it directly from the SQLite/Parquet export:
+The bot list and the assisted-trailer list are intentionally narrow; tools that don't publish a standardized trailer (or that you don't want to count as AI-assisted) won't be detected. The classification surfaces as the `ai_pct` column on `hotspots` and the `n_ai` breakdown on `authors`; no analysis *filters* by it — but every commit carries the column so you can query it directly from the SQLite/Parquet export:
 
 ```sql
 SELECT ai_attribution, COUNT(*) AS n FROM commits GROUP BY 1 ORDER BY n DESC;
@@ -1024,7 +1024,7 @@ Every commit ingested by CodeLore is enriched with the 14-feature change vector 
 | 4 | `entropy` | Shannon entropy of the per-file change distribution — high entropy = tangled change across many files |
 | 5 | `la` | Lines of code added |
 | 6 | `ld` | Lines of code deleted |
-| 7 | `lt` | Average size of touched files at the pre-change state |
+| 7 | `lt` | Average size of touched files at the pre-change state. **Stubbed to 0** — historical blob LOC is a follow-up, so this column reads zero for every row |
 | 8 | `fix` | 1 if the commit message matches bug/fix regex patterns, else 0 |
 | 9 | `ndev` | Number of distinct developers who previously modified the touched files |
 | 10 | `age` | Average days since the last modification of each touched file |
