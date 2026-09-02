@@ -214,11 +214,18 @@ fn gix_change_to_file_change(
 /// here are bit-equivalent to `git log --numstat`.
 /// Maximum blob size that `count_loc` will diff. Blobs larger than this on
 /// either side return `(0, 0)` to mirror `git log --numstat`'s `- -`
-/// behaviour for binary/oversized files. 1 MiB matches Git's
-/// `core.bigFileThreshold` default and keeps the histogram diff bounded
-/// on commits that touch `SQLite` databases, vendored bundles, or large
-/// snapshot fixtures.
-const MAX_DIFF_BLOB_BYTES: usize = 1024 * 1024;
+/// behaviour: git treats blobs past `core.bigFileThreshold` as binary,
+/// and 512 MiB is that setting's actual default. The previous 1 MiB value
+/// claimed to match git while sitting ~512x below it, so every text file
+/// past 1 MiB (generated parsers, lockfiles, vendored single-file
+/// libraries) silently entered `changes` with zero churn on this backend
+/// while `git log --numstat` counted its lines — per-file divergence the
+/// aggregate drift band in the differential suite could not see. Binary
+/// blobs are still filtered by the NUL sniff below, and oversized blobs
+/// are now rejected via an object-header size probe BEFORE their bytes
+/// are loaded, so raising the cap does not raise peak memory for the
+/// filtered case.
+const MAX_DIFF_BLOB_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Window size for git-style binary detection. Git inspects the first
 /// 8 KiB of a blob and treats it as binary if any NUL byte is found.
@@ -274,8 +281,21 @@ pub(super) fn count_loc_and_hunks(
         Ok(std::mem::take(&mut obj.data))
     };
 
+    // Size gate first, from the object HEADER — the loose/packed object
+    // header carries the decompressed size, so an oversized blob is
+    // rejected without ever allocating its bytes. A failed header lookup
+    // falls through to the load path, whose own length check still holds
+    // the line (belt for the suspenders, not a second policy).
+    let oversized = |oid: Option<gix::ObjectId>| -> bool {
+        oid.and_then(|oid| repo.find_header(oid).ok())
+            .is_some_and(|h| h.size() > MAX_DIFF_BLOB_BYTES)
+    };
+    if oversized(old_oid) || oversized(new_oid) {
+        return Ok((0, 0, Vec::new()));
+    }
+
     let is_binary_or_oversized = |bytes: &[u8]| -> bool {
-        if bytes.len() > MAX_DIFF_BLOB_BYTES {
+        if bytes.len() as u64 > MAX_DIFF_BLOB_BYTES {
             return true;
         }
         let sniff_end = bytes.len().min(BINARY_SNIFF_BYTES);

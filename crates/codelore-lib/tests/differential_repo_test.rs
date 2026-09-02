@@ -1573,3 +1573,102 @@ fn edge_content_classes_agree_on_blob_bytes() {
         "CRLF was normalised away before the backend returned it"
     );
 }
+
+/// A text file over the OLD 1 MiB diff cap must produce identical, nonzero
+/// per-file line counts on both backends. `GixRepo` used to return `(0, 0)`
+/// for any blob past 1 MiB while `git log --numstat` counted its lines —
+/// churn silently zeroed on exactly the generated/vendored files most
+/// likely to be large — and the aggregate drift band above cannot see a
+/// per-file divergence of this shape. The blob is generated at test time
+/// (~2.9 MiB of text), never stored in a fixture.
+#[test]
+fn large_text_file_line_counts_match_between_backends() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(p)
+            .args(args)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-b", "main", "--quiet"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+
+    let mut big = String::with_capacity(3 * 1024 * 1024);
+    for i in 0..80_000 {
+        use std::fmt::Write as _;
+        writeln!(big, "line number {i} of the generated large fixture").expect("infallible");
+    }
+    assert!(
+        big.len() > 1024 * 1024,
+        "fixture must exceed the old 1 MiB cap"
+    );
+    std::fs::write(p.join("big.txt"), &big).expect("write big.txt");
+    git(&["add", "big.txt"]);
+    git(&["commit", "-m", "add big", "--quiet"]);
+    std::fs::write(
+        p.join("big.txt"),
+        format!("{big}tail one\ntail two\ntail three\n"),
+    )
+    .expect("append big.txt");
+    git(&["add", "big.txt"]);
+    git(&["commit", "-m", "append big", "--quiet"]);
+
+    let opts = codelore_lib::Options {
+        repo_path: p.to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    let collect = |events: Vec<codelore_lib::types::CommitEvent>| {
+        events
+            .into_iter()
+            .map(|e| {
+                let c = e
+                    .changes
+                    .iter()
+                    .find(|c| c.path == "big.txt")
+                    .unwrap_or_else(|| panic!("no big.txt change in {}", e.message))
+                    .clone();
+                (e.message.trim().to_owned(), c.loc_added, c.loc_deleted)
+            })
+            .collect::<Vec<_>>()
+    };
+    let gix_counts = collect(
+        GixRepo::open(p)
+            .expect("gix open")
+            .walk_commits(&opts)
+            .expect("gix walk")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("gix events"),
+    );
+    let cli_counts = collect(
+        GitCliRepo::open(p)
+            .expect("cli open")
+            .walk_commits(&opts)
+            .expect("cli walk")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("cli events"),
+    );
+
+    assert_eq!(
+        gix_counts, cli_counts,
+        "per-file line counts for a >1 MiB text file must be identical across backends"
+    );
+    // And nonzero — both-zero would satisfy equality while reproducing the bug.
+    assert!(
+        gix_counts
+            .iter()
+            .any(|(m, added, _)| m == "add big" && *added == 80_000),
+        "the initial add must count all 80,000 lines; got {gix_counts:?}"
+    );
+    assert!(
+        gix_counts
+            .iter()
+            .any(|(m, added, deleted)| m == "append big" && *added == 3 && *deleted == 0),
+        "the append must count exactly 3 added lines; got {gix_counts:?}"
+    );
+}

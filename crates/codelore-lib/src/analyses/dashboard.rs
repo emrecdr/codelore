@@ -317,7 +317,7 @@ pub fn run_kamei_risk(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<Kame
             SELECT rev, date, la, ld, nf, nd, ndev, nuc, exp, entropy, fix
             FROM commits
             WHERE is_merge = FALSE AND date IS NOT NULL
-            ORDER BY date DESC, rowid DESC
+            ORDER BY date DESC, rowid ASC
             LIMIT ?
         )
         SELECT rev,
