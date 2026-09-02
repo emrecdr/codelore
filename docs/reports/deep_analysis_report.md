@@ -3091,4 +3091,21 @@ invalidate the memo of a tool that does not read them. Startup refusal
 and cache-dir placement are both test-pinned; the startup probe removed
 the validation block and watched the test fail.
 
-The next sweep re-opens at **F355**.
+### F355 (Fixed — Unreleased) — `--calibration` missing on `gate` and `explain` while their MCP twins carried it
+
+F323 fixed the MCP-missing direction of the calibration asymmetry and
+left the CLI-missing one open: `gate_changes` and `explain_file` thread
+the corpus artifact while the CLI subcommands built `Options` without
+it. `codelore explain <path>` and the MCP `explain_file` printed
+different corpus percentiles for the same file at the same HEAD under a
+custom corpus — the number the advisory narrative's citation check
+grounds against — and the `gate` half fragmented the report cache into
+two entries for identical work. Both subcommands now accept and thread
+the flag exactly as `--defect-calibration` already did; the parity test
+drives `explain` against a ramp corpus that must move the printed lens,
+and the probe (threading stashed, flag accepted-but-ignored) fails on
+identical outputs — F323's exact silent-ignore shape. `diff` is
+deliberately untouched: it has no calibration-consuming MCP twin
+(`delta_health` is artifact-blind by design).
+
+The next sweep re-opens at **F356**.
