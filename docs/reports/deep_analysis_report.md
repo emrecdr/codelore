@@ -2986,4 +2986,26 @@ status — 404 (pre-manifest release) warns, everything else and a
 manifest lacking the archive's entry refuses to run an unverified
 binary. Runtime proof of the bundle wiring lands with the next `v*` tag.
 
-The next sweep re-opens at **F349**.
+### F349 (Fixed — Unreleased) — an ambient key silently redirected the advisory layer, and repository text reached the prompt unfenced
+
+`resolve()` selected the hosted Anthropic dialect whenever
+`ANTHROPIC_API_KEY` was present with no explicit provider — a credential
+commonly exported for unrelated tooling silently redirected fact sheets
+(paths, author identities, function names, scores) to a hosted endpoint
+while the documentation promised local-first behavior; the same table
+that promised it documented the inference four lines later. The hosted
+dialect now requires an explicit `CODELORE_LLM_PROVIDER=anthropic`;
+key-without-provider errors naming the fix. A bearer token over plain
+http is loopback-only, parsed as real addresses. Separately, the prompt
+embedded the fact sheet unfenced and unescaped — git permits newlines in
+paths and near-arbitrary author names, so hostile repository content
+could forge additional fact lines (the probe renders the exact shape: an
+injected value becomes a second `score = 99` line) or spell
+directive-looking text; the sheet is now fenced with a
+data-not-instructions rule and control characters are escaped, with
+`PROMPT_VERSION` bumped so cached narratives recompute. The grounded
+stamp was never forgeable — numeric ground truth is collected from typed
+values before rendering — and that property is now pinned by a contract
+test rather than being an unstated implementation accident.
+
+The next sweep re-opens at **F350**.
