@@ -17,6 +17,38 @@ categories.workspace = true
 # link. This is not a docs.rs problem to fix; it is the wrong destination.
 documentation = "https://emrecdr.github.io/codelore/"
 
+# `cargo binstall codelore` — the fast install path the README
+# recommends. It already resolves without this block, but only
+# incidentally: our asset names happen to match one of binstall's
+# built-in probe patterns (`{name}-v{version}-{target}`), and that list
+# and its ordering belong to binstall, not to us. Declaring the URL
+# makes a documented install path explicit instead of coincidental.
+#
+# The suffix is spelled literally rather than as `{ archive-suffix }`,
+# which renders the package format's own extension: the workflow
+# publishes `.tar.gz`, so a literal keeps the manifest and
+# `.github/workflows/release.yml` (`archive_name`) visibly in step. The
+# two must change together.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+# This is the load-bearing line. Binstall's normal fallback, when it
+# cannot find an official asset, is the quickinstall third-party host —
+# which serves ITS OWN builds of this crate, carrying none of the build
+# provenance the release workflow attests. Silently substituting an
+# unattested binary is the wrong default for a tool whose users chose it
+# partly for that posture, so the fallback is refused. Compilation from
+# source stays enabled: a target we do not publish should still install,
+# just slowly, from code the user can audit.
+disabled-strategies = ["quick-install"]
+
+# Windows ships a zip with `codelore.exe` at the archive root; `bin-dir`
+# above already resolves the `.exe` through `{ binary-ext }`.
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.zip"
+pkg-fmt = "zip"
+
 [[bin]]
 name = "codelore"
 path = "src/main.rs"
