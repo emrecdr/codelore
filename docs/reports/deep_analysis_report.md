@@ -2836,4 +2836,19 @@ seeded regression test fails with the exact doubled value on the summing
 form, and the intended output shift was measured before/after on this
 repository (delta recorded in the fix PR).
 
-The next sweep re-opens at **F340**.
+### F340 (Fixed — Unreleased) — the gix diff cap sat ~512x below the git default it claimed to match
+
+`MAX_DIFF_BLOB_BYTES` was 1 MiB under a comment claiming parity with
+git's `core.bigFileThreshold` default (512 MiB), so every text file past
+1 MiB entered `changes` with zero `loc_added`/`loc_deleted` on the
+production backend while `git log --numstat` counted its lines — churn,
+hotspot-velocity, code-health's churn term, and the Kamei size features
+silently drained on exactly the files most likely to be large. The
+divergence was reproduced against real git during the second-wave audit
+and is invisible to the differential suite's aggregate drift band. The
+cap now matches git's actual threshold, oversized blobs are rejected via
+an object-header size probe before their bytes load, and a differential
+test generates a multi-megabyte text file at test time pinning both
+backends to identical, nonzero per-file counts.
+
+The next sweep re-opens at **F341**.
