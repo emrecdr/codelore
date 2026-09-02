@@ -48,6 +48,22 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Validate the repository BEFORE reading thresholds. `Thresholds::discover`
+    // resolves `<repo>/.codelore-thresholds.toml` and returns the default,
+    // empty set when that file does not exist — which a nonexistent repo root
+    // satisfies trivially. The vacuous-pass branch below then reported PASS
+    // and wrote `result=pass`, so a typo'd `--repo` in a workflow produced a
+    // green gate. Opening the repository first makes a bad path an exit-3
+    // repository error, the way `analyze` and `diff` already treat it, and
+    // leaves the vacuous pass to mean what it says: a real repository with no
+    // thresholds configured.
+    //
+    // This surface had the sharper symptom: its vacuous branch opened the
+    // repository only under `--format sarif`, so the SAME bad path exited 3
+    // as SARIF and 0 as text — the verdict depended on how the output was
+    // asked for.
+    codelore_lib::cli_api::repo::GixRepo::open(&args.repo).context("open repo")?;
+
     let thresholds = if let Some(path) = &args.thresholds_file {
         Thresholds::from_path(path).context("load thresholds file")?
     } else {
