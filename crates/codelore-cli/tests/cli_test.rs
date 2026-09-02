@@ -1072,6 +1072,110 @@ fn group_file_rejected_for_clone_and_import_joining_analyses() {
     }
 }
 
+/// `--output -` is the conventional stdout spelling, used verbatim by the
+/// README's CI recipes (`--output - >> "$GITHUB_STEP_SUMMARY"`). It used to
+/// create a literal file named `-` while the redirect captured nothing.
+#[test]
+fn output_dash_streams_analyze_to_stdout_and_creates_no_file() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let out = codelore_cmd()
+        .current_dir(tiny.dir.path())
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            ".",
+            "--format",
+            "csv",
+            "--no-banner",
+            "--no-cache",
+            "--min-revs",
+            "1",
+            "--output",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("entity"),
+        "csv header must reach stdout, got: {stdout:?}"
+    );
+    assert!(
+        !tiny.dir.path().join("-").exists(),
+        "a literal file named '-' must not be created"
+    );
+}
+
+/// The same contract for `diff`, which also gains atomic publication by
+/// routing through the shared output helper.
+#[test]
+fn output_dash_streams_diff_to_stdout_and_creates_no_file() {
+    let (dir, base, head) = delta_health_fixture();
+    let out = codelore_cmd()
+        .current_dir(dir.path())
+        .args([
+            "diff",
+            "--repo",
+            ".",
+            "--min-revs",
+            "1",
+            "--format",
+            "markdown",
+            "--output",
+            "-",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.stdout.is_empty(),
+        "the markdown report must reach stdout"
+    );
+    assert!(
+        !dir.path().join("-").exists(),
+        "a literal file named '-' must not be created"
+    );
+}
+
+/// The binary/path-based formats cannot stream: `-` is rejected up front
+/// instead of silently becoming a file of that name.
+#[test]
+fn output_dash_rejected_for_binary_formats() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "parquet",
+            "--no-banner",
+            "--no-cache",
+            "--output",
+            "-",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "--output - (stdout) is not supported",
+        ));
+}
+
 /// The documented exit-code contract, pinned across the surfaces that used
 /// to collapse everything to 1 or mislabel argument mistakes as analysis
 /// crashes: 2 = CLI/argument, 3 = repository, 1 = a genuine gate verdict.

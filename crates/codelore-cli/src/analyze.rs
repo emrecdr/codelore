@@ -50,6 +50,17 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         ))
         .into());
     }
+    // `-` means stdout for the streaming emitters, but these three write
+    // through file-path machinery (DuckDB COPY / ATTACH, the SPA's default
+    // path) — a literal `-` would silently become a file of that name.
+    if matches!(format, "parquet" | "sqlite" | "spa")
+        && args.output.as_deref().is_some_and(|p| p.as_os_str() == "-")
+    {
+        return Err(CodeLoreError::InvalidOptions(format!(
+            "--output - (stdout) is not supported for --format {format}; give a real file path"
+        ))
+        .into());
+    }
     // Streaming format×analysis combinations are validated HERE, before the
     // pre-flight and the ingest: nobody should pay a 5-30s ingest to learn
     // about a flag typo, and the late paths returned four different exit
@@ -548,10 +559,15 @@ fn sarif_repo_root(repo: &std::path::Path) -> String {
 /// [`atomic_publish`](codelore_lib::cli_api::output::atomic_publish)), so an
 /// interrupted or failing run never truncates a previous good output. Stdout
 /// writes stream directly — there is nothing to publish atomically.
-fn emit_to_output_or_stdout<F>(dest: Option<&std::path::Path>, emit: F) -> Result<()>
+pub(crate) fn emit_to_output_or_stdout<F>(dest: Option<&std::path::Path>, emit: F) -> Result<()>
 where
     F: FnOnce(&mut Box<dyn Write>) -> Result<()>,
 {
+    // `-` is the conventional spelling of stdout, and the README's CI
+    // recipes use it (`--output - >> "$GITHUB_STEP_SUMMARY"`). Without
+    // this filter it created a literal file named `-` in the working
+    // tree while the redirect captured nothing.
+    let dest = dest.filter(|p| p.as_os_str() != "-");
     if let Some(path) = dest {
         codelore_lib::cli_api::output::atomic_publish(path, |tmp| {
             let mut out: Box<dyn Write> = Box::new(std::fs::File::create(tmp)?);

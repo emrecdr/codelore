@@ -503,19 +503,20 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
         None
     };
 
-    let mut out: Box<dyn Write> = match args.output.as_ref() {
-        Some(path) => Box::new(std::fs::File::create(path)?),
-        None => Box::new(std::io::stdout().lock()),
-    };
-    diff_output::emit(
-        &mut out,
-        &output,
-        format,
-        &args.repo,
-        Some((&head_db, &head_opts)),
-        narrative,
-    )?;
-    drop(out);
+    // Same output plumbing as `analyze`: `-` (or no path) streams to
+    // stdout, and a real path publishes atomically — the raw
+    // `File::create` this replaces truncated the previous good report the
+    // moment a failing run started writing.
+    analyze::emit_to_output_or_stdout(args.output.as_deref(), |out| {
+        diff_output::emit(
+            out,
+            &output,
+            format,
+            &args.repo,
+            Some((&head_db, &head_opts)),
+            narrative,
+        )
+    })?;
 
     if diff::should_fail(args, &output) {
         // A `[diff]` gate violation (or a skip failed under `fail_on_skipped`)

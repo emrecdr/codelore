@@ -1,21 +1,18 @@
-//! Single source of truth for Arrow types throughout the workspace.
+//! The workspace's record of which arrow-rs version is linked at runtime.
 //!
-//! Re-exports the version of arrow-rs that the `duckdb` crate currently
-//! depends on. When `duckdb` bumps `arrow`, we bump here in lockstep
-//! and the rest of the workspace stays unchanged.
-//!
-//! **Discipline:** never `use arrow::*` directly anywhere else in the
-//! workspace. Always `use codelore_lib::arrow_facade::*` or `use crate::arrow_facade::*`.
-//! See spec §2.6.
+//! Arrow reaches this workspace only transitively, through the `duckdb`
+//! crate — parquet output goes through DuckDB's own `COPY … TO (FORMAT
+//! PARQUET)`, and the ingest uses the row-level `Appender`, so no Rust
+//! code here touches arrow types. A direct `arrow` dependency used to
+//! live beside duckdb's and drifted a major ahead of it, putting TWO
+//! arrow generations in the build graph while this module's constant —
+//! stamped into every provenance sidecar and the fact store's provenance
+//! table — kept describing the other one. The drift guard read the first
+//! lockfile match and passed. The direct dependency is gone; the constant
+//! below tracks duckdb's pinned arrow, and the guard now fails loudly on
+//! duplicate lockfile entries instead of picking one.
 
-pub use arrow::array::{
-    Array, ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Float64Builder,
-    Int32Builder, Int64Builder, LargeBinaryBuilder, StringBuilder, UInt32Builder, UInt64Builder,
-};
-pub use arrow::buffer::Buffer;
-pub use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
-pub use arrow::error::ArrowError;
-pub use arrow::record_batch::RecordBatch;
-
-/// Version reported by the runtime (for provenance manifests).
+/// Version reported by the runtime (for provenance manifests). Must match
+/// the single `arrow` entry in `Cargo.lock` — the one `duckdb` pins;
+/// `dep_versions_drift_test` enforces both the match and the singleness.
 pub const ARROW_RUNTIME_VERSION: &str = "58.3.0";
