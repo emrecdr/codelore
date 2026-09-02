@@ -122,11 +122,10 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
              history is truncated by fetch-depth, so the behavioral gates (hotspots, \
              effort-exposure, new-code) evaluate only partial history. Re-run against full \
              history (fetch-depth: 0) for an authoritative verdict.";
-        if matches!(args.format, CheckFormat::Sarif) {
-            eprintln!("{warning}");
-        } else {
-            println!("{warning}");
-        }
+        // Stderr in every mode: warnings and verdicts are run METADATA, and
+        // the documented contract keeps them on stderr so `codelore check >
+        // log` never splits the story (stdout stays the report document).
+        eprintln!("{warning}");
     }
     let ts = now_utc_ts();
 
@@ -316,15 +315,15 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             let warning = format!(
                 "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
             );
-            // SARIF mode keeps stdout a clean SARIF document, so the warning
-            // goes to stderr; text mode prints it to stdout with the report.
-            if matches!(args.format, CheckFormat::Sarif) {
-                eprintln!("{warning}");
-            } else {
-                println!("{warning}");
-            }
-        } else if matches!(args.format, CheckFormat::Text) {
-            println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
+            // Stderr in every mode — the FAIL branch already lives there,
+            // and the documented contract keeps every verdict line on
+            // stderr so `codelore check > log` captures pass and fail
+            // symmetrically (stdout stays the report document).
+            eprintln!("{warning}");
+        } else {
+            // Emitted in SARIF mode too: the docs promise a verdict line
+            // regardless of format, and stdout stays the clean document.
+            eprintln!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
         }
         write_github_output("result", "pass");
         write_github_output("violations", "0");

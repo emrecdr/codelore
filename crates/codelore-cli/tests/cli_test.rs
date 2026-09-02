@@ -3007,6 +3007,31 @@ fn function_coupling_emits_markdown_header() {
 }
 
 #[test]
+fn check_pass_verdict_lives_on_stderr_in_every_mode() {
+    // The verdict line is run metadata: it lives on stderr in text AND
+    // SARIF mode, so `codelore check > log` captures pass and fail
+    // symmetrically and stdout stays the report document. code_health_min
+    // = 0.0 passes trivially on any repo.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\nmax_dependency_cycles = 999999\n").unwrap();
+    for format in ["text", "sarif"] {
+        codelore_cmd()
+            .args([
+                "check",
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--format",
+                format,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("✅ codelore check: PASS"))
+            .stdout(predicate::str::contains("✅").not());
+    }
+}
+
+#[test]
 fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
     // When gates are configured and violations occur, --quiet suppresses the
     // per-violation detail lines on stderr but preserves the FAIL verdict line
@@ -3215,7 +3240,10 @@ fn gate_passes_on_clean_tree_with_thresholds() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("no working-tree changes"));
+        // The verdict line is run metadata and lives on STDERR in every
+        // mode now, so `codelore gate > log` captures pass and fail
+        // symmetrically.
+        .stderr(predicate::str::contains("no working-tree changes"));
 }
 
 #[test]

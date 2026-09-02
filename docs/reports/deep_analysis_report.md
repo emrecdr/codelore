@@ -3061,4 +3061,17 @@ Three contract tests pin the table, probed one filter at a time —
 `cargo test` silently errors on multiple positional filters, which made
 an earlier probe read as vacuously green.
 
-The next sweep re-opens at **F353**.
+### F353 (Fixed — Unreleased) — text-mode verdicts split across stdout and stderr, against the documented contract
+
+`check`/`gate` printed PASS and WARNING lines (and the shallow-checkout
+notice) to stdout in text mode while FAIL went to stderr — `codelore
+check > log` captured pass but lost fail, `2>/dev/null` the reverse —
+and SARIF mode printed no PASS line at all despite the documented
+promise of a verdict line regardless of format; only the JSON gate path
+was correct and test-pinned. Every verdict and warning line now goes to
+stderr in every mode, and a contract test pins the channel across text
+and SARIF (using a trivially-passing `max_dependency_cycles` gate —
+`code_health_min` degrades to FAIL on a rowless scratch repo, a fixture
+behavior worth knowing).
+
+The next sweep re-opens at **F354**.
