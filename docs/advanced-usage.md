@@ -1216,6 +1216,7 @@ The posture is local-first: with nothing configured but a model name, requests g
 | `CODELORE_LLM_BASE_URL` | Base URL for the OpenAI-compatible endpoint (ollama, llama.cpp, LM Studio, vLLM, OpenAI, OpenRouter). | `http://localhost:11434/v1` |
 | `CODELORE_LLM_API_KEY` | Optional bearer token for the OpenAI-compatible endpoint; local runners typically need none. Refused over plain `http://` unless the host is loopback — it would cross the network unencrypted. | unset |
 | `CODELORE_LLM_MODEL` | Model name. **Required** on the OpenAI-compatible dialect (any name from `ollama list` works); on the Anthropic dialect it overrides the default model. | none on OpenAI-compatible; a Sonnet-class default on Anthropic |
+| `CODELORE_LLM_TIMEOUT_SECS` | Total per-request budget in seconds, covering connect through body read. Raise it for a large local model or a slow remote endpoint; a value that is not a positive whole number warns and keeps the default rather than failing the run. | `120` |
 
 Note: `provider=anthropic` always pins the Anthropic API base URL — `CODELORE_LLM_BASE_URL` applies to the OpenAI-compatible dialect only and is ignored on the Anthropic path.
 
@@ -1245,7 +1246,7 @@ Each generated narrative is persisted as a JSON sidecar under the per-repo cache
 | `diff --llm` | One-line stderr warning; the deterministic output and exit code are untouched. |
 | MCP `explain_file` | The call succeeds; the fact sheet is returned with a `narrative_error` field instead of a narrative. |
 
-Requests use a single bounded timeout and no retries — enrichment is interactive, not batch. That bound is 120 seconds, covering connect through body read, and it is compiled in: no environment variable and no flag moves it. A model, runtime, or gateway slower than the bound aborts the run rather than retrying it, which is what a large local model on a cold runtime is most likely to meet.
+Requests use a single bounded timeout and no retries — enrichment is interactive, not batch. That bound defaults to 120 seconds, covering connect through body read, and `CODELORE_LLM_TIMEOUT_SECS` raises or lowers it; no flag does. A model, runtime, or gateway slower than the bound aborts the run rather than retrying it, which is what a large local model on a cold runtime is most likely to meet.
 
 ### Advisory guarantees
 

@@ -3260,7 +3260,7 @@ left in the working directory. No test previously exercised step-summary's
 output routing at all — the format's only prior appearance in the CLI suite
 was the time-bucket rejection.
 
-### F363 (Active) — the advisory layer's request timeout is a hardcoded constant with no operator override
+### F363 (Fixed — Unreleased) — the advisory layer's request timeout is a hardcoded constant with no operator override
 
 `enrichment/client.rs::build_agent` gives the shared `ureq` agent a single
 `timeout_global` of `REQUEST_TIMEOUT_SECS`, a `pub const` fixed at 120,
@@ -3297,6 +3297,20 @@ default should move at the same time, given that the one measurement in
 evidence sat at 98% of it. Naming that ceiling in the documentation is
 worth doing regardless of which shape wins, since today a user meeting it
 has no way to learn it exists.
+
+**Fixed.** `CODELORE_LLM_TIMEOUT_SECS` now overrides the constant, named
+into the existing `CODELORE_LLM_*` family. The parse is a pure function
+over `Option<&str>` so it is testable without mutating process
+environment — the convention this module's other tests already follow,
+building `LlmEnv` directly rather than touching the process — and the env
+read stays at the single existing boundary. A non-positive or
+unparseable value warns and falls back rather than aborting: the layer is
+advisory, so a typo in an optional knob should not fail an analysis, but
+silence was rejected because a mistyped budget that quietly kept the old
+one is indistinguishable from the ceiling the override exists to raise.
+Zero is refused rather than read as "no limit", which would abort every
+request instantly. Probe: making the parser ignore its argument fails the
+test with `left: 120, right: 600`.
 
 ### F364 (Fixed — Unreleased) — PR-mode SARIF kept the pre-correction severity scale
 

@@ -31,8 +31,18 @@ pub const DEFAULT_OPENAI_COMPAT_BASE_URL: &str = "http://localhost:11434/v1";
 /// Base URL for the Anthropic dialect when the operator sets none.
 pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 
-/// Total per-request timeout, in seconds. Covers connect through body read.
+/// Default total per-request timeout, in seconds. Covers connect through
+/// body read.
+///
+/// Overridable with `CODELORE_LLM_TIMEOUT_SECS`, because the default is a
+/// budget rather than a fact: a small local model answers in seconds, while
+/// a larger or remote one can approach the ceiling, and a user who meets it
+/// otherwise has no recourse short of patching this constant.
 pub const REQUEST_TIMEOUT_SECS: u64 = 120;
+
+/// The environment variable overriding [`REQUEST_TIMEOUT_SECS`], named into
+/// the `CODELORE_LLM_*` family every other client knob already uses.
+pub const TIMEOUT_ENV: &str = "CODELORE_LLM_TIMEOUT_SECS";
 
 /// Anthropic messages API version, pinned in the `anthropic-version` header.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -49,12 +59,39 @@ pub trait ChatClient {
     fn model_id(&self) -> &str;
 }
 
+/// Resolve the per-request timeout from a raw environment value, falling
+/// back to [`REQUEST_TIMEOUT_SECS`].
+///
+/// A malformed or non-positive value warns and falls back rather than
+/// failing the run: this layer is advisory, so a typo in an optional knob
+/// should not abort an analysis. It does not pass silently, though — a
+/// mistyped budget that quietly kept the old one would look exactly like
+/// the ceiling this override exists to raise. Zero is refused because it
+/// would abort every request instantly rather than mean "no limit".
+fn resolve_timeout_secs(raw: Option<&str>) -> u64 {
+    let Some(raw) = raw else {
+        return REQUEST_TIMEOUT_SECS;
+    };
+    match raw.parse::<u64>() {
+        Ok(secs) if secs > 0 => secs,
+        _ => {
+            tracing::warn!(
+                "{TIMEOUT_ENV}={raw:?} is not a positive whole number of seconds — \
+                 falling back to {REQUEST_TIMEOUT_SECS}s"
+            );
+            REQUEST_TIMEOUT_SECS
+        }
+    }
+}
+
 /// Build the shared blocking agent: one global timeout, no retries, and
 /// non-2xx responses surfaced as `Ok` so the response body can be folded into
 /// the error message rather than discarded.
 fn build_agent() -> Agent {
     Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+        .timeout_global(Some(Duration::from_secs(resolve_timeout_secs(
+            read_env(TIMEOUT_ENV).as_deref(),
+        ))))
         .http_status_as_error(false)
         .build()
         .into()
@@ -426,8 +463,26 @@ pub fn resolve_client(env: &LlmEnv) -> Result<Box<dyn ChatClient>> {
 mod tests {
     use super::{
         DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_BASE_URL,
-        LlmEnv, Resolved, resolve, resolve_client,
+        LlmEnv, REQUEST_TIMEOUT_SECS, Resolved, resolve, resolve_client, resolve_timeout_secs,
     };
+
+    /// The override exists because the default is a budget, not a fact: a
+    /// field study had to patch this constant to run a slower model at all.
+    /// Parsing is pure so it is testable without mutating process
+    /// environment, matching how every other knob here is exercised.
+    #[test]
+    fn timeout_override_accepts_positive_values_and_falls_back_otherwise() {
+        assert_eq!(resolve_timeout_secs(Some("600")), 600);
+        assert_eq!(resolve_timeout_secs(Some("1")), 1);
+        assert_eq!(resolve_timeout_secs(None), REQUEST_TIMEOUT_SECS);
+        for bad in ["0", "-30", "abc", "12.5", "600s", "", " "] {
+            assert_eq!(
+                resolve_timeout_secs(Some(bad)),
+                REQUEST_TIMEOUT_SECS,
+                "{bad:?} must fall back to the default"
+            );
+        }
+    }
 
     #[test]
     fn explicit_anthropic_resolves_with_default_model_and_base() {
