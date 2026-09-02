@@ -3027,4 +3027,38 @@ naming the versions, with a `should_panic` matcher self-test — probed on
 a synthetic string, because cargo regenerates the real lockfile before
 tests read it and silently scrubs an appended fake entry.
 
-The next sweep re-opens at **F351**.
+### F351 (Fixed — Unreleased) — `--output -` created a literal file named `-`, and diff's report write was not atomic
+
+No `-`-as-stdout handling existed anywhere in the CLI, while the
+README's flagship CI recipe piped `codelore diff … --output - >>
+"$GITHUB_STEP_SUMMARY"` — the markdown went into a file named `-` in the
+working tree, the step summary stayed empty, and the junk file surfaced
+as an untracked change to the next gate run. `-` now streams to stdout
+for every streaming format in both `analyze` and `diff` (the documented
+recipes work as written — their pre-fix droppings, a literal `-` plus
+`-.provenance.json`, were still sitting in this repository's own
+working tree from test runs). The path-based formats reject `-` up
+front. Routing `diff` through the shared output helper also replaced
+its raw truncate-on-create with atomic publication, so a failing run no
+longer destroys the previous good report.
+
+### F352 (Fixed — Unreleased) — exit codes drifted from the documented contract on three surfaces
+
+Every `codelore diff` failure exited 1 — a typo'd rev range, a missing
+git binary, and a real gate violation were indistinguishable to CI,
+against the design intent the user guide states. Unsupported
+format×analysis combinations returned four different codes depending on
+which path caught them (sarif 4 before ingest; ndjson/html 2 after it;
+parquet 1 after it — the gate verdict's code for a flag typo), and
+`schema`/`explain` reported unknown names with the analysis-crash code
+while the parser used 2 one flag over. Diff's six untyped failures are
+now typed (malformed range and identical base/head exit 2; unresolvable
+revs and git failures exit 3); streaming format×analysis combinations
+validate before the pre-flight from `supported_formats` — the same
+derived table the dispatch reads, so gate and arms cannot drift — all at
+exit 2 including parquet's subset; unknown names exit 2 everywhere.
+Three contract tests pin the table, probed one filter at a time —
+`cargo test` silently errors on multiple positional filters, which made
+an earlier probe read as vacuously green.
+
+The next sweep re-opens at **F353**.
