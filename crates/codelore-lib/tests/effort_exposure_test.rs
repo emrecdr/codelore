@@ -372,3 +372,57 @@ fn decomposition_books_a_worsened_red_file_as_degrading() {
         "improving + degrading must reconcile to churn_share_pct"
     );
 }
+
+/// `complexity_metrics` holds the whole-file unit space PLUS one row per
+/// nested impl/class/function, whose spans overlap. A file's SLOC is the
+/// unit row's span; summing the rows counts function bodies twice. This
+/// seeds both row shapes and pins the per-file value `eh_bands_v1` carries.
+#[test]
+fn file_sloc_is_the_unit_row_not_the_sum_of_overlapping_entity_rows() {
+    use codelore_lib::analyses::code_health::CodeHealthRow;
+    use codelore_lib::analyses::effort_exposure::run_effort_exposure_with_health;
+
+    let db = FactsDb::new_in_memory().expect("db");
+    for stmt in [
+        "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+         canonical_author, date, committer_date, message, is_merge, parent_count) \
+         VALUES ('c1','a@x','A','a@x','a@x','2026-03-01 12:00:00', \
+         '2026-03-01 12:00:00','m',false,1)",
+        "INSERT INTO changes VALUES ('c1','dense.rs','added',NULL,10,0)",
+        "INSERT INTO complexity_metrics (path, name, rev, sloc) \
+         VALUES ('dense.rs','<unit>','c1',100)",
+        "INSERT INTO complexity_metrics (path, name, rev, sloc) \
+         VALUES ('dense.rs','busy_fn','c1',40)",
+    ] {
+        db.execute_batch(stmt).expect("seed");
+    }
+    let health = vec![CodeHealthRow {
+        path: "dense.rs".into(),
+        cognitive: 1.0,
+        score: 50.0,
+        structural_risk: 0.5,
+        percentile: 0.5,
+        band: "yellow".into(),
+        corpus_percentile: None,
+        beyond_corpus: false,
+        corpus_percentile_ci_low: None,
+        corpus_percentile_ci_high: None,
+    }];
+    let opts = Options {
+        min_revs: 1,
+        ..Options::default()
+    };
+    run_effort_exposure_with_health(&db, &opts, &health).expect("run");
+
+    let sloc: i64 = db
+        .query_row(
+            "SELECT sloc FROM eh_bands_v1 WHERE path = 'dense.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("eh_bands_v1 row");
+    assert_eq!(
+        sloc, 100,
+        "file SLOC must be the unit row's span, not the 140 an overlapping-row sum produces"
+    );
+}

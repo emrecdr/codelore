@@ -40,7 +40,8 @@
 //!   0.0 otherwise
 //! - `num_days` = days since this author's last touch of the file, measured
 //!   against the repo's newest commit (recency, per the DOE definition)
-//! - `size` = HEAD `SUM(sloc)` from `complexity_metrics` (clamped ≥ 1;
+//! - `size` = HEAD file SLOC — `MAX(sloc)` per path from
+//!   `complexity_metrics`, the file-spanning unit row (clamped ≥ 1;
 //!   the formula has `ln(size)` without a +1 guard, so clamping prevents ln(0))
 //!
 //! Expert threshold: `doe >= 1.0 AND doe >= 0.75 × max_doe_for_file`.
@@ -374,7 +375,12 @@ fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
          -- literal 'HEAD'), so no rev filter is needed — filtering on
          -- rev = 'HEAD' would match zero rows and silently zero the size term.
          head_sloc AS (
-           SELECT path, GREATEST(SUM(sloc), 1) AS size
+           -- MAX picks the file-spanning unit row; the table also holds
+           -- per-impl/per-function rows whose spans overlap, so SUM would
+           -- double-count function bodies and tilt the DOE size term
+           -- toward function-dense files (see code_health's file
+           -- aggregation, which uses the same MAX).
+           SELECT path, GREATEST(MAX(sloc), 1) AS size
            FROM complexity_metrics
            GROUP BY path
          ),

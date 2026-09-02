@@ -78,7 +78,11 @@ pub fn run_code_familiarity(db: &FactsDb, opts: &Options) -> Result<Vec<CodeFami
             WHERE date >= (SELECT max_d FROM anchor) - INTERVAL '{wd} days'
         ),
         sloc_per_path AS (
-            SELECT path, GREATEST(CAST(SUM(sloc) AS BIGINT), 0) AS sloc
+            -- MAX picks the file-spanning unit row; the table also holds
+            -- per-impl/per-function rows whose spans overlap, so SUM would
+            -- double-count function bodies (see code_health's file
+            -- aggregation, which uses the same MAX).
+            SELECT path, GREATEST(CAST(MAX(sloc) AS BIGINT), 0) AS sloc
             FROM complexity_metrics
             GROUP BY path
         ),
