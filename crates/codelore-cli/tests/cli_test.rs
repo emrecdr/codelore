@@ -2657,6 +2657,26 @@ fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
         "hotspot result must carry at least one evidence commit in codeFlows"
     );
 
+    // The grade must be internally consistent: `level` is derived FROM
+    // `security-severity`, so a result whose level disagrees with its own
+    // severity band was graded by something else. This surface used to
+    // hardcode "warning" alongside a severity computed with a divisor that
+    // capped below the error band, so both halves of that bug fail here.
+    let sev = r["properties"]["security-severity"]
+        .as_f64()
+        .expect("every hotspot result carries a security-severity");
+    let expected_level = if sev >= 7.0 {
+        "error"
+    } else if sev >= 4.0 {
+        "warning"
+    } else {
+        "note"
+    };
+    assert_eq!(
+        r["level"], expected_level,
+        "level must follow the severity band; severity was {sev}"
+    );
+
     // Must carry relatedLocations — plain location objects, no "location" wrapper.
     let related = r["relatedLocations"]
         .as_array()

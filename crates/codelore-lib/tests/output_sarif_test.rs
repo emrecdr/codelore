@@ -56,7 +56,7 @@ fn sarif_hotspots_valid_2_1_0() {
 #[test]
 fn sarif_level_warning_above_threshold() {
     // SARIF level derives from security-severity bands (matches the
-    // live-clone rule pattern). security-severity = (100 - cognitive_health) / 10:
+    // live-clone rule pattern). security-severity = (100 - cognitive_health) / 4:
     //   ≥ 7.0 → error
     //   ≥ 4.0 → warning
     //   < 4.0 → note
@@ -144,6 +144,44 @@ fn sarif_level_note_below_threshold() {
     let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
     let result = &parsed["runs"][0]["results"][0];
     assert_eq!(result["level"], "note");
+}
+
+/// The error band must be REACHABLE across the real health range. That is
+/// the property the old `/ 10` divisor violated: `cognitive_health` is
+/// bounded to [60, 100], so a tenth-scale severity never exceeded 4.0 and
+/// nothing could ever grade `error` — a cap invisible in any single-value
+/// test, because each one still agreed with itself. Sweeping the range
+/// makes the unreachable band a failure instead of an absence.
+#[test]
+fn health_grade_reaches_every_band_within_the_real_health_range() {
+    use codelore_lib::output::sarif::health_grade;
+
+    let mut seen: Vec<&'static str> = (60..=100).map(|h| health_grade(f64::from(h)).1).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(
+        seen,
+        vec!["error", "note", "warning"],
+        "every band must be reachable for some health in [60, 100]"
+    );
+
+    // And the level always agrees with its own severity, so the two can
+    // never be reported inconsistently.
+    for h in 60..=100 {
+        let (sev, level) = health_grade(f64::from(h));
+        let expected = if sev >= 7.0 {
+            "error"
+        } else if sev >= 4.0 {
+            "warning"
+        } else {
+            "note"
+        };
+        assert_eq!(level, expected, "health {h} graded {sev} but said {level}");
+        assert!(
+            (0.1..=10.0).contains(&sev),
+            "health {h} produced out-of-scale severity {sev}"
+        );
+    }
 }
 
 #[test]
