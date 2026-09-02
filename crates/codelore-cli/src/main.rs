@@ -471,7 +471,10 @@ fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
                 let hint = suggest::nearest(name, row_types.iter().copied())
                     .map(|s| format!(" (did you mean `{s}`?)"))
                     .unwrap_or_default();
-                Err(CodeLoreError::Analysis(format!(
+                // Exit 2: an unknown NAME is a CLI/argument mistake per the
+                // documented exit-code table, matching the parser's
+                // rejection of an unknown `--analysis` value.
+                Err(CodeLoreError::InvalidOptions(format!(
                     "unknown row type `{name}`{hint} — run `codelore schema` (no arg) to list supported row types"
                 ))
                 .into())
