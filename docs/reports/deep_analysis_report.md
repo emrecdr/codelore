@@ -3372,4 +3372,40 @@ share the edges they must agree on (the doc already claimed they did);
 lists gained `CODELORE_LLM_TIMEOUT_SECS`, without which an ambient
 developer setting would have reached every spawned CLI in the LLM suites.
 
-The next sweep re-opens at **F366**.
+### F366 (Fixed — Unreleased) — loop assertions that never ran, and the guard that could be walked around
+
+A `for row in &rows { assert!(...) }` is vacuous on an empty result: the
+test reports success without executing the check it exists to make.
+Eight such loops were floored. Six were already satisfied and the floor
+simply pins the guarantee. Two were not, and both had been green since
+they were written:
+
+`coupling_respects_min_shared_revs` set `min_shared_revs: 2` on
+`tiny_repo`, which has no co-change history, so the query returned zero
+rows and the threshold under test was never evaluated. It now runs on
+`coupling_repo`, whose whole purpose is to guarantee a pair co-changing
+across five commits.
+
+`dashboard_queries_run_over_ingested_fixture` is the ONLY coverage in
+the workspace for `run_xray`, `run_clone_summary` and `run_trends`, and
+three of its six shape loops never executed. `differential_repo`'s
+functions are all empty bodies (`fn later_15() {}`), so their cognitive
+complexity is zero and `run_xray`'s own `WHERE cm.cognitive > 0`
+excluded every row; clones and trends followed from the same emptiness.
+It now runs on `biomarker_repo` — branchy functions, a deliberate
+`dup_a`/`dup_b` clone pair, dated commits. `function_xray_repo` was
+evaluated first and rejected: despite the name it contains no branch
+constructs and a single file, so it would have fixed nothing.
+
+Probes: reverting each fixture reproduces the vacuity, naming it.
+
+The scoring-isolation guard moved from seven hand-listed roots to a
+scan of every file under `src/` with a named exemption list. A scoring
+module could previously import the advisory layer simply by living
+outside the listed roots — the guard's coverage depended on someone
+remembering to extend it. Comments are stripped before matching so
+prose that mentions the layer cannot trip it, and a self-test proves
+the matcher flags every import form while staying quiet on every prose
+form present in the tree.
+
+The next sweep re-opens at **F367**.

@@ -187,6 +187,10 @@ fn code_age_never_returns_negative_age() {
     };
     db.ingest(&repo, &opts).expect("ingest");
     let rows = run_code_age(&db, &opts).expect("run");
+    assert!(
+        !rows.is_empty(),
+        "fixture must yield rows — an empty result would pass the loop vacuously"
+    );
     for row in &rows {
         assert!(
             row.age_months >= 0 && row.age_days >= 0,

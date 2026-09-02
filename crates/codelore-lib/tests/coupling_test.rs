@@ -233,11 +233,17 @@ fn coupling_struct_shape() {
 
 #[test]
 fn coupling_respects_min_shared_revs() {
-    let tiny = codelore_lib::test_support::tiny_repo::build();
-    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    // `coupling_repo`, not `tiny_repo`: the threshold under test only means
+    // something over a history that HAS pairs sharing two or more revisions,
+    // and this fixture guarantees `src/alpha/svc.rs` ↔ `src/beta/svc.rs`
+    // co-change across five commits. On `tiny_repo` the query returned zero
+    // rows and the loop below asserted nothing — the test passed for the
+    // whole of its life without ever reaching its own assertion.
+    let fixture = codelore_lib::test_support::coupling_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
-        repo_path: tiny.dir.path().to_path_buf(),
+        repo_path: fixture.dir.path().to_path_buf(),
         min_revs: 1,
         min_shared_revs: 2, // stricter: require ≥2 shared
         min_coupling_pct: 0,
@@ -247,6 +253,11 @@ fn coupling_respects_min_shared_revs() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_coupling(&db, &opts).expect("run");
+    assert!(
+        !rows.is_empty(),
+        "the fixture couples files across >=2 shared revs; zero rows means the \
+         threshold filter dropped compliant pairs and the loop proved nothing"
+    );
     for row in &rows {
         assert!(
             row.shared >= 2,

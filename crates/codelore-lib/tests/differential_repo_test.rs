@@ -140,6 +140,10 @@ fn walk_commits_per_commit_fields_match() {
 
     let gix_by_rev: HashMap<_, _> = gix_events.iter().map(|e| (e.rev.clone(), e)).collect();
 
+    assert!(
+        !cli_events.is_empty(),
+        "a walker that silently yields zero commits would pass the parity loop vacuously"
+    );
     for cli_e in &cli_events {
         let gix_e = gix_by_rev
             .get(&cli_e.rev)

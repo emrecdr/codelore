@@ -1014,6 +1014,10 @@ fn corpus_lens_populates_covered_language_and_skips_others() {
         };
         run_code_health(&db, &opts).expect("run uncovered")
     };
+    assert!(
+        !uncovered.is_empty(),
+        "the skips-others half proves nothing over zero rows"
+    );
     for r in &uncovered {
         assert!(
             r.corpus_percentile.is_none() && !r.beyond_corpus,

@@ -16,7 +16,15 @@ use codelore_lib::test_support::permissive_coupling_opts;
 
 #[test]
 fn dashboard_queries_run_over_ingested_fixture() {
-    let fixture = codelore_lib::test_support::differential_repo::build();
+    // `biomarker_repo`, not `differential_repo`: the latter's functions are
+    // all empty bodies (`fn later_15() {}`), so their cognitive complexity is
+    // zero and `run_xray`'s `WHERE cm.cognitive > 0` filtered every row —
+    // three of the six shape loops below never executed a single assertion,
+    // and this file is the only coverage those queries have. The biomarker
+    // fixture carries branchy functions, a deliberate clone pair
+    // (`dup_a.rs` / `dup_b.rs`) and dated commits, so every query returns
+    // rows to check.
+    let fixture = codelore_lib::test_support::biomarker_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
@@ -33,6 +41,10 @@ fn dashboard_queries_run_over_ingested_fixture() {
 
     // x-ray: any returned function has a sane line range + a name.
     let xray = run_xray(&db, 100).expect("run_xray");
+    assert!(
+        !xray.is_empty(),
+        "the fixture has functions; an empty x-ray passes the shape loop vacuously"
+    );
     for x in &xray {
         assert!(!x.function.is_empty(), "xray entry has a function name");
         assert!(
@@ -46,6 +58,10 @@ fn dashboard_queries_run_over_ingested_fixture() {
 
     // clone-summary: each row counts ≥1 clone group for its path.
     let clones = run_clone_summary(&db).expect("run_clone_summary");
+    assert!(
+        !clones.is_empty(),
+        "the fixture carries clone pairs; an empty summary passes the loop vacuously"
+    );
     for c in &clones {
         assert!(c.groups >= 1, "clone-summary groups ≥1, got {}", c.groups);
     }
@@ -55,6 +71,10 @@ fn dashboard_queries_run_over_ingested_fixture() {
     paths.sort();
     paths.dedup();
     let trends = run_trends(&db, &opts, &paths).expect("run_trends");
+    assert!(
+        !trends.is_empty(),
+        "committed fixture paths must produce monthly trend points"
+    );
     for t in &trends {
         assert!(!t.month.is_empty(), "trend point has a month");
     }
