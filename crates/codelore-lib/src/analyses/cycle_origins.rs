@@ -69,7 +69,7 @@ pub fn run_cycle_origins<R: Repo>(
     let commits: Vec<(String, String, String)> = crate::analyses::query::query_map_collect(
         db,
         "SELECT rev, CAST(date AS TEXT), CAST(CAST(date AS DATE) AS TEXT) \
-         FROM commits ORDER BY date ASC, rowid ASC",
+         FROM commits ORDER BY date ASC, rowid DESC",
         [],
         "cycle-origins commits",
         |r| {
