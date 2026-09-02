@@ -101,13 +101,26 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     // Bot rows are excluded pair-granularly via the JOIN on human_aliases:
     // a human sharing a canonical with a bot keeps their own commits'
     // knowledge weight counted while the bot pair's is dropped row-wise.
-    // Deleted paths are excluded (change_type != 'deleted').
+    // Deletion is excluded at BOTH granularities: the row filter
+    // (change_type != 'deleted') drops the deletion events themselves, and
+    // the live_paths join drops every path whose most recent event is a
+    // deletion — without it, a file deleted years ago kept all its
+    // pre-deletion contributions and flowed into every shares consumer
+    // (coordination-needs emitted a row per dead file; code-familiarity
+    // counted authors who only ever touched deleted files).
     let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE;
     let base_sql = format!(
         "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
          WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
          {human_aliases},
+         live_paths AS (
+           SELECT c.path
+           FROM {src} c
+           INNER JOIN commits co ON co.rev = c.rev
+           GROUP BY c.path
+           HAVING arg_max(c.change_type, ROW(co.date, -co.rowid)) != 'deleted'
+         ),
          contrib AS (
            SELECT c.path,
                   co.canonical_author AS author,
@@ -127,6 +140,7 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
            FROM {src} c
            JOIN commits co USING (rev)
            JOIN human_aliases ha ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
+           JOIN live_paths lp ON lp.path = c.path
            WHERE c.change_type != 'deleted'
            GROUP BY c.path, co.canonical_author
          )
@@ -227,7 +241,17 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
          -- above in materialize_knowledge_shares).
          JOIN human_aliases ha ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
          WHERE c.change_type != 'deleted'
-           AND co.nf <= 10",
+           AND co.nf <= 10
+           -- Same path-liveness rule as the contrib CTE: without it,
+           -- reviewer credit on a since-deleted path re-introduces the
+           -- dead path during the Step-2 merge.
+           AND c.path IN (
+             SELECT lc.path
+             FROM {src} lc
+             INNER JOIN commits lco ON lco.rev = lc.rev
+             GROUP BY lc.path
+             HAVING arg_max(lc.change_type, ROW(lco.date, -lco.rowid)) != 'deleted'
+           )",
     );
 
     // Raw row: (path, message, k_path).
