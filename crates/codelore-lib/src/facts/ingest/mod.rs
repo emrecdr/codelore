@@ -12,7 +12,11 @@ pub mod at_rev;
 mod clones_head;
 mod complexity_head;
 pub(crate) mod consumer;
-mod coverage;
+// `pub(crate)` rather than private: the same coverage accounting the
+// HEAD-time passes use is needed by `analyses::clones`, which runs the
+// working-tree scan that `analyze`, `gate` and `diff` actually consume.
+// Keeping it private is what left that scan with no accounting at all.
+pub(crate) mod coverage;
 mod grouping;
 mod imports_head;
 mod lineage;

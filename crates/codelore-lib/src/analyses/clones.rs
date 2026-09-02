@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 use crate::analyses::query::query_map_collect;
 use crate::clones::{CloneLanguage, extract_functions, group_clones};
 use crate::facts::FactsDb;
+use crate::facts::ingest::coverage::{REASON_BLOB_READ, ScanCoverage, ScanOutcome};
 use crate::options::Options;
 use crate::{CodeLoreError, Result};
 
@@ -88,10 +89,25 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     // Parallel phase: read + tree-sitter for each candidate.
     // `collect::<Result<Vec<_>>>()` preserves fail-fast semantics on
     // any extract_functions error.
-    let all_fns: Vec<_> = candidates
+    // Accounted the same way the HEAD-time pass accounts its scan. This one
+    // read the working tree and dropped an unreadable file with `.ok()?` —
+    // no message at any level — so a scan that reached five of five thousand
+    // files returned the same value as one that found no duplication. This
+    // is the scan `analyze`, `gate`'s projection and `diff` consume, so it
+    // was the uninstrumented half of the pair.
+    let outcomes: Vec<ScanOutcome<Vec<_>>> = candidates
         .into_par_iter()
-        .filter_map(|(path, rel, lang)| -> Option<Result<Vec<_>>> {
-            let code = fs::read(&path).ok()?;
+        .map(|(path, rel, lang)| -> Result<ScanOutcome<Vec<_>>> {
+            let code = match fs::read(&path) {
+                Ok(code) => code,
+                Err(e) => {
+                    // Eligible and unreadable: a permission error or a file
+                    // removed mid-scan. Non-fatal — the rest of the scan
+                    // still completes — but counted, and said out loud.
+                    tracing::warn!("clones: read failed for {rel}: {e}");
+                    return Ok(ScanOutcome::Lost(REASON_BLOB_READ));
+                }
+            };
             // Skip oversized files (generated / minified) before
             // tree-sitter to avoid OOM / stack-overflow on deeply nested
             // generated code.
@@ -101,15 +117,26 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
                     size = code.len(),
                     cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                 );
-                return None;
+                return Ok(ScanOutcome::SkippedOversize);
             }
-            Some(
-                extract_functions(&rel, &code, lang)
-                    .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}"))),
-            )
+            // A file that fingerprints to nothing is still fully covered —
+            // read and walked, simply holding no extractable functions.
+            extract_functions(&rel, &code, lang)
+                .map(ScanOutcome::Scored)
+                .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
         })
-        .collect::<Result<Vec<_>>>()?
+        .collect::<Result<Vec<_>>>()?;
+
+    let coverage = ScanCoverage::tally(&outcomes);
+    coverage.warn_if_degraded("clone", "clones");
+    coverage.warn_if_mostly_oversize("clone", "clones");
+
+    let all_fns: Vec<_> = outcomes
         .into_iter()
+        .filter_map(|o| match o {
+            ScanOutcome::Scored(fns) => Some(fns),
+            _ => None,
+        })
         .flatten()
         .collect();
     let groups = group_clones(all_fns, opts.min_clone_node_count);
