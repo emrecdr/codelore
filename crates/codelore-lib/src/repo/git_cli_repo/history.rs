@@ -136,11 +136,11 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
     let committer_email = parts.next()?.trim().to_string();
     let date_str = parts.next()?.trim().to_string();
     let committer_date_str = parts.next()?.trim().to_string();
-    let message = parts
-        .next()
-        .unwrap_or("")
-        .trim_end_matches('\n')
-        .to_string();
+    // %B is the raw stored message and %x1e follows it directly in the
+    // format, so this field is byte-exact — including the trailing newline
+    // git normally stores. GixRepo's message_raw() keeps that byte too;
+    // trimming here would silently diverge the two event streams.
+    let message = parts.next().unwrap_or("").to_string();
 
     let parents: Vec<String> = if parents_raw.is_empty() {
         vec![]

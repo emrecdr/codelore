@@ -327,6 +327,18 @@ fn rendered_spa_boots_without_console_errors() {
     let browser = match Browser::default() {
         Ok(b) => b,
         Err(e) => {
+            // On CI the skip must be a FAILURE: this suite is the only
+            // place the dashboard's JS executes at all, and a broken
+            // Chrome install used to turn the whole job into a silent
+            // 2-minute green — the exact hole its own module doc blames
+            // for shipped JS defects. The env var is set by the CI job;
+            // contributor machines without Chrome still skip cleanly.
+            assert!(
+                std::env::var("CODELORE_REQUIRE_BROWSER").is_err(),
+                "CODELORE_REQUIRE_BROWSER is set but Chrome failed to \
+                 launch ({e}) — a browser-required environment must fail, \
+                 not silently skip the only JS coverage"
+            );
             println!(
                 "spa_browser_test: skipping — could not launch Chrome ({e}). \
                  Install Chrome / Chromium and retry."
@@ -913,6 +925,18 @@ fn rendered_spa_boots_without_scheduler_yield() {
     let browser = match Browser::default() {
         Ok(b) => b,
         Err(e) => {
+            // On CI the skip must be a FAILURE: this suite is the only
+            // place the dashboard's JS executes at all, and a broken
+            // Chrome install used to turn the whole job into a silent
+            // 2-minute green — the exact hole its own module doc blames
+            // for shipped JS defects. The env var is set by the CI job;
+            // contributor machines without Chrome still skip cleanly.
+            assert!(
+                std::env::var("CODELORE_REQUIRE_BROWSER").is_err(),
+                "CODELORE_REQUIRE_BROWSER is set but Chrome failed to \
+                 launch ({e}) — a browser-required environment must fail, \
+                 not silently skip the only JS coverage"
+            );
             println!(
                 "spa_browser_test: skipping — could not launch Chrome ({e}). \
                  Install Chrome / Chromium and retry."
@@ -1778,6 +1802,18 @@ fn boot_spa_tab(html_path: &std::path::Path) -> Option<(Browser, Arc<headless_ch
     let browser = match Browser::default() {
         Ok(b) => b,
         Err(e) => {
+            // On CI the skip must be a FAILURE: this suite is the only
+            // place the dashboard's JS executes at all, and a broken
+            // Chrome install used to turn the whole job into a silent
+            // 2-minute green — the exact hole its own module doc blames
+            // for shipped JS defects. The env var is set by the CI job;
+            // contributor machines without Chrome still skip cleanly.
+            assert!(
+                std::env::var("CODELORE_REQUIRE_BROWSER").is_err(),
+                "CODELORE_REQUIRE_BROWSER is set but Chrome failed to \
+                 launch ({e}) — a browser-required environment must fail, \
+                 not silently skip the only JS coverage"
+            );
             println!(
                 "spa_browser_test: skipping — could not launch Chrome ({e}). \
                  Install Chrome / Chromium and retry."

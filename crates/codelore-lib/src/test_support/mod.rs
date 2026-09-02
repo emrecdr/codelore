@@ -128,7 +128,43 @@ fn clone_bundle(bundle: &[u8], target: &std::path::Path) -> String {
     .to_string()
 }
 
+/// Digest every row of every fact table, so a difference anywhere is caught
+/// rather than only in the tables the author thought to check. Table
+/// discovery is dynamic for the same reason — a new table joins the
+/// comparison without anyone remembering to add it. Shared by the cache
+/// equivalence proof and the cross-backend differential gate.
+///
+/// # Panics
+///
+/// Panics when no fact tables exist (the comparison would be vacuously
+/// equal) or when a digest query fails.
 #[cfg(feature = "test-support")]
+#[must_use]
+pub fn fact_store_digest(db: &crate::facts::FactsDb) -> Vec<(String, String)> {
+    let tables = db
+        .query_one_value(
+            "SELECT COALESCE(string_agg(table_name, ',' ORDER BY table_name), '') \
+             FROM information_schema.tables WHERE table_schema = 'main'",
+        )
+        .expect("list tables");
+    assert!(
+        !tables.is_empty(),
+        "no fact tables found — the comparison would be vacuously equal"
+    );
+    tables
+        .split(',')
+        .map(|t| {
+            let digest = db
+                .query_one_value(&format!(
+                    "SELECT COALESCE(md5(string_agg(r, '|' ORDER BY r)), 'empty') \
+                     FROM (SELECT CAST({t} AS VARCHAR) AS r FROM {t})"
+                ))
+                .unwrap_or_else(|e| panic!("digest {t}: {e}"));
+            (t.to_string(), digest)
+        })
+        .collect()
+}
+
 pub mod tiny_repo {
     //! A tiny 5-commit repo with distinct per-commit timestamps.
     //!
