@@ -504,7 +504,7 @@ impl FactsDb {
         // enforced here and the ones `codelore profile` reports agree.
         if let Some(repo_dir) = cache_p.parent() {
             cache::prune_repo_cache(repo_dir, cache::MAX_REPO_CACHE_ENTRIES);
-            cache::prune_global_cache(cache_root, cache::GLOBAL_CACHE_MAX_BYTES);
+            cache::prune_global_cache(cache_root, cache::GLOBAL_CACHE_MAX_BYTES, Some(&cache_p));
         }
 
         Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir))

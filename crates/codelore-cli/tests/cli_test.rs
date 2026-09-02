@@ -1869,14 +1869,28 @@ fn spa_architecture_tile_corpus_detail_follows_repo_metrics_presence() {
     );
 
     // Override with an artifact that has no repo_metrics section: the
-    // annotation must degrade to absent.
+    // annotation must degrade to absent. Real pre-section artifacts carry
+    // per-language pools (a fully empty lens is rejected at load), so this
+    // stand-in carries one too.
+    let quantiles: Vec<f64> = (0..=1000).map(|i| f64::from(i) * 10.0).collect();
     let artifact = codelore_lib::calibration::CalibrationArtifact {
         format_version: codelore_lib::calibration::CALIBRATION_FORMAT_VERSION,
         corpus_vintage: "test-corpus-no-pools".to_string(),
         generated_at: "2026-07-14T00:00:00Z".to_string(),
         repos_included: 1,
         repos_attempted: 1,
-        languages: vec![],
+        languages: vec![codelore_lib::calibration::LanguageTable {
+            language: "rust".to_string(),
+            sample_functions: 4_000,
+            strata: vec![codelore_lib::calibration::Stratum {
+                sloc_min: 0,
+                sloc_max: u64::MAX,
+                metrics: vec![codelore_lib::calibration::MetricQuantiles {
+                    metric: "cyclomatic".to_string(),
+                    quantiles,
+                }],
+            }],
+        }],
         repo_metrics: None,
     };
     let work = tempfile::tempdir().unwrap();

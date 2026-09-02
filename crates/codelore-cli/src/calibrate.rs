@@ -40,10 +40,12 @@ pub(crate) fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
     // Default vintage is `corpus-YYYY-MM`, sliced from the RFC 3339 timestamp
     // (`YYYY-MM-DDT…`) so we reuse the one timestamp helper rather than pull in
     // date formatting.
-    let vintage = args
-        .vintage
-        .clone()
-        .unwrap_or_else(|| format!("corpus-{}", &generated_at[..7]));
+    let vintage = args.vintage.clone().unwrap_or_else(|| {
+        format!(
+            "corpus-{}",
+            generated_at.chars().take(7).collect::<String>()
+        )
+    });
 
     let manifest = calibration::load_manifest(&args.repos).context("load corpus manifest")?;
 

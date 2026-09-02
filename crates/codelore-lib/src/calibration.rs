@@ -220,6 +220,14 @@ impl CalibrationArtifact {
                 self.format_version
             ));
         }
+        if self.languages.is_empty() && self.repo_metrics.is_none() {
+            return Err(
+                "artifact contains no languages and no repo_metrics pools — every lookup \
+                 would silently report \"not in corpus\"; regenerate it from a non-empty \
+                 corpus"
+                    .to_string(),
+            );
+        }
         for lang in &self.languages {
             for stratum in &lang.strata {
                 for mq in &stratum.metrics {
@@ -572,7 +580,7 @@ pub fn attach_repo_metrics(artifact: &mut CalibrationArtifact, mut pools: RepoMe
         return;
     }
     for vec in pools.values.values_mut() {
-        vec.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        vec.sort_by(f64::total_cmp);
     }
     artifact.repo_metrics = Some(pools);
 }
@@ -637,7 +645,7 @@ pub fn build_from_observations(
                 .iter()
                 .map(|(metric, values)| {
                     let mut sorted = values.clone();
-                    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    sorted.sort_by(f64::total_cmp);
                     MetricQuantiles {
                         metric: metric.clone(),
                         quantiles: quantile_breakpoints(&sorted),
@@ -781,12 +789,10 @@ fn merge_repo_metrics(
                     .entry(metric)
                     .and_modify(|base_vals| {
                         base_vals.append(&mut add_vals);
-                        base_vals
-                            .sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                        base_vals.sort_by(f64::total_cmp);
                     })
                     .or_insert_with(|| {
-                        add_vals
-                            .sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                        add_vals.sort_by(f64::total_cmp);
                         add_vals
                     });
             }
@@ -903,6 +909,28 @@ mod tests {
         }
     }
 
+    /// A FULLY empty artifact — no languages and no `repo_metrics` pools —
+    /// is rejected at load time: it would pass every structural check while
+    /// turning the corpus lens into a silent no-op, indistinguishable at
+    /// lookup time from a file genuinely absent from the corpus. An artifact
+    /// carrying only `repo_metrics` pools stays valid — a real shape, since
+    /// the architecture percentiles need no per-language pools.
+    #[test]
+    fn fully_empty_artifact_is_rejected_but_pools_only_is_not() {
+        let mut art = CalibrationArtifact::from_slice(EMBEDDED_WORLD_BYTES)
+            .expect("embedded world corpus must be a valid artifact");
+        art.languages.clear();
+        if art.repo_metrics.is_some() {
+            art.validate()
+                .expect("languages-empty with pools present must stay valid");
+        }
+        art.repo_metrics = None;
+        let err = art
+            .validate()
+            .expect_err("a fully empty artifact must not validate");
+        assert!(err.contains("no languages"), "unexpected message: {err}");
+    }
+
     /// A manifest with two `[[repos]]` blocks round-trips: sources, pinned
     /// SHAs, and advisory languages all parse into the typed model.
     #[test]
@@ -940,7 +968,10 @@ mod tests {
     /// path), proving the filter keys on the vintage prefix alone.
     #[test]
     fn from_slice_accepts_a_real_vintage() {
-        let obs = LangObservations::new();
+        // One observed function, so the artifact carries a language — an
+        // empty artifact is rejected by validate() regardless of vintage.
+        let mut obs = LangObservations::new();
+        obs.observe("rust", "cognitive", 3.0);
         let art = build_from_observations("world-2026-07", "2026-07-01T00:00:00Z", &obs);
         assert!(!art.corpus_vintage.starts_with(PLACEHOLDER_VINTAGE_PREFIX));
         // Round-trips through the same validate() path embedded_world() uses.

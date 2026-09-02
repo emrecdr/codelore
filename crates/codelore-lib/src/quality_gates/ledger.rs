@@ -243,11 +243,10 @@ pub fn format_history(all_records: &[GateRunRecord], n: usize) -> String {
     for rec in &tail {
         if rec.head_sha != current_sha {
             current_sha = &rec.head_sha;
-            let _ = write!(
-                out,
-                "\ncommit {}\n",
-                &rec.head_sha[..rec.head_sha.len().min(12)]
-            );
+            // `head_sha` comes from a JSONL file a human can edit, so the
+            // display prefix must land on a char boundary, not byte 12.
+            let sha_prefix: String = rec.head_sha.chars().take(12).collect();
+            let _ = write!(out, "\ncommit {sha_prefix}\n");
             out.push_str("  gate                      threshold   value      verdict\n");
             out.push_str("  ─────────────────────────────────────────────────────────\n");
         }
@@ -293,6 +292,20 @@ mod tests {
         assert_eq!(read.len(), 2);
         assert_eq!(read[0].gate, "code_health_min");
         assert_eq!(read[1].verdict, "passed");
+    }
+
+    #[test]
+    fn format_history_survives_a_multibyte_head_sha() {
+        // The ledger file is hand-editable JSONL, so `head_sha` is untrusted
+        // text: a char straddling the display prefix's 12th byte must render,
+        // not panic the whole `check` run.
+        let mut rec = sample_record("code_health_min", "passed");
+        rec.head_sha = "abcdefghijkлmnop".into(); // 'л' spans bytes 11..13
+        let out = format_history(&[rec], 5);
+        assert!(
+            out.contains("commit abcdefghijkл"),
+            "expected a 12-char prefix in {out:?}"
+        );
     }
 
     #[test]

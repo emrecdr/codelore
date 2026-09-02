@@ -148,8 +148,7 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
     // Deterministic sort: priority DESC, then path ASC as a stable tie-break.
     rows.sort_by(|a, b| {
         b.priority
-            .partial_cmp(&a.priority)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.priority)
             .then_with(|| a.path.cmp(&b.path))
     });
 

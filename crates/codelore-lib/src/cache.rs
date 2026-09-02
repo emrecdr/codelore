@@ -300,8 +300,16 @@ pub fn prune_repo_cache(repo_dir: &Path, max_entries: usize) {
 /// total directory size falls below `max_bytes`. Also sweeps stale
 /// `.tmp.<pid>` artifacts across the global cache tree.
 ///
+/// `keep` names a file the eviction loop must not delete, whatever the cap
+/// says: the ingest path prunes immediately after renaming the entry it just
+/// wrote into place and then re-opens that entry, so evicting it — which the
+/// oldest-first walk reaches whenever the cap still binds after every older
+/// entry is gone — would fail the run that produced it. Its size still counts
+/// toward the total, so the cap stays a cap; the directory merely holds one
+/// entry the loop cannot free.
+///
 /// Errors from individual file operations are logged but not fatal.
-pub fn prune_global_cache(root: &Path, max_bytes: u64) {
+pub fn prune_global_cache(root: &Path, max_bytes: u64, keep: Option<&Path>) {
     let codelore_dir = root.join("codelore");
     cleanup_stale_tmp_files_recursive(&codelore_dir);
     // Before the size walk, not after it: this function returns early when
@@ -324,6 +332,9 @@ pub fn prune_global_cache(root: &Path, max_bytes: u64) {
     for (path, _, size) in files {
         if remaining <= max_bytes {
             break;
+        }
+        if keep.is_some_and(|k| k == path) {
+            continue;
         }
         let existed = path.exists();
         delete_duckdb_with_companion(&path, "prune_global_cache");

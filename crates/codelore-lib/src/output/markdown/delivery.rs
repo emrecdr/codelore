@@ -18,11 +18,7 @@ pub fn write_lead_time_markdown<W: Write>(
     .map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|---|---|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        let short_rev = if row.rev.len() >= 8 {
-            &row.rev[..8]
-        } else {
-            &row.rev
-        };
+        let short_rev: String = row.rev.chars().take(8).collect();
         writeln!(
             w,
             "| `{}` | {} | {} | {} | {:.2} |",

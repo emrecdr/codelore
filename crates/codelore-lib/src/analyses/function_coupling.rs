@@ -174,13 +174,8 @@ pub fn run_function_coupling<R: Repo>(
     // byte-stable output when multiple pairs share the same p and confidence.
     rows.sort_unstable_by(|x, y| match (x.p_value, y.p_value) {
         (Some(px), Some(py)) => px
-            .partial_cmp(&py)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                y.confidence
-                    .partial_cmp(&x.confidence)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .total_cmp(&py)
+            .then_with(|| y.confidence.total_cmp(&x.confidence))
             .then_with(|| x.a.cmp(&y.a))
             .then_with(|| x.b.cmp(&y.b)),
         (None, Some(_)) => std::cmp::Ordering::Less,
