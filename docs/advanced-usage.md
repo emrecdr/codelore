@@ -101,7 +101,7 @@ CodeLore ships **dozens of behavioral analyses** across four tiers (the registry
 | `function-coupling` ★★ | "Which function pairs in a file always change together?" | Per-function-pair co-change frequency with two-tailed Fisher exact significance; requires `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; pairs with low p-value are candidates for extract-and-share refactoring |
 | `function-hotspots` ★★ | "Which individual FUNCTIONS are hot, repo-wide?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − cognitive_health) / 4` — the `hotspots` formula, computed per HEAD-live function via `function-xray`'s hunk↔span overlap predicate instead of per file | Function-granularity complement to `hotspots`: finds the one hot function hiding inside an otherwise-quiet large file |
 
-Almost all analyses are SQL views over the DuckDB fact store + thin Rust orchestrators (the architecture tier additionally builds the import graph in Rust). The exception is `defect-validation`, which reads a defect-calibration artifact instead of the fact store — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) below. You can run any analysis at any output format.
+Almost all analyses are SQL views over the DuckDB fact store + thin Rust orchestrators (the architecture tier additionally builds the import graph in Rust). The exception is `defect-validation`, which reads a defect-calibration artifact instead of the fact store — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) below. Every analysis emits `csv`, `json`, and `markdown`; the remaining formats are wired per-analysis and an unsupported pairing is refused at the CLI boundary before any ingest work (see the format table below).
 
 ### Cycle-health analysis
 
@@ -523,7 +523,8 @@ jobs:
 
       - name: Install codelore
         run: |
-          curl -fsSL https://github.com/emrecdr/codelore/releases/latest/download/codelore-x86_64-unknown-linux-gnu.tar.gz \
+          TAG=$(gh release view --repo emrecdr/codelore --json tagName -q .tagName)
+          curl -fsSL "https://github.com/emrecdr/codelore/releases/download/$TAG/codelore-$TAG-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C /usr/local/bin codelore
 
       - name: Run analysis and write step summary
@@ -556,11 +557,11 @@ The step summary appears at the bottom of the workflow run page in the GitHub Ac
 
 | Rule ID | Tags | When it fires |
 |---|---|---|
-| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = max(0.1, (100 − cognitive_health) / 4)` (range 0.1–10 — health is bounded to [60, 100], so /4 spans the full scale); `level` derived from severity band (≥7 = error, ≥4 = warning, else note). As emitted by `analyze`/`check`; `codelore diff`'s emitter still carries an older severity shape (an active ledger finding) |
+| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = max(0.1, (100 − cognitive_health) / 4)` (range 0.1–10 — health is bounded to [60, 100], so /4 spans the full scale); `level` derived from severity band (≥7 = error, ≥4 = warning, else note). Emitted by `analyze`, and by `codelore diff` for rank-entrant findings, which use this exact grade. Diff's score-increase results carry a fixed `warning` and no `security-severity` — a score delta has no health value to grade. (`check` emits one rule per gate name at a fixed `error` level, not this rule.) |
 | `CODELORE-CLONE` | `behavioral`, `clone`, `type-1`, `type-2` | One result per clone family; `security-severity = 3 + family_size`, capped at 6 |
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
 | `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `absent-change-pattern`, `pr-diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
-| `CODELORE-DELTA-HEALTH` | `behavioral`, `health`, `pr-diff` | One result per function whose health degraded across the PR range (`codelore diff` only; `warning` level) |
+| `CODELORE-DELTA-HEALTH` | `behavioral`, `health`, `pr-diff` | One result per file containing at least one function whose health degraded across the PR range — deduplicated per file, and the message names the first such function (`codelore diff` only; `warning` level) |
 
 Every `codelore diff --format sarif` result carries these versioned `partialFingerprints` keys so cross-run identity stays stable and GitHub Code Scanning deduplicates alerts:
 
@@ -684,9 +685,10 @@ codelore analyze [OPTIONS]
                                 joins key on real paths, and grouped
                                 output would be silently empty.
 
-      --strict-grouping         When set, fail-fast if any change path matches
-                                no group rule (default: paths with no rule are
-                                kept under their original filename).
+      --strict-grouping         When set, drop every change path that matches no
+                                group rule (code-maat's behaviour; default: paths
+                                with no rule are kept under their original
+                                filename).
                                 Auto-implied by --code-maat-compat.
 
   # ── Code-maat compatibility ───────────────────────────────────────
@@ -764,6 +766,8 @@ codelore analyze [OPTIONS]
                                 at the start of every analyze run. Also
                                 auto-suppressed when stderr is not a TTY.
 ```
+
+Two environment variables control colour, following the usual conventions: `NO_COLOR` (set to anything non-empty) never colourizes, and `CLICOLOR_FORCE` (set to anything non-empty other than `0`) always does, which is what you want when piping into a log viewer that renders ANSI. `NO_COLOR` wins if both are set.
 
 ### `codelore diff` (PR-mode)
 
@@ -1612,7 +1616,7 @@ Cost: warm-cache call is fast (milliseconds). Cold-cache triggers full history i
 Returns the top hotspot files ranked by revision count, with composite hotspot score and complexity.
 
 Parameters:
-- `limit` *(optional, u32)* — cap the number of rows returned. Default: 20.
+- `limit` *(optional, u32)* — cap the number of rows returned. Default: 50, clamped to 1..=500.
 
 Cost: warm-cache fast. Cold-cache triggers ingest.
 
@@ -1622,6 +1626,7 @@ Returns per-file composite health scores: a `band` (`red` / `yellow` / `green`) 
 
 Parameters:
 - `path` *(optional, string)* — filter to a single file path relative to the repo root. Omit to return all files with complexity data.
+- `limit` *(optional, u32)* — when listing (no `path`), cap the rows returned, worst-health first. Default: 50, clamped to 1..=500; a trailing summary object discloses any suppressed rows.
 
 Cost: warm-cache fast. Cold-cache triggers ingest.
 
@@ -1632,6 +1637,7 @@ Returns a function-level health delta between two revisions. Shows which functio
 Parameters:
 - `base` *(required, string)* — base revision. Any string accepted by `git rev-parse` (branch, tag, full SHA, `HEAD~N`).
 - `head` *(required, string)* — head revision. Same format.
+- `limit` *(optional, u32)* — cap the per-function rows returned. Default: 50, clamped to 1..=500; an `omitted_functions` count is added when rows are suppressed.
 
 Both revisions are validated before any work starts — an unresolvable ref returns a tool error rather than a server crash.
 
@@ -1671,7 +1677,8 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 
 `no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, `code_familiarity_min`, and `corpus_percentile_max` (the corpus lens is active by default via the embedded world calibration artifact, so no `--calibration` flag is needed; the gate reports `skipped` — not a pass — only when no calibration artifact is active at all). This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), the `hotspot_anchored_max` gate (this tool's hotspot scan is the plain, unanchored variant), degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures any of those, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
 
-Parameters: none.
+Parameters:
+- `limit` *(optional, u32)* — cap the `violations` array. Default: 50, clamped to 1..=500. `violation_count` always reports the true total, so a capped list never changes the verdict.
 
 Cost: warm-cache fast. Cold-cache triggers ingest.
 
