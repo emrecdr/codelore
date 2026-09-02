@@ -3206,4 +3206,29 @@ carry the language entry their real-world counterparts have. Probe:
 with the check removed, the rejection test's `expect_err` fails on
 `Ok`; the same test pins the pools-only acceptance each run.
 
-The next sweep re-opens at **F361**.
+### F361 (Fixed — Unreleased) — `--format step-summary --output -` wrote a file named `-`
+
+The dash gate in `analyze.rs` rejects `-` for `parquet | sqlite | spa`,
+formats that cannot stream at all. `step-summary` streams to stdout by
+default, so the dash is meaningful for it — but `run_step_summary_dispatch`
+passed `args.output` straight into `atomic_publish` without the filter its
+sibling `emit_to_output_or_stdout` applies to the identical
+`Option<&Path>`, so the dash took the file branch and created `./-` while
+the caller's redirect captured nothing.
+
+Neither documented recipe reaches this on its own: `docs/advanced-usage.md`
+uses bare streaming for step-summary, and the README's `--output -` example
+is on the `diff` path, which routes through the filtering emitter. The
+defect needs the two idioms crossed, which the docs invite by teaching the
+dash as the conventional spelling of stdout in one place and default
+streaming in another. Recorded because the inconsistency, not the recipe,
+is the bug: two output-routing paths in one file disagreed about what `-`
+means.
+
+Fixed by applying the same filter. Probe: removing it fails the new test,
+which pins both that the summary reaches stdout and that no `-` file is
+left in the working directory. No test previously exercised step-summary's
+output routing at all — the format's only prior appearance in the CLI suite
+was the time-bucket rejection.
+
+The next sweep re-opens at **F362**.
