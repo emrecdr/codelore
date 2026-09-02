@@ -2790,4 +2790,21 @@ that cannot do the dangerous thing at all. Narrowing is untestable until
 the next Dependabot PR fires (labeling runs only under the live token),
 which is why this is recorded rather than fixed inline.
 
-The next sweep re-opens at **F337**.
+### F337 (Fixed — Unreleased) — the lineage rename map was applied by name, with no time bound
+
+`materialize_path_lineage` date-guards chain construction against recycled
+filenames, but `materialize_changes_lineage` applied the finished map with
+`LEFT JOIN path_lineage ON old_path = c.path` — string key only. A name
+retired by a rename and later reused by an unrelated file had the new
+file's rows rewritten onto the old file's canonical target: the new file
+vanished from every path-aggregating analysis and the target inflated with
+a stranger's history. Default-on (`use_canonical_lineage`), and persisted:
+Kamei enrichment runs at ingest through this view, so cached fact stores
+carried the conflated attribution. Found independently by two second-wave
+auditors; the fix models retirement *epochs* (a name can be retired more
+than once), bounds the join to the half-open window between consecutive
+retirements, and excludes `copied` rows from seeding or extending chains.
+`CACHE_EPOCH` → `schema_v21`. The recycled-name regression test fails on
+the unfixed join; see `docs/reports/2026-09-02-deep-analysis-second-wave.md`.
+
+The next sweep re-opens at **F338**.
