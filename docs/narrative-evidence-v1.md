@@ -54,11 +54,11 @@ Per-class agreement between the checker's verdict and the verdict the class pred
 
 Confusion matrix over the whole corpus (faithful ground truth × checker verdict): **TN 18, FP 17, TP 9, FN 15** over 59 entries. The `fp-function-span` rows are the corpus's first model-generated entries (`source: "model:llama3.2-t0-s42"`, from the study below).
 
-Read the matrix carefully: its cell sizes are corpus-composition choices, so ratios like "FP rate = 19/35" are statements about this corpus, not about the world. The informative results are the class rows:
+Read the matrix carefully: its cell sizes are corpus-composition choices, so ratios like "FP rate = 17/35" are statements about this corpus, not about the world. The informative results are the class rows:
 
 - **Every documented blind spot is total within its class, not occasional.** A fabricated count of ≤ 12, an invented percent that collides with any fraction on the sheet, and a real number attached to the wrong claim pass the check 5/5 each — by construction of the check, and now by demonstration. The stamp provides *no* protection against these three shapes.
 - **Every over-flagging route demonstrably fires**, including two routes surfaced by building this corpus that §8.5's original honest-limits list did not name (see below).
-- **Everything the check claims to catch, it caught**: 9/9 fabrications and sign inversions flagged, 16/16 faithful narratives passed.
+- **Everything the check claims to catch, it caught**: 9/9 fabrications and sign inversions flagged, 18/18 faithful narratives passed.
 
 For readers coming from the detector-benchmark literature, the conventional summary metrics on this corpus (positive class = `⚠ contains uncited claims`): precision 0.346, recall 0.375, F1 0.360, balanced accuracy 0.445. Present them with their caveat welded on: this corpus is *deliberately stratified toward the checker's known failure modes* — more than half of the entries are constructed adversarial cases — so these numbers characterize the checker under attack, not its field performance. On a corpus of typical narratives the same checker would score far higher; that corpus does not exist yet (see the extension plan below).
 
