@@ -54,7 +54,7 @@ Per-class agreement between the checker's verdict and the verdict the class pred
 
 Confusion matrix over the whole corpus (faithful ground truth × checker verdict): **TN 16, FP 19, TP 9, FN 15** over 59 entries. The `fp-function-span` rows are the corpus's first model-generated entries (`source: "model:llama3.2-t0-s42"`, from the study below).
 
-Read the matrix carefully: its cell sizes are corpus-composition choices, so ratios like "FP rate = 16/32" are statements about this corpus, not about the world. The informative results are the class rows:
+Read the matrix carefully: its cell sizes are corpus-composition choices, so ratios like "FP rate = 19/35" are statements about this corpus, not about the world. The informative results are the class rows:
 
 - **Every documented blind spot is total within its class, not occasional.** A fabricated count of ≤ 12, an invented percent that collides with any fraction on the sheet, and a real number attached to the wrong claim pass the check 5/5 each — by construction of the check, and now by demonstration. The stamp provides *no* protection against these three shapes.
 - **Every over-flagging route demonstrably fires**, including two routes surfaced by building this corpus that §8.5's original honest-limits list did not name (see below).

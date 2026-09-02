@@ -89,16 +89,17 @@ The banner doubles as a fail-fast gate: if the path isn't a git repo, the repo h
 Output (CSV, the default, on stdout — pipeable into other tools):
 
 ```
-entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct
-src/auth/session.rs,87,42.00,60.00,9.1837,-12.40,0.0312,low,18.39
-src/db/migrate.rs,54,28.00,71.20,4.6125,24.85,0.4157,moderate,0.00
-src/api/handlers.rs,38,18.00,80.36,2.4310,58.11,0.7982,high,4.17
+entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct,hotspot-score-anchored
+src/auth/session.rs,87,42.00,60.00,9.1837,-12.40,0.0312,low,18.39,8.9215
+src/db/migrate.rs,54,28.00,71.20,4.6125,24.85,0.4157,moderate,0.00,4.4870
+src/api/handlers.rs,38,18.00,80.36,2.4310,58.11,0.7982,high,4.17,2.3986
 ```
 
 - `cognitive-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction). This is the hotspots analysis's own inline proxy, distinct from the `code-health` analysis's composite score.
 - `hotspot-score ∈ [0, 10]` — higher = more pressing refactor candidate. `9.18` means "near the top of the curve on revisions × complexity × poor health" — the canonical "on fire" file.
 - `mi` / `mi-rank` / `mi-band` — Maintainability Index with a repo-relative percentile rank and band (`low` / `moderate` / `high`); banding is percentile-based because the literature's absolute MI thresholds misclassify real-world file sizes.
 - `ai-pct` — share of the file's revisions coming from AI-assistant-attributed commits.
+- `hotspot-score-anchored` — `hotspot-score` with its cognitive terms anchored to the calibration corpus; the cell is empty when no corpus is active or the file's language isn't covered.
 
 The top row is the file to look at first: high churn × high complexity × low code health = highest score.
 
@@ -240,6 +241,7 @@ Run `codelore analyze --analysis NAME` for any of the analyses below. They are g
 | `stale-code` | files alive at HEAD untouched ≥12 months AND low cognitive | The intersection minimises false-positive deletion candidates |
 | `refactoring-targets` | files ranked by refactoring ROI: `priority = (structural_risk × hotspot_score) / max(loc, 25)`; each row annotated with `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
 | `function-xray` | per-function hunk-overlap attribution: counts revisions where at least one diff hunk overlaps the function's line span at `--target <path>`; requires `--target` | Gall et al. ICSM 2003 HistoryFinder — per-function change-frequency leaderboard with LOC, cyclomatic, and cognitive complexity; more precise than file-level churn |
+| `function-hotspots` | HEAD-live functions ranked repo-wide by the same `revs × cognitive`-style score `hotspots` uses; no `--target` needed | Function-granularity hotspot ranking — a large file with one genuinely hot function no longer looks identical to one with uniform low-grade churn |
 | `function-coupling` | per-function-pair co-change frequency with two-tailed Fisher exact significance at `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; low-p pairs are candidates for extract-and-share refactoring |
 | `messages` | per-file count of commits matching `--expression-to-match` regex | Bug/refactor archaeology |
 
@@ -278,11 +280,12 @@ codelore ingest-sarif --repo . scan.sarif   # ingest external scanner findings (
 codelore profile                    # operational telemetry (version, schema, deps, cache root)
 codelore docs                       # markdown analysis catalogue
 codelore calibrate --repos corpus.toml --output org.calib.json   # build an org-specific reference corpus
+codelore calibrate-defects --output defects.calib.json   # mine this repo's own fix-commit history into a defect-calibration artifact (consumed by --defect-calibration)
 codelore completions <shell>        # bash | zsh | fish | powershell | elvish
 codelore schema <row-type>          # JSON Schema 2020-12 emit
 ```
 
-`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. `codelore check --format sarif` emits SARIF 2.1.0 with a commit evidence chain (top-5 contributing commits per violated file) to stdout — pipe it into the `github/codeql-action/upload-sarif` step and findings appear inline on PRs with reviewer-facing commit lineage. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, `--ratchet` + `--history` in hook workflows, and the full GitHub Actions upload snippet.
+`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set (`codelore gate` writes the same step outputs) — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. `codelore check --format sarif` emits SARIF 2.1.0 with a commit evidence chain (top-5 contributing commits per violated file) to stdout — pipe it into the `github/codeql-action/upload-sarif` step and findings appear inline on PRs with reviewer-facing commit lineage. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, `--ratchet` + `--history` in hook workflows, and the full GitHub Actions upload snippet.
 
 `codelore gate` extends the same `.codelore-thresholds.toml` to the **uncommitted working tree**: it re-parses only the changed files and projects each one's code-health delta against HEAD (with a separate floor on each newly added file's own projected score), detects newly-introduced import cycles (by membership, not just count), surfaces duplicated functions introduced only in the working tree, and reports coupling blast radius — with check-parity exit codes (0 pass / 1 violation) so it drops straight into a `pre-commit` hook. Its MCP twin `gate_changes` hands an AI coding agent the same verdict *in the loop*, before the change is committed, and the companion `change_context` tool briefs the agent on a file's ownership, co-change partners, and calibrated risk *before* it edits — the behavioral, temporal signal a static pre-commit gate cannot see. See [§11.9 of the advanced-usage guide](docs/advanced-usage.md#gate_changes) for the `check` / `gate` / `diff` comparison table and the full working-tree gate reference.
 
@@ -571,7 +574,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
 
 Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. Each analysis is a SQL query over that store plus a thin Rust orchestrator (the historical `architecture-trend` additionally re-reads source at sampled past revisions). Outputs flow through eleven format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
 
-For deeper architecture, see the [design specification](docs/superpowers/specs/2026-06-06-codelore-design.md) (~1100 lines, covers every threshold and identity rule).
+For deeper architecture, see the [design specification](docs/superpowers/specs/2026-06-06-codelore-design.md) (covers every threshold and identity rule).
 
 ---
 
@@ -586,17 +589,17 @@ For deeper architecture, see the [design specification](docs/superpowers/specs/2
 | **Rayon** + crossbeam-channel | Workload is CPU-bound batch; an async runtime would add binary bloat for no measurable gain |
 | **`fishers_exact`** for change-coupling | Approximate chi-square fails at small N; exact test is methodologically defensible and the crate has zero transitive dependencies |
 
-What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-based scoring, no web UI, **no non-git VCS support** (git-only by design — see [`docs/github-topics.md`](docs/github-topics.md) and the project memory for the rationale). See the [advanced guide](docs/advanced-usage.md#7-tool-stack-why-these-choices) for the long version.
+What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-based scoring, no web UI, **no non-git VCS support** (git-only by design — see [`docs/github-topics.md`](docs/github-topics.md) and the project memory for the rationale). See the [advanced guide](docs/advanced-usage.md#9-tool-stack-why-these-choices) for the long version.
 
 ---
 
 ## Status
 
-Released and under active development (pre-1.0; SemVer policy in [`docs/RELEASING.md`](docs/RELEASING.md)). **A full behavioral-analysis catalogue × 11 output formats × `codelore diff` PR-mode × `codelore check` + `codelore gate` quality gates × an 11-tool local MCP server × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, CLI-crate integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA Build L3 provenance attached (signed by a dedicated trusted-signer workflow that holds the token no build job can reach), a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
+Released and under active development (pre-1.0; SemVer policy in [`docs/RELEASING.md`](docs/RELEASING.md)). **A full behavioral-analysis catalogue × 11 output formats × `codelore diff` PR-mode × `codelore check` + `codelore gate` quality gates × an 11-tool local MCP server × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, CLI-crate integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on the pinned Rust toolchain on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA Build L3 provenance attached (signed by a dedicated trusted-signer workflow that holds the token no build job can reach), a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 Known limitations (the honest list, validated against the current codebase):
 
-- **Code-maat sliding-window `--temporal-period N`** is intentionally **not** emulated under `--code-maat-compat` — the modern `--time-bucket DAY|WEEK|MONTH` (non-overlapping buckets, no commit-duplication artifact) is the recommended surface and what ships; the legacy sliding-window-with-duplication is an opt-in future-work item if migration users hit it
+- **Code-maat sliding-window `--temporal-period N`** is intentionally **not** emulated under `--code-maat-compat` — the modern `--time-bucket day|week|month` (non-overlapping buckets, no commit-duplication artifact) is the recommended surface and what ships; the legacy sliding-window-with-duplication is an opt-in future-work item if migration users hit it
 
 Full backlog: [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md).
 
@@ -614,7 +617,7 @@ just test-browser   # headless-Chrome SPA smoke test — needs Chrome/Chromium o
 just lint           # cargo clippy --workspace --all-targets --all-features -- -D warnings
 just fmt-check      # cargo fmt --all --check
 just deny           # cargo deny check   (licenses + advisories)
-just ci             # fmt-check + lint + deny + test — the full local gate CI runs
+just ci             # fmt-check + lint + zizmor + deny + test — the full local gate CI runs
 ```
 
 Run the CLI against any repository:
@@ -645,7 +648,7 @@ cargo run --release -p codelore --features spa -- \
 | The full 27-feature implementation plan + validation | [`docs/maximum-feature-plan.md`](docs/maximum-feature-plan.md) |
 | CodeScene visual parity strategy + design decisions | [`docs/codescene-parity-plan.md`](docs/codescene-parity-plan.md) |
 | The architecture overview (workspace shape, pipeline data flow, threading model) | [`docs/codebase_analysis.md`](docs/codebase_analysis.md) |
-| The full design specification (~1100 lines) | [`docs/superpowers/specs/2026-06-06-codelore-design.md`](docs/superpowers/specs/2026-06-06-codelore-design.md) |
+| The full design specification | [`docs/superpowers/specs/2026-06-06-codelore-design.md`](docs/superpowers/specs/2026-06-06-codelore-design.md) |
 | The prioritized roadmap (near-term and long-term backlog) | [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md) |
 | Release-blocker performance numbers | [`docs/perf-evidence-v1.md`](docs/perf-evidence-v1.md) |
 | The release procedure + SemVer policy | [`docs/RELEASING.md`](docs/RELEASING.md) |
@@ -680,7 +683,7 @@ CodeLore's default surface reflects modern stack capabilities; code-maat compati
 | `code-age` columns | `[entity, age-months]` | `[entity, age_months, age_days, last_modified]` — second-precision back-test, recency triage | ✓ — CSV writer emits `entity,age-months` under compat. |
 | Column casing | `n-authors`, `age-months`, `loc-added` (hyphens) | `n_authors`, `age_months`, `added` (snake_case — Rust idiom, also matches JSON/SARIF/parquet) | ✓ — compat-mode CSV writers (`summary`, `code-age`, `communication`, `ownership`, `authors`) emit code-maat's hyphenated names. |
 | Tie-break | Arbitrary | Secondary sort on canonical author name; cross-run reproducibility | (n/a — modernisation, no code-maat equivalent worth restoring.) |
-| Short flags | 13 single-letter flags (`-n -m -i -x -s -t -d -l -c -r`) | Long flags only (4 surviving shorts: `-a -o -g -p -e`) | (n/a — modern CLI convention; migration map below.) |
+| Short flags | 13 single-letter flags (`-n -m -i -x -s -t -d -l -c -r`) | Long flags only (surviving shorts: `-a -r -f -o -g -p -e`) | (n/a — modern CLI convention; migration map below.) |
 
 ### Short-flag migration map
 
@@ -697,7 +700,7 @@ Modern CLI design favours long flags; CodeLore does not restore code-maat's 2013
 | `-x N` | `--max-coupling N` |
 | `-s N` | `--max-changeset-size N` |
 | `-d <date>` | `--age-time-now <date>` |
-| `-t N` | `--time-bucket DAY|WEEK|MONTH` (cleaner non-overlapping buckets; code-maat's sliding window is not propagated — see the deep-analysis report in `docs/reports/`) |
+| `-t N` | `--time-bucket day|week|month` (cleaner non-overlapping buckets; code-maat's sliding window is not propagated — see the deep-analysis report in `docs/reports/`) |
 
 ---
 

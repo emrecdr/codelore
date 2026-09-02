@@ -24,7 +24,7 @@ While the project is pre-1.0:
   - `0.1.0-alpha.N` — internal milestones, unstable surface, expect daily breakage.
   - `0.1.0-beta.N` — feature-complete for the release scope, public preview, schema + CLI surface stabilizing.
   - `0.1.0-rc.N` — release candidate, no planned changes besides bug fixes. CI green, docs current.
-  - `0.1.0` — first stable. After this, SemVer rules apply. **Today: this is what ships.**
+  - `0.1.0` — first stable. After this, SemVer rules apply.
 
 ### Post-1.0
 
@@ -54,7 +54,7 @@ After `1.0.0`:
 
 ### `0.1.0` ⇒ how we got here, and the path from here
 
-The workspace ships `0.1.0` as the first stable tag. Getting here meant collapsing the planned `alpha → beta → rc → stable` ladder: the alpha phase ran with a small set of real users (primarily one), the three-sprint bugfix + modernization + code-maat-parity work landed under heavy use, and the externally-visible surface stabilized through that real-world exercise rather than through a separate beta/rc gate. We promoted directly from `0.1.0-alpha.1` to `0.1.0` once: PAR-1 through PAR-10 (every code-maat-parity analysis) had shipped; CI was green on Linux, macOS, and Windows; all 21 analyses had test coverage; the `<owner>` placeholders had been resolved to a real repo URL; and the SemVer policy in this document was in place.
+The first stable tag was `0.1.0`; SemVer rules have applied since. Getting there meant collapsing the planned `alpha → beta → rc → stable` ladder: the alpha phase ran with a small set of real users (primarily one), the three-sprint bugfix + modernization + code-maat-parity work landed under heavy use, and the externally-visible surface stabilized through that real-world exercise rather than through a separate beta/rc gate. We promoted directly from `0.1.0-alpha.1` to `0.1.0` once: PAR-1 through PAR-10 (every code-maat-parity analysis) had shipped; CI was green on Linux, macOS, and Windows; all 21 analyses had test coverage; the `<owner>` placeholders had been resolved to a real repo URL; and the SemVer policy in this document was in place.
 
 From `0.1.0` the path forward is:
 
@@ -110,7 +110,7 @@ Before bumping the version, every item must be true:
 
 ### Cut a release
 
-**Recommended: use the `scripts/cut-release.sh` helper.** It codifies the full procedure (pre-flight checks, version bump, CHANGELOG flip, lockfile sync, sanity build, CI gate, the `disable-ruleset → tag → restore` dance with `trap EXIT` cleanup) into one idempotent script:
+**Recommended: use the `scripts/cut-release.sh` helper.** It codifies the full procedure (pre-flight checks, version bump — the workspace version plus the internal `codelore-*` path-dep constraints in `crates/*/Cargo.toml`, CHANGELOG flip, findings-ledger re-stamp, lockfile sync, sanity build, CI gate, and **two** ruleset dances with `trap EXIT` cleanup) into one idempotent script. The `protect-main` ruleset requires status checks that a direct push cannot carry, so the script disables it for just the release-commit push and re-enables it immediately after; the `protect-release-tags` ruleset gets the same `disable → tag → restore` treatment around the tag push.
 
 ```bash
 ./scripts/cut-release.sh X.Y.Z              # full cut
@@ -118,7 +118,7 @@ Before bumping the version, every item must be true:
 ./scripts/cut-release.sh X.Y.Z --skip-ci-wait   # re-attempt after CI already green
 ```
 
-The script refuses to proceed unless all of: working tree clean, on `main`, in sync with `origin/main`, target tag doesn't exist yet, `X.Y.Z` parses as digit-only semver, `CHANGELOG.md [Unreleased]` has content, `gh` CLI authenticated. The `trap EXIT` registered ruleset-restore runs on ANY exit path (success, error, ^C) so the `protect-release-tags` ruleset is never left disabled.
+The script refuses to proceed unless all of: working tree clean, on `main`, in sync with `origin/main`, target tag doesn't exist yet, `X.Y.Z` parses as digit-only semver, `CHANGELOG.md [Unreleased]` has content, `gh` CLI authenticated. Before touching anything it also checks both live rulesets for drift against the hardcoded restore bodies it will re-PUT (drift in `protect-main` aborts the cut; drift in `protect-release-tags` warns), so a trap-driven restore can never silently rewrite a ruleset back to a stale required-checks list. The run is idempotent: if a previous attempt already landed the `chore(release): vX.Y.Z` commit, the script detects it, skips the prep phase, and resumes from the CI wait (tagging HEAD if commits have landed on top of the release commit since). The prep phase re-stamps `Fixed (Unreleased)` rows in `docs/reports/deep_analysis_report.md` to `Fixed (vX.Y.Z)` in the same commit, since flipping the CHANGELOG would otherwise invalidate them. After the release tag is pushed, the script force-moves the floating `v1` Action-interface tag — what `uses: emrecdr/codelore@v1` resolves to — onto the release commit, inside the same ruleset window (the `refs/tags/v*` rule matches `v1` too). The `trap EXIT` registered ruleset-restore runs on ANY exit path (success, error, ^C) so neither ruleset is ever left disabled.
 
 ### Manual procedure (if the script isn't available — emergency fallback only)
 
@@ -127,27 +127,103 @@ The script refuses to proceed unless all of: working tree clean, on `main`, in s
 #    Edit Cargo.toml: [workspace.package].version = "X.Y.Z"
 $EDITOR Cargo.toml
 
-# 2. Refresh the lockfile (each-crate versions inherit automatically)
+# 2. Bump the internal path-dep constraints in lock-step: every
+#    `codelore-* = { path = "...", version = "X.Y.Z" }` line in
+#    crates/*/Cargo.toml must move to the new version too, or the
+#    `cargo update` below fails to select a matching version.
+$EDITOR crates/*/Cargo.toml
+
+# 3. Flip CHANGELOG.md `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD`
+#    (prepend a fresh empty `## [Unreleased]` above it), and re-stamp
+#    `Fixed (Unreleased)` / `Fixed — Unreleased` rows in
+#    docs/reports/deep_analysis_report.md to `Fixed (vX.Y.Z)` /
+#    `Fixed — vX.Y.Z` — draining [Unreleased] invalidates them otherwise.
+$EDITOR CHANGELOG.md docs/reports/deep_analysis_report.md
+
+# 4. Refresh the lockfile (each-crate versions inherit automatically)
 cargo update --workspace
 
-# 3. Run the full gate one more time
+# 5. Run the full gate one more time
 cargo test --workspace --features test-support,spa
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 
-# 4. Commit the version bump
-git add Cargo.toml Cargo.lock CHANGELOG.md
-git commit -m "release: vX.Y.Z"
+# 6. Commit the release files — the same five paths the script stages.
+#    The message MUST be `chore(release): vX.Y.Z`: the script's resume
+#    mode greps for that exact form, so a differently-worded commit
+#    breaks resuming with the script later.
+git add Cargo.toml Cargo.lock CHANGELOG.md crates/*/Cargo.toml \
+  docs/reports/deep_analysis_report.md
+git commit -m "chore(release): vX.Y.Z"
 
-# 5. Push commit + wait for CI green on it (required by the ruleset)
+# 7. Push the release commit. protect-main requires status checks that a
+#    direct push cannot carry, so GitHub rejects a bare `git push origin
+#    main` — disable the ruleset for just this push, then restore it
+#    IMMEDIATELY. The script does this under a trap EXIT safety net; by
+#    hand there is none, so do NOT walk away between push and restore.
+gh api -X PUT repos/emrecdr/codelore/rulesets/17437460 --input - <<'JSON'
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "disabled",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "required_linear_history" },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "cargo-deny" },
+          { "context": "clippy" },
+          { "context": "dogfood" },
+          { "context": "rustfmt" },
+          { "context": "self-gate" },
+          { "context": "spa-browser" },
+          { "context": "test (macos-latest)" },
+          { "context": "test (ubuntu-latest)" },
+          { "context": "test (windows-latest)" }
+        ]
+      }
+    }
+  ]
+}
+JSON
 git push origin main
-gh run watch $(gh run list --limit 1 --branch main --workflow CI --json databaseId --jq '.[0].databaseId') --exit-status
+# Restore NOW: re-run the exact same PUT with "enforcement": "active".
+# Until then, main is UNPROTECTED.
 
-# 6. Tag the release (annotated; release-pipeline triggers on any `v*` tag)
+# 8. Wait for CI green on the release commit. Do NOT use
+#    `gh run watch ... --exit-status` — it exits 0 for cancelled runs
+#    too. Poll until the run completes, then require the conclusion to
+#    be exactly "success" (mirroring the script's CI gate):
+RELEASE_SHA=$(git rev-parse HEAD)
+RUN_ID=$(gh run list --limit 5 --branch main --workflow CI --json databaseId,headSha \
+          --jq ".[] | select(.headSha == \"${RELEASE_SHA}\") | .databaseId" | head -1)
+while [ "$(gh run view "$RUN_ID" --json status --jq .status)" != "completed" ]; do sleep 30; done
+[ "$(gh run view "$RUN_ID" --json conclusion --jq .conclusion)" = "success" ] \
+  || echo "CI conclusion is NOT success — do not tag; investigate the run"
+
+# 9. Tag the release (annotated; release-pipeline triggers on any `v*` tag)
 git tag -a vX.Y.Z -m "vX.Y.Z"
 
-# 7. Push tag — see "Tag push ruleset dance" below for why this can fail
+# 10. Push tag — see "Tag push ruleset dance" below for why this can fail
 git push origin vX.Y.Z
+
+# 11. Move the floating `v1` Action-interface tag (what
+#     `uses: emrecdr/codelore@v1` resolves to) onto the release, or
+#     Action consumers silently keep resolving to the previous release.
+#     protect-release-tags matches refs/tags/v* — which includes v1 —
+#     and forbids non_fast_forward (and deletion, so delete-and-recreate
+#     is no escape hatch): the force-push is rejected while enforcement
+#     is active. Run this inside the same disabled window as the tag
+#     push ("Tag push ruleset dance" below), or repeat the
+#     disable → push → restore dance around it.
+git tag -f -a v1 vX.Y.Z -m "v1 — GitHub Action interface, currently vX.Y.Z"
+git push --force origin v1
 ```
 
 ### Tag push ruleset dance
@@ -179,7 +255,7 @@ Once accepted, three workflows fire in parallel on `vX.Y.Z`:
    - `plan` — resolves the tag string
    - `build` — matrix of 5 targets (aarch64-darwin, x86_64-darwin, x86_64-linux-gnu, aarch64-linux-gnu, x86_64-windows-msvc), each running `cargo build --release --locked --target $TARGET` and packaging the artifact into a versioned tarball/zip. This job holds **no** signing permissions: it runs `build.rs`, so under SLSA Build L3 the sigstore token must be unreachable from it
    - `attest` — matrix over the same 5 targets, calling the reusable trusted signer at `.github/workflows/attest-artifact.yml`. Each instance downloads one artifact, hashes it, and signs via `actions/attest`. This is the only job permitted to hold `id-token`/`attestations`, and `release` depends on it so a failed attestation blocks publication
-   - `release` — downloads all 5 build artifacts and publishes the GitHub Release via `softprops/action-gh-release@v3`, with `generate_release_notes: true` pulling the CHANGELOG section automatically
+   - `release` — downloads all 5 build artifacts and publishes the GitHub Release via `softprops/action-gh-release` (SHA-pinned — see `release.yml`), with `generate_release_notes: true` pulling the CHANGELOG section automatically
    - `homebrew-publish` — downloads the same build artifacts (bit-identical to what end-users `brew install`), computes SHA256 of each, renders `Formula/codelore.rb`, checks out `emrecdr/homebrew-codelore` via the `HOMEBREW_TAP_DEPLOY_KEY` SSH deploy key, and pushes the regenerated formula if it changed
    - `crates-publish` — publishes `codelore-rca` → `codelore-lib` → `codelore` to crates.io in that dependency order; skipped (the publish step, not the job) unless the `CRATES_IO_TOKEN` repository secret is configured, so forks and unconfigured checkouts still get a green release
 
@@ -191,7 +267,7 @@ Once accepted, three workflows fire in parallel on `vX.Y.Z`:
 
 ### Pre-release vs stable
 
-Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0.2.0-rc.1`). `softprops/action-gh-release@v3` does NOT automatically mark these as pre-release — if you want the GitHub Release flagged as "Pre-release", either add `prerelease: true` to the `release` step temporarily for that tag, or edit the Release on the GitHub UI after publish. The Homebrew tap formula is unconditionally overwritten on every tag push, so a pre-release tag will move the tap to the pre-release version — if you want the tap to stay on the last stable, either skip the homebrew-publish job for pre-release tags (add an `if: !contains(needs.plan.outputs.tag, '-')` guard) or roll back the formula manually.
+Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0.2.0-rc.1`). `softprops/action-gh-release` (SHA-pinned — see `release.yml`) does NOT automatically mark these as pre-release — if you want the GitHub Release flagged as "Pre-release", either add `prerelease: true` to the `release` step temporarily for that tag, or edit the Release on the GitHub UI after publish. The Homebrew tap formula is unconditionally overwritten on every tag push, so a pre-release tag will move the tap to the pre-release version — if you want the tap to stay on the last stable, either skip the homebrew-publish job for pre-release tags (add an `if: !contains(needs.plan.outputs.tag, '-')` guard) or roll back the formula manually.
 
 ### Publishing to crates.io
 

