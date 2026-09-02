@@ -3008,4 +3008,23 @@ stamp was never forgeable — numeric ground truth is collected from typed
 values before rendering — and that property is now pinned by a contract
 test rather than being an unstated implementation accident.
 
-The next sweep re-opens at **F350**.
+### F350 (Fixed — Unreleased) — a drifted direct arrow dependency made every provenance stamp name the wrong generation
+
+A direct `arrow` dependency sat a major ahead of the one `duckdb` pins,
+putting two arrow generations in the build graph (~330 lockfile lines of
+duplicate family), while `ARROW_RUNTIME_VERSION` — stamped into every
+provenance sidecar and the fact store's provenance table — described the
+duckdb-pinned generation the facade's re-exports no longer resolved to.
+The drift guard's first-match lockfile lookup landed on the pinned copy
+and passed. The ledger records the original arrow bump PR being closed
+precisely to avoid this desync; it landed later anyway. Nothing ever
+used the direct dependency (zero `append_record_batch` call sites,
+parquet rides DuckDB `COPY`, the facade's twenty type re-exports had no
+consumers), so it is removed along with the arrow-typed appender
+feature: one generation remains, the stamp is true, and the lockfile
+diff is pure removals. `locked_version` now panics on duplicate entries
+naming the versions, with a `should_panic` matcher self-test — probed on
+a synthetic string, because cargo regenerates the real lockfile before
+tests read it and silently scrubs an appended fake entry.
+
+The next sweep re-opens at **F351**.
