@@ -98,6 +98,13 @@ pub struct FactsDb {
     /// a single run). Mirrors `changes_lineage_built`; a plain `bool`, so it
     /// names no `analyses` type and stays here with the other SQL-level guards.
     knowledge_shares_built: std::cell::Cell<bool>,
+    /// Build-once guard for `changes_bucketed`, keyed on the parameters that
+    /// change its content: the bucket's SQL unit and whether it was built on
+    /// top of the lineage view. `None` = not built; a differing key forces a
+    /// rebuild (unlike the boolean guards, the same run can legitimately want
+    /// two different bucketings). `Cell<Option<(&'static str, bool)>>` —
+    /// both components are `Copy` literals from closed enums.
+    changes_bucketed_built: std::cell::Cell<Option<(&'static str, bool)>>,
 }
 
 impl FactsDb {
@@ -110,6 +117,7 @@ impl FactsDb {
             analysis_memos: std::cell::RefCell::new(std::collections::HashMap::new()),
             changes_lineage_built: std::cell::Cell::new(false),
             knowledge_shares_built: std::cell::Cell::new(false),
+            changes_bucketed_built: std::cell::Cell::new(None),
         }
     }
 
@@ -147,6 +155,21 @@ impl FactsDb {
     /// view against the new path set.
     pub(crate) fn invalidate_changes_lineage(&self) {
         self.changes_lineage_built.set(false);
+        // `changes_bucketed` builds on top of `changes` (directly or via the
+        // lineage view), so the same mutation invalidates it too.
+        self.changes_bucketed_built.set(None);
+    }
+
+    /// Whether `changes_bucketed` is already materialised for this run WITH
+    /// this exact `(bucket unit, lineage)` key. A differing key reads as
+    /// not-built so the caller rebuilds.
+    pub(crate) fn is_changes_bucketed_built_for(&self, unit: &'static str, lineage: bool) -> bool {
+        self.changes_bucketed_built.get() == Some((unit, lineage))
+    }
+
+    /// Record that `changes_bucketed` has been materialised under this key.
+    pub(crate) fn mark_changes_bucketed_built(&self, unit: &'static str, lineage: bool) {
+        self.changes_bucketed_built.set(Some((unit, lineage)));
     }
 
     /// Returns `true` if `knowledge_shares` and `doe_scores` temp tables

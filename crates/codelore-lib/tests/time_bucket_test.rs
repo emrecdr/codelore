@@ -253,3 +253,88 @@ fn time_bucket_with_max_changeset_drops_bucket_containing_giant_commit() {
          dropped under max_changeset_size=5. Got: {rows:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bucketed-table hygiene: chronological change_type collapse + build-once
+// guard keyed on (bucket unit, lineage).
+// ---------------------------------------------------------------------------
+
+fn seed_bucket_fixture(db: &FactsDb) {
+    let commit = |rev: &str, day: u32| {
+        format!(
+            "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+             canonical_author, date, committer_date, message, is_merge, parent_count) \
+             VALUES ('{rev}', 'a@x', 'A', 'a@x', 'a@x', \
+             '2026-03-{day:02} 12:00:00', '2026-03-{day:02} 12:00:00', 'm', false, 1)"
+        )
+    };
+    // Newest first (smaller rowid = newer): c2 deletes, c1 modifies — both
+    // inside one calendar week.
+    for stmt in [
+        commit("c2", 3),
+        commit("c1", 2),
+        "INSERT INTO changes VALUES ('c1', 'f.rs', 'modified', NULL, 4, 1)".to_string(),
+        "INSERT INTO changes VALUES ('c2', 'f.rs', 'deleted', NULL, 0, 5)".to_string(),
+    ] {
+        db.execute_batch(&stmt).expect("seed");
+    }
+}
+
+/// A file modified then deleted inside one bucket must read 'deleted' —
+/// the chronologically LAST event — not the lexicographic maximum
+/// ('modified' > 'deleted' in string order), which kept the file "live"
+/// under every `change_type != 'deleted'` rule downstream.
+#[test]
+fn bucketed_change_type_is_the_chronologically_last_event() {
+    let db = FactsDb::new_in_memory().expect("db");
+    seed_bucket_fixture(&db);
+    codelore_lib::facts::ingest::materialize_changes_bucketed(&db, TimeBucket::Week, false)
+        .expect("materialize");
+    let ct: String = db
+        .query_row(
+            "SELECT change_type FROM changes_bucketed WHERE path = 'f.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query");
+    assert_eq!(
+        ct, "deleted",
+        "modify-then-delete inside one bucket must collapse to the LAST event"
+    );
+}
+
+/// Same (unit, lineage) key: the second materialize call must be a no-op
+/// (a sentinel row survives). A different unit must rebuild (sentinel gone).
+#[test]
+fn bucketed_table_is_built_once_per_key_and_rebuilt_on_a_different_key() {
+    let db = FactsDb::new_in_memory().expect("db");
+    seed_bucket_fixture(&db);
+    let count_sentinels = || -> i64 {
+        db.query_row(
+            "SELECT COUNT(*) FROM changes_bucketed WHERE path = 'sentinel'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count")
+    };
+    codelore_lib::facts::ingest::materialize_changes_bucketed(&db, TimeBucket::Week, false)
+        .expect("first build");
+    db.execute_batch(
+        "INSERT INTO changes_bucketed VALUES ('2026-01-01', 'sentinel', 'added', NULL, 1, 0)",
+    )
+    .expect("sentinel");
+    codelore_lib::facts::ingest::materialize_changes_bucketed(&db, TimeBucket::Week, false)
+        .expect("same-key call");
+    assert_eq!(
+        count_sentinels(),
+        1,
+        "a same-key call must not rebuild the table"
+    );
+    codelore_lib::facts::ingest::materialize_changes_bucketed(&db, TimeBucket::Month, false)
+        .expect("different-key call");
+    assert_eq!(
+        count_sentinels(),
+        0,
+        "a different bucket unit must force a rebuild"
+    );
+}
