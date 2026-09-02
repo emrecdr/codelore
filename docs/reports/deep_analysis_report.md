@@ -3408,4 +3408,38 @@ prose that mentions the layer cannot trip it, and a self-test proves
 the matcher flags every import form while staying quiet on every prose
 form present in the tree.
 
-The next sweep re-opens at **F367**.
+### F367 (Fixed — Unreleased) — `gate` and `check` exited 0 for a repository that does not exist
+
+The two commands a CI pipeline branches on reported PASS for a missing
+repository. `Thresholds::discover` (`quality_gates/config.rs`) resolves
+`<repo_root>/.codelore-thresholds.toml` and returns the DEFAULT empty
+set when that file does not exist — a condition a nonexistent repo root
+satisfies trivially, without the function ever touching the filesystem
+again. `gate.rs` then hit its `thresholds.is_empty()` branch, printed
+the vacuous-pass notice, wrote `result=pass` to the step output and
+returned `Ok(())`; `GixRepo::open` sits further down and was never
+reached. `check.rs` had the same ordering.
+
+`check` carried the sharper symptom: its vacuous branch opened the
+repository only inside the `--format sarif` arm, so the SAME bad path
+exited 3 as SARIF and 0 as text. The verdict depended on the requested
+output format.
+
+Measured before it was diagnosed: `gate --repo /nope` → 0,
+`check --repo /nope --format text` → 0, `--format sarif` → 3, while
+`analyze` and `diff` correctly returned 3. Both commands now open the
+repository before reading thresholds. The vacuous pass is deliberate and
+unchanged for its real case — a repository with nothing configured — it
+simply can no longer be reached by a path that is not a repository.
+
+Probe: removing either guard fails the new matrix test with
+`got Some(0)` and the vacuous-pass message. The test pins all five
+gating surfaces and BOTH `check` formats; a single-format test would
+have passed while the defect was live.
+
+Found by measuring exit codes per surface rather than reading them —
+and the first measurement was wrong (a shell redirect ordering bug
+reported 2 everywhere), caught only because the error text said
+"repository error" while the number said 2 and both could not be true.
+
+The next sweep re-opens at **F368**.
