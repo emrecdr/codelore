@@ -183,21 +183,41 @@ pub(crate) fn evenly_spaced_indices(len: usize, k: usize) -> Vec<usize> {
 }
 
 /// Files live at the rev whose timestamp is `ts`: the latest change
-/// at-or-before that instant that isn't a deletion. Date-anchored
-/// liveness (mirrors `code-age`), so it approximates tree membership on
-/// mostly-linear histories without needing a tree walk at the rev.
+/// at-or-before that instant that isn't a deletion, excluding paths a
+/// rename retired at-or-before `ts`. Date-anchored liveness (mirrors
+/// `code-age`), so it approximates tree membership on mostly-linear
+/// histories without needing a tree walk at the rev.
+///
+/// The rename exclusion is era-bounded, NOT lineage-folding: the returned
+/// names feed `Repo::blob_reader_at(rev)`, so they must be the names that
+/// exist in that era's tree — folding to today's canonical names would
+/// make every pre-rename blob read miss. A rename writes no deletion row
+/// for its source, so without the exclusion a renamed-away path read as
+/// live forever and the historical import graph carried the same file
+/// under two names. A recycled name stays live: its own newer rows
+/// postdate the rename that retired the earlier file.
 pub(crate) fn live_paths_at(db: &FactsDb, ts: &str) -> Result<Vec<String>> {
     crate::analyses::query::query_map_collect(
         db,
         "SELECT path FROM ( \
             SELECT c.path, \
-                   arg_max(c.change_type, ROW(commits.date, -commits.rowid)) AS change_type \
+                   arg_max(c.change_type, ROW(commits.date, -commits.rowid)) AS change_type, \
+                   MAX(ROW(commits.date, -commits.rowid)) AS last_seen \
             FROM changes c \
             INNER JOIN commits ON commits.rev = c.rev \
             WHERE commits.date <= CAST(? AS TIMESTAMP) \
             GROUP BY c.path \
-         ) WHERE change_type != 'deleted'",
-        duckdb::params![ts],
+         ) l \
+         WHERE l.change_type != 'deleted' \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM changes r \
+             INNER JOIN commits rc ON rc.rev = r.rev \
+             WHERE r.rename_from = l.path \
+               AND r.change_type = 'renamed' \
+               AND rc.date <= CAST(? AS TIMESTAMP) \
+               AND ROW(rc.date, -rc.rowid) > l.last_seen \
+           )",
+        duckdb::params![ts, ts],
         "architecture-trend live-paths",
         |r| r.get::<_, String>(0),
     )
@@ -260,4 +280,61 @@ fn resolve_imports_at_rev<R: Repo>(
         .flatten_iter()
         .collect();
     edges
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use super::live_paths_at;
+    use crate::facts::FactsDb;
+
+    fn seed_commit(db: &FactsDb, rev: &str, day: u32) {
+        db.execute_batch(&format!(
+            "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+             canonical_author, date, committer_date, message, is_merge, parent_count) \
+             VALUES ('{rev}', 'a@x', 'A', 'a@x', 'a@x', \
+             '2026-03-{day:02} 12:00:00', '2026-03-{day:02} 12:00:00', 'm', false, 1)"
+        ))
+        .expect("seed commit");
+    }
+
+    /// A renamed-away source must drop out of the live set once the rename
+    /// happened, stay live BEFORE it (era-correct), and come back when the
+    /// name is recycled by a new file — all under raw era names, because the
+    /// caller reads these paths' blobs at the historical rev.
+    #[test]
+    fn renamed_away_paths_are_dead_after_the_rename_and_live_before_it() {
+        let db = FactsDb::new_in_memory().expect("db");
+        // Newest first: c3 recycles a.rs; c2 renames a.rs -> b.rs; c1 adds a.rs.
+        seed_commit(&db, "c3", 5);
+        seed_commit(&db, "c2", 3);
+        seed_commit(&db, "c1", 1);
+        for stmt in [
+            "INSERT INTO changes VALUES ('c1', 'a.rs', 'added', NULL, 5, 0)",
+            "INSERT INTO changes VALUES ('c2', 'b.rs', 'renamed', 'a.rs', 0, 0)",
+            "INSERT INTO changes VALUES ('c3', 'a.rs', 'added', NULL, 7, 0)",
+        ] {
+            db.execute_batch(stmt).expect("seed");
+        }
+
+        let at = |ts: &str| {
+            let mut v = live_paths_at(&db, ts).expect("live_paths_at");
+            v.sort();
+            v
+        };
+        assert_eq!(
+            at("2026-03-02 00:00:00"),
+            vec!["a.rs"],
+            "before the rename the source is live under its era name"
+        );
+        assert_eq!(
+            at("2026-03-04 00:00:00"),
+            vec!["b.rs"],
+            "after the rename only the new name is live — the retired source must not linger"
+        );
+        assert_eq!(
+            at("2026-03-06 00:00:00"),
+            vec!["a.rs", "b.rs"],
+            "a recycled name is a NEW live file alongside the rename target"
+        );
+    }
 }

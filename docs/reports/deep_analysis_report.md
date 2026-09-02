@@ -2903,4 +2903,34 @@ test drives both analyses and fails with the gate stashed. A grouped
 `imports` rollup (group→group edges) remains a defensible future
 alternative; a grouped `clones` rollup is not meaningful.
 
-The next sweep re-opens at **F344**.
+### F344 (Fixed — Unreleased) — historical liveness carried renamed-away paths as phantom nodes
+
+`live_paths_at`'s date-anchored rule treated a renamed-away source as
+live forever (a rename writes no deletion row for its source), so every
+post-rename sample point carried the same file under both names —
+inflating node counts and diluting propagation cost across
+`architecture-trend`, `health-trend`, and `cycle-origins`' bisection.
+Fixed with an era-bounded rename exclusion, deliberately NOT the
+lineage-fold the second-wave report suggested: the returned names feed
+`Repo::blob_reader_at(rev)` and must be the names that exist in that
+era's tree — folding to canonical names would make every pre-rename blob
+read miss and be silently skipped. A recycled name returns to life on
+its own newer rows; the unit test walks one name through all three
+epochs.
+
+### F345 (Active) — health-trend's per-file series breaks across renames, and the cheap fix is wrong
+
+`health_trend::top_hotspot_paths` ranks over raw `changes` (revisions
+split across a renamed file's two names, so a genuinely hot file can
+fall below the top-N cap), and the per-sample series keys era paths
+against that HEAD-name set — a file renamed mid-history appears as two
+disjoint series or drops out entirely. The obvious fix (route the
+ranking through `lineage::rewrite`) is wrong for the same reason F344's
+was: pre-rename samples carry era names that would no longer match the
+canonical-name set. A correct fix needs the ranking canonical AND an
+era-to-canonical mapping applied at membership/series-key time (the
+epoch-bounded `path_lineage` now carries enough information to build
+one). Designed fix, not a two-line patch — recorded rather than
+half-fixed.
+
+The next sweep re-opens at **F346**.
