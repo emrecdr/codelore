@@ -2060,6 +2060,14 @@ fn run_step_summary_dispatch(
     // step-summary streams to stdout by default so CI workflows can
     // `codelore ... --format step-summary >> $GITHUB_STEP_SUMMARY`
     // directly. `--output PATH` opt-in for local use / testing.
+    //
+    // `-` spells stdout here for the same reason it does in
+    // `emit_to_output_or_stdout`: this format streams, so the dash is a
+    // destination it can honour rather than one it must reject (unlike
+    // parquet/sqlite/spa, which write through file-path machinery and are
+    // refused at the CLI boundary). Without the filter the dash took the
+    // publish branch below and created a file literally named `-`.
+    let output = output.filter(|p| p.as_os_str() != "-");
     if let Some(path) = output {
         // Atomic publish so an interrupted write never truncates a previous
         // good summary file (the stdout path streams directly, below).
