@@ -135,10 +135,11 @@ fn report_gate_clean_tree(args: &args::GateArgs) {
             "{}",
             serde_json::json!({ "changes": [], "findings": [], "violations": [] })
         );
-        eprintln!("{verdict}");
-    } else {
-        println!("{verdict}");
     }
+    // Stderr in every mode: the verdict is run metadata, and the FAIL path
+    // already lives there — `codelore gate > log` must capture pass and
+    // fail symmetrically.
+    eprintln!("{verdict}");
     write_github_output("result", "pass");
     write_github_output("violations", "0");
 }
@@ -239,21 +240,16 @@ fn render_gate_verdict(
     violations: &[codelore_lib::cli_api::quality_gates::GateViolation],
 ) -> Result<()> {
     if violations.is_empty() {
+        // Stderr in every mode — mirroring the clean-tree and FAIL paths,
+        // and honoring the contract that a verdict line is run metadata:
+        // `codelore gate > log` captures pass and fail symmetrically while
+        // stdout stays the report document.
+        eprintln!(
+            "✅ codelore gate: PASS ({} changed file(s) evaluated)",
+            report.changes.len()
+        );
         if matches!(args.format, GateFormat::Text) {
-            println!(
-                "✅ codelore gate: PASS ({} changed file(s) evaluated)",
-                report.changes.len()
-            );
             render_gate_advisories(args, report)?;
-        } else {
-            // JSON keeps stdout pure for the report document (already printed),
-            // so the verdict line goes to stderr — mirroring the clean-tree and
-            // FAIL paths, and honoring the contract that a verdict line is
-            // emitted regardless of format.
-            eprintln!(
-                "✅ codelore gate: PASS ({} changed file(s) evaluated)",
-                report.changes.len()
-            );
         }
         write_github_output("result", "pass");
         write_github_output("violations", "0");
