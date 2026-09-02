@@ -3074,4 +3074,21 @@ and SARIF (using a trivially-passing `max_dependency_cycles` gate —
 `code_health_min` degrades to FAIL on a rowless scratch repo, a fixture
 behavior worth knowing).
 
-The next sweep re-opens at **F354**.
+### F354 (Fixed — Unreleased) — the MCP server half-validated its startup and hard-coded its cache root
+
+A typo'd repo path in a client config produced a healthy-looking server
+that failed on every tool call — while both calibration artifacts were
+fail-fast validated three lines away. The repository is now opened and
+HEAD resolved before serving, with the fix named in the error.
+Alongside it, the server gains the `--cache-dir`/`--temp-dir` overrides
+every other fact-store-touching subcommand already had: one resolved
+`cache_root` field replaces eleven per-tool default lookups (an override
+cannot miss a tool), and the spill override threads through a new
+`base_options()` seam into every tool's `Options` — the seam the
+second-wave structural audit recommended, scoped so calibration
+artifacts stay per-handler and regenerated artifacts still never
+invalidate the memo of a tool that does not read them. Startup refusal
+and cache-dir placement are both test-pinned; the startup probe removed
+the validation block and watched the test fail.
+
+The next sweep re-opens at **F355**.
