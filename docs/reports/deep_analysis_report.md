@@ -3178,4 +3178,26 @@ message (`trim_end_matches` on the `%B` field) while `GixRepo`'s
 now keeps `%B` byte-exact, and the probe is the trim itself restored.
 Production walker untouched; no cache impact.
 
-The next sweep re-opens at **F360**.
+### F360 (Fixed — Unreleased) — assorted hardening: two reachable panics, a self-defeating pruner, and a silent no-op lens
+
+Four fixes from the verified-hardening list. (1) `format_history`
+byte-sliced the hand-editable ledger's `head_sha` at 12 bytes —
+a multi-byte character straddling the boundary panicked the `check`
+run; now a char-boundary prefix, with the two provenance-safe
+truncation siblings (`delivery.rs` short rev, `calibrate` vintage)
+moved to the same idiom. Probe: the restored slice panics the new
+multi-byte test with the exact "byte index 12 is not a char boundary"
+message. (2) All fifteen `partial_cmp(..).unwrap_or(Equal)` float
+sorts became `total_cmp` — the house pattern in seven other files;
+Equal-on-NaN is intransitive and modern sorts may detect and panic.
+(3) `prune_global_cache` gained a keep-path: it runs between the
+ingest renaming the just-written entry into place and re-opening it,
+so a still-binding byte cap deleted the file the run was about to
+read. Probe: without the keep-path the zero-cap test loses the entry.
+(4) `CalibrationArtifact::validate` rejects `languages: []` — it
+passed every structural check while making every percentile lookup
+report "not in corpus" with no signal; `calibrate` already refused to
+write one, now a hand-built one cannot be read. Probe: with the check
+removed, the rejection test's `expect_err` fails on `Ok`.
+
+The next sweep re-opens at **F361**.
