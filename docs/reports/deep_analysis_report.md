@@ -3061,4 +3061,51 @@ Three contract tests pin the table, probed one filter at a time —
 `cargo test` silently errors on multiple positional filters, which made
 an earlier probe read as vacuously green.
 
-The next sweep re-opens at **F353**.
+### F353 (Fixed — Unreleased) — text-mode verdicts split across stdout and stderr, against the documented contract
+
+`check`/`gate` printed PASS and WARNING lines (and the shallow-checkout
+notice) to stdout in text mode while FAIL went to stderr — `codelore
+check > log` captured pass but lost fail, `2>/dev/null` the reverse —
+and SARIF mode printed no PASS line at all despite the documented
+promise of a verdict line regardless of format; only the JSON gate path
+was correct and test-pinned. Every verdict and warning line now goes to
+stderr in every mode, and a contract test pins the channel across text
+and SARIF (using a trivially-passing `max_dependency_cycles` gate —
+`code_health_min` degrades to FAIL on a rowless scratch repo, a fixture
+behavior worth knowing).
+
+### F354 (Fixed — Unreleased) — the MCP server half-validated its startup and hard-coded its cache root
+
+A typo'd repo path in a client config produced a healthy-looking server
+that failed on every tool call — while both calibration artifacts were
+fail-fast validated three lines away. The repository is now opened and
+HEAD resolved before serving, with the fix named in the error.
+Alongside it, the server gains the `--cache-dir`/`--temp-dir` overrides
+every other fact-store-touching subcommand already had: one resolved
+`cache_root` field replaces eleven per-tool default lookups (an override
+cannot miss a tool), and the spill override threads through a new
+`base_options()` seam into every tool's `Options` — the seam the
+second-wave structural audit recommended, scoped so calibration
+artifacts stay per-handler and regenerated artifacts still never
+invalidate the memo of a tool that does not read them. Startup refusal
+and cache-dir placement are both test-pinned; the startup probe removed
+the validation block and watched the test fail.
+
+### F355 (Fixed — Unreleased) — `--calibration` missing on `gate` and `explain` while their MCP twins carried it
+
+F323 fixed the MCP-missing direction of the calibration asymmetry and
+left the CLI-missing one open: `gate_changes` and `explain_file` thread
+the corpus artifact while the CLI subcommands built `Options` without
+it. `codelore explain <path>` and the MCP `explain_file` printed
+different corpus percentiles for the same file at the same HEAD under a
+custom corpus — the number the advisory narrative's citation check
+grounds against — and the `gate` half fragmented the report cache into
+two entries for identical work. Both subcommands now accept and thread
+the flag exactly as `--defect-calibration` already did; the parity test
+drives `explain` against a ramp corpus that must move the printed lens,
+and the probe (threading stashed, flag accepted-but-ignored) fails on
+identical outputs — F323's exact silent-ignore shape. `diff` is
+deliberately untouched: it has no calibration-consuming MCP twin
+(`delta_health` is artifact-blind by design).
+
+The next sweep re-opens at **F356**.

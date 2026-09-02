@@ -99,6 +99,8 @@ fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
         args.calibration.clone(),
         args.defect_calibration.clone(),
         args.allow_foreign_calibration,
+        args.cache_dir.clone(),
+        args.temp_dir.clone(),
     )
 }
 

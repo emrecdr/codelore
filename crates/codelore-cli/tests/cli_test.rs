@@ -3007,6 +3007,31 @@ fn function_coupling_emits_markdown_header() {
 }
 
 #[test]
+fn check_pass_verdict_lives_on_stderr_in_every_mode() {
+    // The verdict line is run metadata: it lives on stderr in text AND
+    // SARIF mode, so `codelore check > log` captures pass and fail
+    // symmetrically and stdout stays the report document. code_health_min
+    // = 0.0 passes trivially on any repo.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\nmax_dependency_cycles = 999999\n").unwrap();
+    for format in ["text", "sarif"] {
+        codelore_cmd()
+            .args([
+                "check",
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--format",
+                format,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("✅ codelore check: PASS"))
+            .stdout(predicate::str::contains("✅").not());
+    }
+}
+
+#[test]
 fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
     // When gates are configured and violations occur, --quiet suppresses the
     // per-violation detail lines on stderr but preserves the FAIL verdict line
@@ -3215,7 +3240,10 @@ fn gate_passes_on_clean_tree_with_thresholds() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("no working-tree changes"));
+        // The verdict line is run metadata and lives on STDERR in every
+        // mode now, so `codelore gate > log` captures pass and fail
+        // symmetrically.
+        .stderr(predicate::str::contains("no working-tree changes"));
 }
 
 #[test]
@@ -5089,4 +5117,74 @@ fn explain_file_llm_live_against_local_ollama() {
         .success()
         .stdout(predicate::str::contains("advisory — model"))
         .stdout(predicate::str::contains(model.as_str()));
+}
+
+/// The CLI/MCP calibration symmetry, in the direction the MCP-side fix left open: the
+/// MCP `explain_file` twin threads `--calibration`, and without this flag
+/// `codelore explain <path>` printed a DIFFERENT corpus percentile for the
+/// same file at the same HEAD under a custom corpus — the number the
+/// advisory narrative's citation check grounds against. A ramp-to-a-million
+/// artifact must move the printed lens relative to the embedded world
+/// corpus.
+#[test]
+fn explain_follows_the_cli_calibration_artifact() {
+    use codelore_lib::calibration::{
+        CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles, Stratum,
+    };
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = tiny.dir.path();
+    // Any tracked .rs file in the fixture works as the dossier subject.
+    let ls = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-files", "*.rs"])
+        .output()
+        .expect("git ls-files");
+    let subject = String::from_utf8_lossy(&ls.stdout)
+        .lines()
+        .next()
+        .expect("fixture has a rust file")
+        .to_string();
+
+    let quantiles: Vec<f64> = (0..=1000).map(|i| f64::from(i) * 1000.0).collect();
+    let artifact = CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-cli-lens".to_string(),
+        generated_at: "2026-09-01T00:00:00Z".to_string(),
+        repos_included: 3,
+        repos_attempted: 3,
+        languages: vec![LanguageTable {
+            language: "rust".to_string(),
+            sample_functions: 4_000,
+            strata: vec![Stratum {
+                sloc_min: 0,
+                sloc_max: u64::MAX,
+                metrics: vec![MetricQuantiles {
+                    metric: "cyclomatic".to_string(),
+                    quantiles,
+                }],
+            }],
+        }],
+        repo_metrics: None,
+    };
+    let artifact_path = repo.join("ramp.calib.json");
+    std::fs::write(&artifact_path, serde_json::to_string(&artifact).unwrap()).unwrap();
+
+    let run = |extra: &[&str]| -> String {
+        let mut args = vec!["explain", "--repo", repo.to_str().unwrap(), &subject];
+        args.extend_from_slice(extra);
+        let out = codelore_cmd().args(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "explain failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let default_out = run(&[]);
+    let ramp_out = run(&["--calibration", artifact_path.to_str().unwrap()]);
+    assert_ne!(
+        default_out, ramp_out,
+        "a ramp corpus must move the printed lens away from the embedded world corpus"
+    );
 }

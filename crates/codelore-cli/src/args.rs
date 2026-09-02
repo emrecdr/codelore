@@ -316,6 +316,20 @@ pub struct McpArgs {
     /// (forks, moved checkouts): skips the repo-identity guard.
     #[arg(long)]
     pub allow_foreign_calibration: bool,
+
+    /// Override the XDG cache root for the persistent fact-store. Defaults
+    /// to `$XDG_CACHE_HOME/codelore` (or the OS equivalent). Useful for
+    /// containerized or CI-hosted servers that want an explicit cache
+    /// location instead of the `/tmp` fallback.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// Override the `DuckDB` spill directory used once a query's memory
+    /// usage exceeds the internal ceiling (see docs/advanced-usage.md).
+    /// Must already exist and be writable. Defaults to a subdirectory of
+    /// the cache root.
+    #[arg(long = "temp-dir")]
+    pub temp_dir: Option<PathBuf>,
 }
 
 /// Quality-gate check.
@@ -435,6 +449,12 @@ pub struct GateArgs {
     /// (forks, moved checkouts): skips the repo-identity guard.
     #[arg(long)]
     pub allow_foreign_calibration: bool,
+
+    /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
+    /// Overrides the embedded world corpus; when omitted the embedded artifact
+    /// is used if present.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
 }
 
 /// Shell-completion script generation.
@@ -490,6 +510,12 @@ pub struct ExplainArgs {
     /// (forks, moved checkouts): skips the repo-identity guard.
     #[arg(long)]
     pub allow_foreign_calibration: bool,
+
+    /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
+    /// Overrides the embedded world corpus; when omitted the embedded artifact
+    /// is used if present.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
 }
 
 /// JSON Schema export.
