@@ -35,6 +35,14 @@ pub fn materialize_changes_bucketed(
 ) -> Result<()> {
     use duckdb::params;
     let unit = bucket.as_sql_unit();
+    // Build-once per (unit, lineage): every bucket-aware analysis in a run
+    // calls this via `lineage::materialize_source`, and without the guard
+    // each call re-ran the full `changes JOIN commits` scan (the sibling
+    // `changes_lineage` guard exists for exactly this). A differing key
+    // still forces a rebuild.
+    if db.is_changes_bucketed_built_for(unit, use_lineage) {
+        return Ok(());
+    }
     // When canonical lineage is on, bucket on top of the lineage-resolved
     // view so rename ancestry survives the temporal collapse. Without this,
     // a renamed file's pre- and post-rename commits aggregate under
@@ -53,7 +61,7 @@ pub fn materialize_changes_bucketed(
          SELECT \
              CAST(date_trunc('{unit}', m.date) AS TEXT) AS rev, \
              c.path, \
-             MAX(c.change_type) AS change_type, \
+             arg_max(c.change_type, ROW(m.date, -m.rowid)) AS change_type, \
              arg_max(c.rename_from, ROW(m.date, -m.rowid)) AS rename_from, \
              SUM(c.loc_added)::INTEGER AS loc_added, \
              SUM(c.loc_deleted)::INTEGER AS loc_deleted \
@@ -64,6 +72,7 @@ pub fn materialize_changes_bucketed(
     db.conn().execute(&sql, params![]).map_err(|e| {
         CodeLoreError::Analysis(format!("materialize changes_bucketed ({unit}): {e}"))
     })?;
+    db.mark_changes_bucketed_built(unit, use_lineage);
     tracing::info!("materialized changes_bucketed at {unit} granularity (lineage={use_lineage})");
     Ok(())
 }
