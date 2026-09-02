@@ -61,19 +61,34 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         ))
         .into());
     }
-    // step-summary can stream to stdout (it's small GFM text), but typically
-    // gets redirected to $GITHUB_STEP_SUMMARY by the caller's CI workflow.
-    // SARIF: hotspots, clones, clone-coupling.
-    if format == "sarif"
+    // Streaming format×analysis combinations are validated HERE, before the
+    // pre-flight and the ingest: nobody should pay a 5-30s ingest to learn
+    // about a flag typo, and the late paths returned four different exit
+    // codes for the same class of mistake (sarif=4 early, ndjson/html=2
+    // late, parquet=1 late). `supported_formats` is the single source of
+    // truth the dispatch reads, so this gate and the arms cannot drift; the
+    // arms keep their derived fallbacks as defense-in-depth. The
+    // path-based formats (parquet/sqlite/spa/step-summary) have their own
+    // handling around the dispatch; parquet's per-analysis subset is
+    // checked here for the same reason.
+    if !matches!(format, "parquet" | "sqlite" | "spa" | "step-summary")
+        && !supported_formats(analysis).contains(&format)
+    {
+        if format == "html" {
+            return Err(html_not_wired(analysis.as_str()));
+        }
+        return Err(unsupported_format(analysis, format));
+    }
+    if format == "parquet"
         && !matches!(
             analysis,
-            AnalysisName::Hotspots | AnalysisName::Clones | AnalysisName::CloneCoupling
+            AnalysisName::Hotspots | AnalysisName::Revisions | AnalysisName::Summary
         )
     {
-        return Err(CodeLoreError::Analysis(
-            "--format sarif currently supports --analysis hotspots, clones, and clone-coupling"
-                .to_string(),
-        )
+        return Err(CodeLoreError::InvalidOptions(format!(
+            "--format parquet currently supports hotspots, revisions, and summary; got {}",
+            analysis.as_str()
+        ))
         .into());
     }
 
@@ -1473,10 +1488,15 @@ fn write_parquet(
             codelore_lib::cli_api::output::parquet::write_summary_parquet(db, opts, path)
                 .context("write parquet")
         }
-        other => anyhow::bail!(
-            "--format parquet currently supports hotspots, revisions, summary only; \
-             got {other:?}"
-        ),
+        // Unreachable in practice: the early gate in `analyze` rejects the
+        // combination before ingest. Kept as derived defense-in-depth with
+        // the same exit-2 shape rather than the old bare bail (exit 1).
+        other => Err(CodeLoreError::InvalidOptions(format!(
+            "--format parquet currently supports hotspots, revisions, and summary; \
+             got {}",
+            other.as_str()
+        ))
+        .into()),
     }
 }
 

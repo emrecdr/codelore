@@ -913,10 +913,13 @@ fn sarif_rejects_unsupported_analysis() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "hotspots, clones, and clone-coupling",
-        ))
-        .stderr(predicate::str::contains("clones"));
+        // Exit 2: the rejection now comes from the shared early gate
+        // (derived from `supported_formats`, before the ingest) — a flag
+        // typo is a CLI error, not an analysis crash, and the message
+        // names the supported set for the analysis the user typed.
+        .code(2)
+        .stderr(predicate::str::contains("revisions analysis supports"))
+        .stderr(predicate::str::contains("csv|json|markdown|html"));
 }
 
 #[test]
@@ -1171,6 +1174,95 @@ fn output_dash_rejected_for_binary_formats() {
         .stderr(predicate::str::contains(
             "--output - (stdout) is not supported",
         ));
+}
+
+/// The documented exit-code contract, pinned across the surfaces that used
+/// to collapse everything to 1 or mislabel argument mistakes as analysis
+/// crashes: 2 = CLI/argument, 3 = repository, 1 = a genuine gate verdict.
+#[test]
+fn diff_failures_carry_typed_exit_codes() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = tiny.dir.path().to_str().unwrap();
+    // Malformed range: CLI mistake, exit 2.
+    codelore_cmd()
+        .args(["diff", "--repo", repo, "--min-revs", "1", "not-a-range"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("rev range must contain"));
+    // A rev that does not resolve against the repository: exit 3.
+    codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            repo,
+            "--min-revs",
+            "1",
+            "nonexistent..HEAD",
+        ])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("git rev-parse failed"));
+    // Base and head identical: CLI mistake, exit 2.
+    codelore_cmd()
+        .args(["diff", "--repo", repo, "--min-revs", "1", "HEAD..HEAD"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("resolve to the same commit"));
+}
+
+/// Unsupported format×analysis combinations fail BEFORE the ingest with one
+/// consistent exit code — previously sarif was 4 (early), ndjson/html 2
+/// (after the ingest), and parquet 1 (after the ingest, wearing the gate
+/// verdict's code).
+#[test]
+fn format_analysis_combinations_reject_early_with_exit_2() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = tiny.dir.path().to_str().unwrap();
+    for (analysis, format, extra) in [
+        ("authors", "ndjson", None),
+        ("coupling", "html", None),
+        ("authors", "parquet", Some("out.parquet")),
+    ] {
+        let mut args = vec![
+            "analyze",
+            "--analysis",
+            analysis,
+            "--repo",
+            repo,
+            "--format",
+            format,
+            "--no-banner",
+            "--no-cache",
+            "--min-revs",
+            "1",
+        ];
+        if let Some(out) = extra {
+            args.extend(["--output", out]);
+        }
+        codelore_cmd().args(&args).assert().failure().code(2);
+    }
+}
+
+/// Naming something that doesn't exist is a CLI mistake everywhere: the
+/// parser rejects an unknown `--analysis` with 2, and `schema` / `explain`
+/// now agree instead of wearing the analysis-crash code.
+#[test]
+fn unknown_names_exit_2_on_every_surface() {
+    codelore_cmd()
+        .args(["schema", "no-such-row-type"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("unknown row type"));
+    codelore_cmd()
+        .args(["explain", "no-such-topic"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("unknown topic"));
 }
 
 /// `--time-bucket` combined with a composite format must be rejected at the
@@ -2915,6 +3007,31 @@ fn function_coupling_emits_markdown_header() {
 }
 
 #[test]
+fn check_pass_verdict_lives_on_stderr_in_every_mode() {
+    // The verdict line is run metadata: it lives on stderr in text AND
+    // SARIF mode, so `codelore check > log` captures pass and fail
+    // symmetrically and stdout stays the report document. code_health_min
+    // = 0.0 passes trivially on any repo.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\nmax_dependency_cycles = 999999\n").unwrap();
+    for format in ["text", "sarif"] {
+        codelore_cmd()
+            .args([
+                "check",
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--format",
+                format,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("✅ codelore check: PASS"))
+            .stdout(predicate::str::contains("✅").not());
+    }
+}
+
+#[test]
 fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
     // When gates are configured and violations occur, --quiet suppresses the
     // per-violation detail lines on stderr but preserves the FAIL verdict line
@@ -3123,7 +3240,10 @@ fn gate_passes_on_clean_tree_with_thresholds() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("no working-tree changes"));
+        // The verdict line is run metadata and lives on STDERR in every
+        // mode now, so `codelore gate > log` captures pass and fail
+        // symmetrically.
+        .stderr(predicate::str::contains("no working-tree changes"));
 }
 
 #[test]

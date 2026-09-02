@@ -431,7 +431,11 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
                         let hint = crate::suggest::nearest(topic, topics.iter().map(|(n, ..)| *n))
                             .map(|s| format!(" (did you mean `{s}`?)"))
                             .unwrap_or_default();
-                        Err(CodeLoreError::Analysis(format!(
+                        // Exit 2: naming something that doesn't exist is a
+                        // CLI/argument mistake per the documented exit-code
+                        // table, matching the parser's rejection of an
+                        // unknown `--analysis` value — not an analysis crash.
+                        Err(CodeLoreError::InvalidOptions(format!(
                             "unknown topic `{topic}`{hint} — run `codelore explain` (no arg) to \
                              list supported topics, or pass an existing file path (with --repo) to \
                              print that file's evidence dossier"

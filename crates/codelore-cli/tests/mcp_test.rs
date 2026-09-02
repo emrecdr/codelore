@@ -2205,3 +2205,56 @@ fn mcp_check_gates_declares_output_schema_and_returns_structured_content() {
     drop(stdin);
     let _ = child.wait();
 }
+
+/// The repo path is the server's most common misconfiguration (a typo'd
+/// path in a client config): the server must refuse to START, naming the
+/// fix, rather than reporting healthy and failing on every tool call.
+#[test]
+fn mcp_refuses_to_serve_a_nonexistent_repo() {
+    let bin = assert_cmd::cargo::cargo_bin("codelore");
+    let out = Command::new(&bin)
+        .args(["mcp", "--repo", "/definitely/not/a/repository"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn codelore mcp");
+    assert!(
+        !out.status.success(),
+        "a nonexistent repo must be a startup error, not a served session"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot serve MCP"),
+        "the error must name the misconfiguration: {stderr}"
+    );
+}
+
+/// `--cache-dir` must reach every fact-store open: after one tool call, the
+/// persistent cache lands under the override, not the XDG default.
+#[test]
+fn mcp_cache_dir_override_places_the_fact_store() {
+    let tiny = tiny_repo::build();
+    let cache = tempfile::tempdir().expect("tempdir");
+    let (mut child, mut stdin, mut reader) = spawn_mcp_with_args(
+        tiny.dir.path().to_str().unwrap(),
+        &["--cache-dir", cache.path().to_str().unwrap()],
+    );
+    let resp = call_tool(&mut stdin, &mut reader, 1, "repo_overview", &json!({}));
+    assert_tool_ok(&resp, "repo_overview");
+    drop(stdin);
+    let _ = child.wait();
+
+    let mut found = false;
+    if let Ok(entries) = std::fs::read_dir(cache.path().join("codelore")) {
+        for repo_dir in entries.flatten() {
+            if let Ok(files) = std::fs::read_dir(repo_dir.path()) {
+                found |= files
+                    .flatten()
+                    .any(|f| f.path().extension().is_some_and(|e| e == "duckdb"));
+            }
+        }
+    }
+    assert!(
+        found,
+        "one tool call must place a .duckdb fact store under the --cache-dir override"
+    );
+}

@@ -392,6 +392,13 @@ const MAX_CONCURRENT_CALLS: usize = 4;
 #[derive(Clone)]
 pub struct CodeLoreServer {
     repo: PathBuf,
+    /// Resolved cache root every fact-store open uses (`--cache-dir`, or the
+    /// XDG default). One field instead of eleven `default_cache_root()`
+    /// call sites, so an override cannot miss a tool.
+    cache_root: PathBuf,
+    /// `DuckDB` spill-directory override (`--temp-dir`), threaded through
+    /// [`Self::base_options`] into every tool's `Options`.
+    temp_dir: Option<PathBuf>,
     /// Corpus-calibration artifact for the percentile lens; `None` means the
     /// embedded world corpus, matching the CLI default.
     calibration: Option<PathBuf>,
@@ -404,6 +411,19 @@ pub struct CodeLoreServer {
 }
 
 impl CodeLoreServer {
+    /// The `Options` base every tool starts from: repo path + spill-dir
+    /// override. Calibration artifacts are deliberately NOT here — each
+    /// handler threads exactly the artifacts its analysis consumes, so a
+    /// regenerated artifact never invalidates the memo of a tool that
+    /// never reads it.
+    fn base_options(&self) -> Options {
+        Options {
+            repo_path: self.repo.clone(),
+            temp_dir: self.temp_dir.clone(),
+            ..Options::default()
+        }
+    }
+
     /// Run `work` on the blocking pool, holding one concurrency permit for its
     /// whole duration.
     ///
@@ -675,6 +695,8 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let memo = self.memo.clone();
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             memoized(
                 &memo,
@@ -684,11 +706,10 @@ impl CodeLoreServer {
                 |repo, head| {
                     let opts = Options {
                         repo_path: repo_path.clone(),
-                        ..Options::default()
+                        ..base_opts.clone()
                     };
-                    let db =
-                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
-                            .map_err(|e| map_lib_err(&e))?;
+                    let db = FactsDb::open_or_ingest_with_cache_root(&opts, repo, &cache_root)
+                        .map_err(|e| map_lib_err(&e))?;
                     // Same ingest witness as `check_gates`: a real HEAD over an
                     // empty commit store is a truncated checkout, not a genuinely
                     // empty repo.
@@ -723,6 +744,8 @@ impl CodeLoreServer {
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         let calibration = self.calibration.clone();
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             // Fold the corpus-artifact identity into the memo key: the lens
             // annotations depend on it, and it can be regenerated without
@@ -737,11 +760,10 @@ impl CodeLoreServer {
                 let opts = Options {
                     repo_path: repo_path.clone(),
                     calibration: calibration.clone(),
-                    ..Options::default()
+                    ..base_opts.clone()
                 };
-                let db =
-                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
-                        .map_err(|e| map_lib_err(&e))?;
+                let db = FactsDb::open_or_ingest_with_cache_root(&opts, repo, &cache_root)
+                    .map_err(|e| map_lib_err(&e))?;
                 // Same ingest witness as `check_gates`: a real HEAD over an
                 // empty commit store is a truncated checkout, not a genuinely
                 // empty repo.
@@ -787,6 +809,8 @@ impl CodeLoreServer {
         let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             // Fold the calibration-artifact identity into the memo key: the
             // scores depend on that artifact's weights, and it can be
@@ -805,7 +829,7 @@ impl CodeLoreServer {
                     calibration: calibration.clone(),
                     defect_calibration: defect_calibration.clone(),
                     allow_foreign_calibration,
-                    ..Options::default()
+                    ..base_opts.clone()
                 };
                 // A path outside the analyzed-file universe is a caller error, not
                 // an empty single-file result — reject it before the ingest (the
@@ -815,7 +839,7 @@ impl CodeLoreServer {
                     require_tracked_path(repo, p)?;
                 }
                 let db =
-                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &cache_root)
                         .map_err(|e| map_lib_err(&e))?;
                 // Same ingest witness as `check_gates`: a real HEAD over an empty
                 // commit store is a truncated checkout, not a genuinely empty repo.
@@ -883,6 +907,7 @@ impl CodeLoreServer {
             ));
         }
 
+        let base_opts = self.base_options();
         self.blocking(move || {
             // Scope the memo to the repo's current HEAD (uniform with the other
             // tools); the diff endpoints are the resolved base/head SHAs, so the
@@ -909,7 +934,7 @@ impl CodeLoreServer {
             > {
                 let opts = Options {
                     repo_path: wt.to_path_buf(),
-                    ..Options::default()
+                    ..base_opts.clone()
                 };
                 let repo = GixRepo::open(wt).map_err(|e| map_lib_err(&e))?;
                 let db = FactsDb::new_in_memory().map_err(|e| map_lib_err(&e))?;
@@ -1002,6 +1027,8 @@ impl CodeLoreServer {
         let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             // Fold the calibration-artifact identity into the memo key: the
             // ranking's code-health component depends on that artifact's
@@ -1026,10 +1053,10 @@ impl CodeLoreServer {
                         calibration: calibration.clone(),
                         defect_calibration: defect_calibration.clone(),
                         allow_foreign_calibration,
-                        ..Options::default()
+                        ..base_opts.clone()
                     };
                     let db =
-                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &cache_root)
                             .map_err(|e| map_lib_err(&e))?;
                     // Same ingest witness as `check_gates`: a real HEAD over an
                     // empty commit store is a truncated checkout, not a genuinely
@@ -1073,11 +1100,13 @@ impl CodeLoreServer {
         let memo = self.memo.clone();
         let target = params.0.path.clone();
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             memoized(&memo, &repo_path, "function_xray", &params_json, |repo, head| {
                 let opts = Options {
                     repo_path: repo_path.clone(),
-                    ..Options::default()
+                    ..base_opts.clone()
                 };
                 // Resolve the path against the analyzed-file universe first: a
                 // typo or absolute path is a caller error (propagated
@@ -1098,7 +1127,7 @@ impl CodeLoreServer {
                     return serde_json::to_string(&note).map_err(internal);
                 }
                 let db =
-                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &cache_root)
                         .map_err(|e| map_lib_err(&e))?;
                 // Same ingest witness as `check_gates`: a real HEAD over an empty
                 // commit store is a truncated checkout, not a genuinely empty repo.
@@ -1145,6 +1174,8 @@ impl CodeLoreServer {
         // of `.codelore-thresholds.toml`, an on-disk config re-discovered every
         // call that can be edited (or created) without a commit, so a HEAD-keyed
         // entry could serve a stale verdict after a threshold edit.
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             let thresholds = Thresholds::discover(&repo_path).map_err(|e| map_lib_err(&e))?;
             if thresholds.is_empty() {
@@ -1165,10 +1196,10 @@ impl CodeLoreServer {
                 calibration,
                 defect_calibration,
                 allow_foreign_calibration,
-                ..Options::default()
+                ..base_opts.clone()
             };
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
                 .map_err(|e| map_lib_err(&e))?;
             // Same ingest witness as `codelore check`: a real HEAD over an empty
             // commit store is a truncated checkout on which every gate passes over
@@ -1339,9 +1370,9 @@ impl CodeLoreServer {
         // change to HEAD, and the DuckDB-backed sidecar exposes no cheap content
         // digest to key on (its mtime is unreliable under read-time journaling),
         // so a HEAD-only key could serve stale fusion after a re-ingest.
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
-            let cache_root = default_cache_root();
-
             // open_nonempty returns None when the sidecar is absent OR
             // present-but-empty — the MCP tool never creates it; that is
             // ingest-sarif's job. Both cases return the structured "run
@@ -1364,7 +1395,7 @@ impl CodeLoreServer {
                 calibration,
                 defect_calibration,
                 allow_foreign_calibration,
-                ..Options::default()
+                ..base_opts.clone()
             };
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
@@ -1417,6 +1448,8 @@ impl CodeLoreServer {
         let calibration = self.calibration.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
@@ -1458,9 +1491,9 @@ impl CodeLoreServer {
                 calibration,
                 defect_calibration,
                 allow_foreign_calibration,
-                ..Options::default()
+                ..base_opts.clone()
             };
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
                 .map_err(|e| map_lib_err(&e))?;
             // Same ingest witness as `check_gates`: a real HEAD over an empty
             // commit store is a truncated checkout, not a genuinely empty repo.
@@ -1498,7 +1531,7 @@ impl CodeLoreServer {
                             text: &canonical,
                             values: &values,
                         },
-                        &default_cache_root(),
+                        &cache_root,
                         &repo_path,
                         false,
                     ) {
@@ -1556,6 +1589,8 @@ impl CodeLoreServer {
         // committed-state inputs that change without moving HEAD: an in-progress
         // merge/rebase (which the briefing's leading note reflects) and a
         // regenerated calibration artifact (which its defect evidence reflects).
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
@@ -1579,9 +1614,9 @@ impl CodeLoreServer {
                 calibration,
                 defect_calibration,
                 allow_foreign_calibration,
-                ..Options::default()
+                ..base_opts.clone()
             };
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
                 .map_err(|e| map_lib_err(&e))?;
             // Same ingest witness as `check_gates`: a real HEAD over an empty
             // commit store is a truncated checkout, not a genuinely empty repo.
@@ -1627,20 +1662,21 @@ impl CodeLoreServer {
         // uncommitted edits in `worktree_changes()` against HEAD, so its output
         // changes with every unstaged keystroke and is never a function of the
         // committed state alone.
+        let cache_root = self.cache_root.clone();
+        let base_opts = self.base_options();
         self.blocking(move || {
             let opts = Options {
                 repo_path: repo_path.clone(),
                 calibration,
                 defect_calibration,
                 allow_foreign_calibration,
-                ..Options::default()
+                ..base_opts.clone()
             };
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let changes = repo.worktree_changes().map_err(|e| map_lib_err(&e))?;
             if changes.is_empty() {
                 return Ok("PASS (no working-tree changes to gate)".to_string());
             }
-            let cache_root = default_cache_root();
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
                 .map_err(|e| map_lib_err(&e))?;
             // Same ingest witness as `check_gates`: a shallow checkout WITH
@@ -1828,7 +1864,38 @@ pub fn run_mcp_server(
     calibration: Option<PathBuf>,
     defect_calibration: Option<PathBuf>,
     allow_foreign_calibration: bool,
+    cache_dir: Option<PathBuf>,
+    temp_dir: Option<PathBuf>,
 ) -> Result<()> {
+    // The repo path is the server's most fundamental input and its most
+    // common misconfiguration — a typo'd path in a client config
+    // (claude_desktop_config.json, .cursor/mcp.json) used to produce a
+    // HEALTHY-looking server that failed on every tool call, while both
+    // calibration artifacts were fail-fast-validated a few lines below.
+    // Open the repository and resolve HEAD before serving, so the client
+    // surfaces the misconfiguration at connect time with the fix named.
+    {
+        use codelore_lib::cli_api::repo::Repo as _;
+        let git_repo = codelore_lib::cli_api::repo::GixRepo::open(&repo).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot serve MCP for {}: {e} — run codelore mcp from the \
+                 repository root, or pass --repo <repo-root>",
+                repo.display()
+            )
+        })?;
+        git_repo.head_sha().map_err(|e| {
+            anyhow::anyhow!(
+                "cannot serve MCP for {}: no resolvable HEAD ({e}) — the \
+                 path is not a usable git repository (empty repo, or a \
+                 corrupt/bare checkout)",
+                repo.display()
+            )
+        })?;
+    }
+    // Resolved once: every tool that opens the fact store reads this root,
+    // so a containerized server can place its cache explicitly instead of
+    // falling back to the per-user /tmp namespace.
+    let cache_root = cache_dir.unwrap_or_else(default_cache_root);
     let defect_calibration = if defect_calibration.is_some() {
         defect_calibration
     } else {
@@ -1852,6 +1919,8 @@ pub fn run_mcp_server(
         .block_on(async move {
             let server = CodeLoreServer {
                 repo,
+                cache_root,
+                temp_dir,
                 calibration,
                 defect_calibration,
                 allow_foreign_calibration,

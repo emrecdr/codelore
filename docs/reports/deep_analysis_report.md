@@ -3042,4 +3042,53 @@ front. Routing `diff` through the shared output helper also replaced
 its raw truncate-on-create with atomic publication, so a failing run no
 longer destroys the previous good report.
 
-The next sweep re-opens at **F352**.
+### F352 (Fixed — Unreleased) — exit codes drifted from the documented contract on three surfaces
+
+Every `codelore diff` failure exited 1 — a typo'd rev range, a missing
+git binary, and a real gate violation were indistinguishable to CI,
+against the design intent the user guide states. Unsupported
+format×analysis combinations returned four different codes depending on
+which path caught them (sarif 4 before ingest; ndjson/html 2 after it;
+parquet 1 after it — the gate verdict's code for a flag typo), and
+`schema`/`explain` reported unknown names with the analysis-crash code
+while the parser used 2 one flag over. Diff's six untyped failures are
+now typed (malformed range and identical base/head exit 2; unresolvable
+revs and git failures exit 3); streaming format×analysis combinations
+validate before the pre-flight from `supported_formats` — the same
+derived table the dispatch reads, so gate and arms cannot drift — all at
+exit 2 including parquet's subset; unknown names exit 2 everywhere.
+Three contract tests pin the table, probed one filter at a time —
+`cargo test` silently errors on multiple positional filters, which made
+an earlier probe read as vacuously green.
+
+### F353 (Fixed — Unreleased) — text-mode verdicts split across stdout and stderr, against the documented contract
+
+`check`/`gate` printed PASS and WARNING lines (and the shallow-checkout
+notice) to stdout in text mode while FAIL went to stderr — `codelore
+check > log` captured pass but lost fail, `2>/dev/null` the reverse —
+and SARIF mode printed no PASS line at all despite the documented
+promise of a verdict line regardless of format; only the JSON gate path
+was correct and test-pinned. Every verdict and warning line now goes to
+stderr in every mode, and a contract test pins the channel across text
+and SARIF (using a trivially-passing `max_dependency_cycles` gate —
+`code_health_min` degrades to FAIL on a rowless scratch repo, a fixture
+behavior worth knowing).
+
+### F354 (Fixed — Unreleased) — the MCP server half-validated its startup and hard-coded its cache root
+
+A typo'd repo path in a client config produced a healthy-looking server
+that failed on every tool call — while both calibration artifacts were
+fail-fast validated three lines away. The repository is now opened and
+HEAD resolved before serving, with the fix named in the error.
+Alongside it, the server gains the `--cache-dir`/`--temp-dir` overrides
+every other fact-store-touching subcommand already had: one resolved
+`cache_root` field replaces eleven per-tool default lookups (an override
+cannot miss a tool), and the spill override threads through a new
+`base_options()` seam into every tool's `Options` — the seam the
+second-wave structural audit recommended, scoped so calibration
+artifacts stay per-handler and regenerated artifacts still never
+invalidate the memo of a tool that does not read them. Startup refusal
+and cache-dir placement are both test-pinned; the startup probe removed
+the validation block and watched the test fail.
+
+The next sweep re-opens at **F355**.
