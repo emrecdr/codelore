@@ -743,8 +743,9 @@ pub struct AnalyzeArgs {
     #[arg(long = "strict-grouping", default_value_t = false)]
     pub strict_grouping: bool,
 
-    /// Time-bucket aggregation for coupling-family analyses (`coupling`,
-    /// `clone-coupling`, `soc`). When set, commits within the same
+    /// Time-bucket aggregation for the analyses that opt into it
+    /// (`coupling`, `soc`, `hotspots`, `code-health`). When set, commits
+    /// within the same
     /// `date_trunc(<unit>, commit.date)` bucket count as a single
     /// "logical commit" for pair-counting purposes. Useful when teams
     /// land related changes across multiple small commits in the same
