@@ -496,6 +496,12 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: 1,
+        // The MCP `explain_file` twin threads the corpus artifact (F323);
+        // without this the two surfaces printed DIFFERENT corpus
+        // percentiles for the same file at the same HEAD under a custom
+        // corpus — and that number is what the advisory narrative's
+        // citation check grounds against.
+        calibration: args.calibration.clone(),
         defect_calibration,
         allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()

@@ -435,6 +435,12 @@ pub struct GateArgs {
     /// (forks, moved checkouts): skips the repo-identity guard.
     #[arg(long)]
     pub allow_foreign_calibration: bool,
+
+    /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
+    /// Overrides the embedded world corpus; when omitted the embedded artifact
+    /// is used if present.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
 }
 
 /// Shell-completion script generation.
@@ -490,6 +496,12 @@ pub struct ExplainArgs {
     /// (forks, moved checkouts): skips the repo-identity guard.
     #[arg(long)]
     pub allow_foreign_calibration: bool,
+
+    /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
+    /// Overrides the embedded world corpus; when omitted the embedded artifact
+    /// is used if present.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
 }
 
 /// JSON Schema export.
