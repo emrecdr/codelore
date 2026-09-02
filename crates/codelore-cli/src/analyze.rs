@@ -61,6 +61,17 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         ))
         .into());
     }
+    // Every format that reaches here streams, because the path-based ones
+    // rejected `-` above — so normalise it ONCE, here, and let every
+    // consumer downstream see `None` rather than a path it might mistake
+    // for a filename. Filtering per output site instead is what let the
+    // provenance sidecar derive `-.provenance.json` from a dash that two
+    // other sites had already handled: the sidecar is not an emitter, so
+    // it never passed through the emitter's filter.
+    //
+    // The path-based formats keep reading `args.output` directly below;
+    // for them the dash is an error, not a destination.
+    let dest = args.output.as_deref().filter(|p| p.as_os_str() != "-");
     // Streaming format×analysis combinations are validated HERE, before the
     // pre-flight and the ingest: nobody should pay a 5-30s ingest to learn
     // about a flag typo, and the late paths returned four different exit
@@ -251,7 +262,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     {
         let rows =
             codelore_lib::cli_api::analyses::clones::run_clones(&opts).context("run clones")?;
-        emit_to_output_or_stdout(args.output.as_deref(), |out| {
+        emit_to_output_or_stdout(dest, |out| {
             match format {
                 "csv" => {
                     codelore_lib::cli_api::output::csv::write_clones_csv(&rows, out)
@@ -409,7 +420,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // `>> $GITHUB_STEP_SUMMARY` directly.
         #[cfg(feature = "spa")]
         {
-            run_step_summary_dispatch(&db, &opts, &args.repo, args.output.as_deref())?;
+            run_step_summary_dispatch(&db, &opts, &args.repo, dest)?;
             return Ok(());
         }
         #[cfg(not(feature = "spa"))]
@@ -459,7 +470,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
         // Atomic when writing to a file: an interrupted or failing run never
         // truncates a previous good output (it lands in a temp sibling first).
-        emit_to_output_or_stdout(args.output.as_deref(), |out| {
+        emit_to_output_or_stdout(dest, |out| {
             // Captured by `&mut` rather than widening the helper's
             // `FnOnce(..) -> Result<()>` bound, which every other caller
             // already satisfies.
@@ -476,7 +487,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         })?;
     } // the writer is dropped inside the helper, flushing before the rename
 
-    if let Some(path) = args.output.as_ref() {
+    if let Some(path) = dest {
         write_provenance_sidecar(&db, &opts, analysis_name, path)?;
     }
 
@@ -2060,14 +2071,6 @@ fn run_step_summary_dispatch(
     // step-summary streams to stdout by default so CI workflows can
     // `codelore ... --format step-summary >> $GITHUB_STEP_SUMMARY`
     // directly. `--output PATH` opt-in for local use / testing.
-    //
-    // `-` spells stdout here for the same reason it does in
-    // `emit_to_output_or_stdout`: this format streams, so the dash is a
-    // destination it can honour rather than one it must reject (unlike
-    // parquet/sqlite/spa, which write through file-path machinery and are
-    // refused at the CLI boundary). Without the filter the dash took the
-    // publish branch below and created a file literally named `-`.
-    let output = output.filter(|p| p.as_os_str() != "-");
     if let Some(path) = output {
         // Atomic publish so an interrupted write never truncates a previous
         // good summary file (the stdout path streams directly, below).

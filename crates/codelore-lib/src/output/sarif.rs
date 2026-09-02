@@ -228,14 +228,25 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
 #[must_use]
 pub fn health_grade(cognitive_health: f64) -> (f64, &'static str) {
     let security_severity = ((100.0 - cognitive_health) / 4.0).max(0.1);
-    let level = if security_severity >= 7.0 {
+    (security_severity, severity_level(security_severity))
+}
+
+/// The SARIF `level` a `security-severity` score falls into.
+///
+/// Separate from [`health_grade`] because the severity *proxy* differs by
+/// rule — hotspots derive it from health, live clones from a combined score
+/// — while the band edges are a property of the SARIF scale itself and must
+/// be identical across every rule in one document. Keeping the ladder here
+/// is what makes that true by construction rather than by inspection.
+#[must_use]
+pub fn severity_level(security_severity: f64) -> &'static str {
+    if security_severity >= 7.0 {
         "error"
     } else if security_severity >= 4.0 {
         "warning"
     } else {
         "note"
-    };
-    (security_severity, level)
+    }
 }
 
 fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
@@ -639,13 +650,7 @@ fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_jso
 
     // security-severity = combined_score * 10, clamped to [0, 10] per SARIF spec.
     let security_severity = (row.combined_score * 10.0).clamp(0.0, 10.0);
-    let level = if security_severity >= 7.0 {
-        "error"
-    } else if security_severity >= 4.0 {
-        "warning"
-    } else {
-        "note"
-    };
+    let level = severity_level(security_severity);
 
     // partialFingerprints — versioned keys per research brief for stable
     // cross-run identity even when family sizes fluctuate.

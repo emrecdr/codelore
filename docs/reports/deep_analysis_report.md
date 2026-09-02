@@ -3342,4 +3342,34 @@ itself under the broken divisor, which is how the drift survived. A stale
 comment in the SARIF test file still documenting the `/ 10` formula was
 corrected with it.
 
-The next sweep re-opens at **F365**.
+### F365 (Fixed — Unreleased) — `--output -` reached the provenance sidecar as a path
+
+`analyze` filtered `-` at each output site: `emit_to_output_or_stdout`
+and, after F362, `run_step_summary_dispatch`. The provenance sidecar is
+not an emitter — it derives `<path>.provenance.json` from `args.output`
+directly (`analyze.rs::write_provenance_sidecar`) — so it never met
+either filter and wrote `-.provenance.json` into the working directory
+on any `--output -` run. F362 fixed one site of a class rather than the
+class.
+
+The dash is now resolved ONCE, immediately after the gate that rejects
+it for the path-based formats, and every consumer downstream takes the
+normalized value. Per-site filtering could only ever cover the sites
+someone remembered; a new consumer now inherits the behaviour. Probe:
+restoring the sidecar's raw `args.output` recreates
+`-.provenance.json` and fails the new test by name.
+
+Found by an altitude review of F362 rather than by a user report — the
+review asked whether filtering per site was the right depth, and the
+answer was a live bug two lines below the fix.
+
+Three cleanup findings landed with it, none of them defects: the SARIF
+band ladder was extracted so `health_grade` and `build_live_clone_result`
+share the edges they must agree on (the doc already claimed they did);
+`CalibrationArtifact::validate` now also rejects an empty-but-present
+`repo_metrics` pool map, enforcing on the read path what
+`attach_repo_metrics` refuses to write; and both `LLM_ENV_VARS` scrub
+lists gained `CODELORE_LLM_TIMEOUT_SECS`, without which an ambient
+developer setting would have reached every spawned CLI in the LLM suites.
+
+The next sweep re-opens at **F366**.

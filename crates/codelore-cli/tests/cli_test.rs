@@ -1265,6 +1265,45 @@ fn unknown_names_exit_2_on_every_surface() {
         .stderr(predicate::str::contains("unknown topic"));
 }
 
+/// `--output -` must not reach ANY consumer as a path — including the ones
+/// that are not emitters. The provenance sidecar derives its own filename
+/// from `--output` (`<path>.provenance.json`), so a dash that the emitters
+/// had already handled still produced a file called `-.provenance.json` in
+/// the working directory. The dash is normalised once now, at the point the
+/// path-based formats have already been rejected, so every consumer past
+/// that line sees `None`; this pins the sidecar, which is the consumer that
+/// proved per-site filtering was the wrong altitude.
+#[test]
+fn dash_output_writes_no_dash_named_file_including_the_provenance_sidecar() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let cwd = tempfile::tempdir().unwrap();
+    codelore_cmd()
+        .current_dir(cwd.path())
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--no-banner",
+            "--no-cache",
+            "--min-revs",
+            "1",
+            "--output",
+            "-",
+        ])
+        .assert()
+        .success();
+    for stray in ["-", "-.provenance.json"] {
+        assert!(
+            !cwd.path().join(stray).exists(),
+            "`--output -` created a file named {stray:?} instead of streaming to stdout"
+        );
+    }
+}
+
 /// `--output -` spells stdout for step-summary, which streams by default.
 /// The dash gate at the CLI boundary rejects it only for parquet/sqlite/spa
 /// — formats that genuinely cannot stream — so step-summary reached the
@@ -4507,6 +4546,7 @@ mod explain_path {
         "CODELORE_LLM_BASE_URL",
         "CODELORE_LLM_API_KEY",
         "CODELORE_LLM_MODEL",
+        "CODELORE_LLM_TIMEOUT_SECS",
         "ANTHROPIC_API_KEY",
     ];
 

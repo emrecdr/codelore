@@ -220,7 +220,17 @@ impl CalibrationArtifact {
                 self.format_version
             ));
         }
-        if self.languages.is_empty() && self.repo_metrics.is_none() {
+        // `Some(RepoMetrics { values: {} })` is as inert as `None` — the
+        // rule `attach_repo_metrics` states for the write path ("empty pools
+        // carry no information and must not activate the lens") has to hold
+        // on the read path too, or a hand-built artifact walks straight past
+        // the guard the write path would have refused to produce.
+        if self.languages.is_empty()
+            && self
+                .repo_metrics
+                .as_ref()
+                .is_none_or(|pools| pools.values.is_empty())
+        {
             return Err(
                 "artifact contains no languages and no repo_metrics pools — every lookup \
                  would silently report \"not in corpus\"; regenerate it from a non-empty \
