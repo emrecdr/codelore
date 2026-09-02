@@ -554,7 +554,7 @@ The step summary appears at the bottom of the workflow run page in the GitHub Ac
 
 | Rule ID | Tags | When it fires |
 |---|---|---|
-| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = (100 − cognitive_health) / 10` (range 0–10); `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
+| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = max(0.1, (100 − cognitive_health) / 4)` (range 0.1–10 — health is bounded to [60, 100], so /4 spans the full scale); `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
 | `CODELORE-CLONE` | `behavioral`, `clone`, `type-1`, `type-2` | One result per clone family; `security-severity = 3 + family_size`, capped at 6 |
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
 | `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
