@@ -66,6 +66,26 @@ jobs:
       # rather than trusting a digest computed by the build job. Each
       # staged artifact directory holds exactly one archive.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: dist/*
+
+      # Export the sigstore bundle so the release job can publish it as a
+      # RELEASE ASSET, not only to the attestations API: asset-based
+      # verifiers (OpenSSF Scorecard's Signed-Releases check among them)
+      # inspect release assets for `*.sigstore.json` and never consult the
+      # API, so without this the releases read as unsigned forever no
+      # matter how correctly they are attested. Uploaded verbatim — the
+      # per-archive renaming happens in the release job, which runs shell
+      # anyway and holds no signing permissions; this signer stays
+      # first-party-actions-only, which the signing-isolation guard
+      # enforces (a `run:` step beside the token fails the gate). The
+      # `attestation-` prefix keeps these out of the release job's
+      # `codelore-*` artifact download.
+      - name: Upload the attestation bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: attestation-${{ inputs.artifact-name }}
+          path: ${{ steps.attest.outputs.bundle-path }}
+          if-no-files-found: error

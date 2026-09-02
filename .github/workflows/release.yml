@@ -253,11 +253,59 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Archives only: the `attestation-*` bundle artifacts all carry the
+      # same inner filename (the attest action's bundle), so merging them
+      # here would collapse five bundles into one. They are downloaded
+      # un-merged below and renamed per archive.
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: codelore-*
           path: dist/
           merge-multiple: true
+
+      - name: Download attestation bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: attestation-*
+          path: bundles/
+
+      # One `<archive>.sigstore.json` release asset per archive: asset-based
+      # verifiers (OpenSSF Scorecard's Signed-Releases among them) read
+      # release assets, never the attestations API, so publishing the
+      # bundles is what makes the signing externally visible. This rename
+      # runs HERE and not in the trusted signer because the signer must not
+      # carry `run:` steps — the signing-isolation guard enforces that. The
+      # `.sigstore.json` suffix keeps these out of the SHA256SUMS archive
+      # globs below.
+      - name: Stage attestation bundles beside their archives
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          staged=0
+          for dir in bundles/attestation-codelore-*/; do
+            target=${dir#bundles/attestation-codelore-}
+            target=${target%/}
+            archives=(dist/codelore-*-"$target".tar.gz dist/codelore-*-"$target".zip)
+            if [ "${#archives[@]}" -ne 1 ]; then
+              echo "::error::expected exactly one archive for target ${target}, found ${#archives[@]}"
+              exit 1
+            fi
+            bundle=("$dir"/*)
+            if [ "${#bundle[@]}" -ne 1 ]; then
+              echo "::error::expected exactly one bundle in ${dir}, found ${#bundle[@]}"
+              exit 1
+            fi
+            cp "${bundle[0]}" "dist/$(basename "${archives[0]}").sigstore.json"
+            staged=$((staged + 1))
+          done
+          # Cardinality floor: zero staged bundles means the attest matrix
+          # and this glob drifted apart — fail rather than publish unsigned.
+          if [ "$staged" -lt 1 ]; then
+            echo "::error::no attestation bundles staged; attest matrix and release glob have drifted"
+            exit 1
+          fi
+          echo "staged $staged attestation bundle(s)"
 
       - name: Generate SHA256SUMS
         run: |
@@ -316,9 +364,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Archives only (the `attestation-*` bundles share one inner filename
+      # and would collapse under merge; the formula needs only archives).
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: codelore-*
           path: dist/
           merge-multiple: true
 

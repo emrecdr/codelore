@@ -183,14 +183,26 @@ runs:
         mkdir -p "$DEST"
         echo "Downloading $URL"
         curl -fsSL --retry 3 --retry-delay 2 -o "$DEST/$ARCHIVE" "$URL"
-        # Verify the download against the release's SHA256SUMS manifest.
-        # Backward-compatible: releases cut before the manifest existed have
-        # no such file, so a 404 (or a manifest lacking this archive's entry)
-        # warns and proceeds; a present entry that fails to match is a hard
-        # failure.
+        # Verify the download against the release's SHA256SUMS manifest,
+        # branching on HTTP STATUS rather than on curl success: only a 404
+        # is the documented pre-manifest case (releases cut before the
+        # manifest existed) and may proceed with a warning. Every other
+        # failure to fetch — 5xx, a proxy, rate limiting, an adversary who
+        # serves the archive but drops the manifest — is indistinguishable
+        # from tampering and must NOT silently skip verification (the
+        # `-fsSL || warn` shape this replaces failed open on all of them;
+        # release.yml's tag-probe documents the same lesson). A manifest
+        # that exists but lacks this archive's entry is also a hard
+        # failure: the release pipeline checksums every published archive,
+        # so a missing entry means a mismatched or tampered pair.
         SUMS_URL="https://github.com/emrecdr/codelore/releases/download/${TAG}/SHA256SUMS"
-        if curl -fsSL --retry 3 --retry-delay 2 -o "$DEST/SHA256SUMS" "$SUMS_URL" 2>/dev/null \
-          && grep -q " ${ARCHIVE}\$" "$DEST/SHA256SUMS"; then
+        http_code=$(curl -sSL --retry 3 --retry-delay 2 -o "$DEST/SHA256SUMS" \
+          -w "%{http_code}" "$SUMS_URL" || echo "000")
+        if [ "$http_code" = "200" ]; then
+          if ! grep -q " ${ARCHIVE}\$" "$DEST/SHA256SUMS"; then
+            echo "::error::SHA256SUMS for ${TAG} has no entry for ${ARCHIVE}; refusing to run an unverified binary"
+            exit 1
+          fi
           # Prefer sha256sum (Linux runners, Git-Bash on Windows); fall back
           # to `shasum -a 256` on runners that ship only the Perl tool.
           if command -v sha256sum >/dev/null 2>&1; then
@@ -206,8 +218,11 @@ runs:
             echo "::error::checksum verification failed for $ARCHIVE"
             exit 1
           fi
+        elif [ "$http_code" = "404" ]; then
+          echo "::warning::no SHA256SUMS published for ${TAG}; skipping checksum verification (pre-manifest release)"
         else
-          echo "::warning::no SHA256SUMS published for ${TAG}; skipping checksum verification (older release)"
+          echo "::error::could not fetch SHA256SUMS for ${TAG} (HTTP ${http_code}); refusing to run an unverified binary"
+          exit 1
         fi
         case "$EXT" in
           tar.gz) tar -xzf "$DEST/$ARCHIVE" -C "$DEST" ;;
