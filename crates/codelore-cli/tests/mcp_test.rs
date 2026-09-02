@@ -2217,9 +2217,18 @@ fn mcp_refuses_to_serve_a_nonexistent_repo() {
         .stdin(Stdio::null())
         .output()
         .expect("spawn codelore mcp");
-    assert!(
-        !out.status.success(),
-        "a nonexistent repo must be a startup error, not a served session"
+    // Pinned to the exact code, not merely "nonzero": a bare failure check
+    // accepts a panic (the workspace unwinds, so a panic escaping main exits
+    // 101) and a signal kill just as readily as the intended error, and it
+    // accepted the wrong code here for a whole release — the startup guard
+    // was raising an untyped error, which main's chain-walk could not map,
+    // so a repository misconfiguration exited 1 instead of the spec's 3.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a nonexistent repo is a repository error (spec exit 3), got {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
