@@ -12,7 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
+use codelore_lib::cli_api::CodeLoreError;
 use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::analyses::clones::{ClonesRow, run_clones};
 use codelore_lib::cli_api::analyses::code_health::run_code_health;
@@ -216,7 +217,13 @@ pub fn parse_rev_range(repo: &Path, range: &str) -> Result<(String, String, bool
         let head_sha = git_rev_parse(repo, head_ref)?;
         return Ok((base_sha, head_sha, false));
     }
-    Err(anyhow!("rev range must contain '..' or '...': {range:?}"))
+    // Exit 2: a malformed RANGE argument is a CLI error, not an analysis
+    // failure — the documented contract reserves 4 for "codelore fell over"
+    // and 1 for a genuine gate verdict, so CI can tell the three apart.
+    Err(
+        CodeLoreError::InvalidOptions(format!("rev range must contain '..' or '...': {range:?}"))
+            .into(),
+    )
 }
 
 fn git_rev_parse(repo: &Path, rev: &str) -> Result<String> {
@@ -227,10 +234,12 @@ fn git_rev_parse(repo: &Path, rev: &str) -> Result<String> {
         .output()
         .with_context(|| format!("git rev-parse {rev}"))?;
     if !out.status.success() {
-        return Err(anyhow!(
+        // Exit 3: the rev did not resolve against this repository.
+        return Err(CodeLoreError::Repo(format!(
             "git rev-parse failed for {rev:?}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        ))
+        .into());
     }
     Ok(String::from_utf8(out.stdout)?.trim().to_string())
 }
@@ -243,10 +252,11 @@ fn git_merge_base(repo: &Path, a: &str, b: &str) -> Result<String> {
         .output()
         .with_context(|| "git merge-base")?;
     if !out.status.success() {
-        return Err(anyhow!(
+        return Err(CodeLoreError::Repo(format!(
             "git merge-base {a}..{b} failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        ))
+        .into());
     }
     Ok(String::from_utf8(out.stdout)?.trim().to_string())
 }
@@ -304,10 +314,11 @@ fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
         .output()
         .with_context(|| format!("git worktree add {sha}"))?;
     if !out.status.success() {
-        return Err(anyhow!(
+        return Err(CodeLoreError::Repo(format!(
             "git worktree add failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        ))
+        .into());
     }
     // Git succeeded — promote the tempdir to owned. The Worktree's Drop
     // impl handles `git worktree remove` cleanup from here.
@@ -497,10 +508,11 @@ fn list_pr_files(
         .output()
         .context("git diff --name-only")?;
     if !out.status.success() {
-        return Err(anyhow!(
+        return Err(CodeLoreError::Repo(format!(
             "git diff failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        ))
+        .into());
     }
     Ok(String::from_utf8(out.stdout)?
         .lines()
@@ -658,11 +670,12 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
     // base SHA: the CI gate trivially passes on what should obviously
     // be a configuration error.
     if base_sha == head_sha {
-        anyhow::bail!(
+        return Err(CodeLoreError::InvalidOptions(format!(
             "base and head resolve to the same commit {base_sha} \
              (range {:?}); nothing to diff",
             args.range
-        );
+        ))
+        .into());
     }
 
     // Base analysis: load from --base-cache if present, otherwise compute + maybe cache.
