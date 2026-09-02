@@ -3108,4 +3108,21 @@ identical outputs — F323's exact silent-ignore shape. `diff` is
 deliberately untouched: it has no calibration-consuming MCP twin
 (`delta_health` is artifact-blind by design).
 
-The next sweep re-opens at **F356**.
+### F356 (Fixed — Unreleased) — dashboard: unreadable circle-pack lenses, boot-loop blank page, and an unclosable drawer
+
+Four SPA defects in one batch, each verified in a real browser. The
+circle-pack's metric literal omitted `ai_pct`, `mi`, and `mi_rank`, so
+switching the size/color lens to any of the three silently rendered the
+default metric — the selector claimed one thing and drew another. A
+throwing panel in the boot loop aborted every panel after it, blanking
+the rest of the dashboard with no signal; each panel now boots inside a
+try/catch that leaves an in-place failure note and lets its siblings
+continue. The detail drawer advertised `role="dialog"` but ignored
+Escape; it closes now. And the tour plus the injected click targets
+were mouse-only (`tabindex` missing), unreachable by keyboard. The hash
+contract also gained the two architecture-view keys the SPA already
+wrote but refused to read back (closed-enum validated on read,
+emitted only when non-default). Browser tests pin the metric wiring via
+the build-hierarchy hook and the Escape-close path.
+
+The next sweep re-opens at **F357**.

@@ -29,6 +29,12 @@
           buttons[j].classList.toggle('tab-active', isCurrent);
           buttons[j].classList.toggle('active', isCurrent);
           buttons[j].setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+          // Roving tabindex must follow a MOUSE selection too: the WAI-ARIA
+          // tabs pattern makes the selected tab the single tab stop, and
+          // without this line a click left tabindex on the previously
+          // arrow-selected tab — Tab landed on a non-selected tab, and one
+          // arrow press silently changed the lens (arrows activate on move).
+          buttons[j].setAttribute('tabindex', isCurrent ? '0' : '-1');
         }
         // Wrap the re-render in startViewTransition so the colour-
         // mode swap smoothly crossfades. On unsupported
@@ -70,11 +76,19 @@
         if (!child) {
           child = { name: segment, fullPath: acc };
           if (j === parts.length - 1) {
+            // Every field a colour lens reads must be copied here — this
+            // literal is the SOLE producer of `metrics`, and the AI lens
+            // rendered the whole map as "no data" grey for months because
+            // ai_pct wasn't in it while the table two panels down read the
+            // raw row and showed real percentages.
             child.metrics = {
               revisions: row.revisions,
               cognitive: row.cognitive,
               cognitive_health: row.cognitive_health,
               hotspot_score: row.hotspot_score,
+              ai_pct: row.ai_pct,
+              mi: row.mi,
+              mi_rank: row.mi_rank,
             };
           } else {
             child.children = [];
@@ -87,6 +101,11 @@
     }
     return root;
   }
+  // Test hook, following the window._codelore* convention (_codeloreShowDetail,
+  // _codoreRerenderers): the circle-pack renders to an ECharts CANVAS, so the
+  // metrics copy above is unreachable from the DOM — exposing the builder lets
+  // the browser suite pin that every colour-lens field survives the copy.
+  window._codeloreBuildFsHierarchy = buildFsHierarchy;
 
   // Interpolated yellow → red ramp for cognitive complexity.
   // ratio ∈ [0, 1].

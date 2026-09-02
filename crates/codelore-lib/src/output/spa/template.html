@@ -2376,19 +2376,27 @@
        initialises so there's no flash-of-visible-content.
        `@keydown.escape.window` listens at the document level — Escape
        closes the drawer regardless of focus. -->
-  <!-- Native `<dialog>` element backs the file-detail drawer. Gives
-       free focus-trap, free Escape-closes, free `::backdrop`.
-       Alpine.store('detail') calls `.showModal()` / `.close()`
-       directly; no `x-show`/`x-cloak`/`x-transition` markup. Native
-       modal management is strictly better for a11y (focus
-       restoration, screen-reader announcement). -->
+  <!-- Native `<dialog>` element backs the file-detail drawer, opened
+       NON-modally via `.show()` (deliberate: the page behind stays
+       scrollable and interactive). Non-modal mode gets no free
+       focus-trap, backdrop, or Escape handling from the platform, so
+       focus management is wired by hand in the store and Escape comes
+       from the `@keydown.escape.window` directive on the element. -->
   <!-- Dropped the DaisyUI `.modal` class: it ships `inset: 0` which
        over-constrained the .detail-drawer (left: 0 + right: 0 + width:
        440px → CSS spec resolves by ignoring `right`, putting the
        drawer at the top-left corner). `.detail-drawer` alone gives
        the right-side slide-in correctly. -->
+  <!-- `@keydown.escape.window` is the ACTUAL Escape handler: the drawer
+       opens non-modally (`.show()`, deliberate — see the store comment),
+       so the platform installs no close watcher and Escape does nothing
+       natively. Several comments used to claim native Escape-to-close
+       from the abandoned showModal() era; this directive is what makes
+       the universal convention true. -->
   <dialog class="detail-drawer" id="file-detail-drawer"
-          aria-labelledby="drawer-title" hidden>
+          aria-labelledby="drawer-title" hidden
+          x-data
+          @keydown.escape.window="$store.detail && $store.detail.hide()">
     <div class="modal-box max-w-2xl">
       <div class="drawer-header flex items-center justify-between mb-2">
         <h3 id="drawer-title" class="text-lg font-semibold">File details</h3>
@@ -2405,8 +2413,9 @@
          bottom-left "close" button) — that backdrop was for
          the modal mode we no longer use (showModal); the
          single × button in the drawer header is now the
-         canonical close affordance, alongside the native
-         Escape-to-close. -->
+         canonical close affordance, alongside the
+         `@keydown.escape.window` directive on the dialog (non-modal
+         `show()` gets NO native Escape handling). -->
   </dialog>
 
   <!-- DaisyUI `footer footer-center` provides centred horizontal
@@ -2731,6 +2740,19 @@
             if (isFinite(n)) layout[k] = n;
           }
         });
+        // The two plain-string view knobs: both are user-facing tab
+        // switches (force/layered graph layout, structure/fusion DSM),
+        // and dropping them from the URL contract silently sent a shared
+        // fusion-matrix link to the structure matrix. Closed enums, so an
+        // unknown value is ignored rather than trusted.
+        if (params.get('archGraphLayout') === 'force' ||
+            params.get('archGraphLayout') === 'layered') {
+          layout.archGraphLayout = params.get('archGraphLayout');
+        }
+        if (params.get('archMatrixMode') === 'structure' ||
+            params.get('archMatrixMode') === 'fusion') {
+          layout.archMatrixMode = params.get('archMatrixMode');
+        }
       }
       function writeStoresToUrl() {
         const params = new URLSearchParams();
@@ -2746,6 +2768,8 @@
         if (layout.trendsTopN      !== 10)      params.set('trendsTopN',      String(layout.trendsTopN));
         if (layout.parallelTopN    !== 20)      params.set('parallelTopN',    String(layout.parallelTopN));
         if (layout.kameiWindow     !== 30)      params.set('kameiWindow',     String(layout.kameiWindow));
+        if (layout.archGraphLayout !== 'force')     params.set('archGraphLayout', String(layout.archGraphLayout));
+        if (layout.archMatrixMode  !== 'structure') params.set('archMatrixMode',  String(layout.archMatrixMode));
         const newHash = params.toString();
         const cur = window.location.hash.slice(1);
         if (newHash !== cur) {
