@@ -203,27 +203,31 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
     })
 }
 
-fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
-    use serde_json::json;
-
-    // security-severity proxy on the REAL health range: `cognitive_health`
-    // is bounded to [60, 100] (the cognitive term deducts at most 40
-    // points), so `(100 - health) / 4` spans the full 0–10 severity scale.
-    // The earlier `/ 10` divisor capped severity at 4.0 — the `error`
-    // branch below was unreachable and a healthy file emitted 0.0, which
-    // GitHub maps to "no severity". Floored at 0.1 so every emitted
-    // hotspot carries a severity (it ranked; the floor is the "still a
-    // hotspot, just structurally healthy" grade).
-    let security_severity = ((100.0 - row.cognitive_health) / 4.0).max(0.1);
-
-    // SARIF `level` derived from the same security-severity scale that
-    // populates `properties.security-severity`. One source of truth —
-    // mirrors build_live_clone_result. Was previously a separate threshold
-    // on row.hotspot_score (a percentile-rank value bound to the current
-    // run's repo), which produced inconsistent rendering: a small repo
-    // where the top hotspot scored 0.4 emitted zero "warning" findings, a
-    // larger repo emitted many. Severity-bands are absolute and align with
-    // how SARIF consumers actually grade results.
+/// The health-based SARIF grade: a `security-severity` score and the
+/// `level` derived from it, as one value so the two can never disagree.
+///
+/// The severity is a proxy on the REAL health range: `cognitive_health` is
+/// bounded to [60, 100] (the cognitive term deducts at most 40 points), so
+/// `(100 - health) / 4` spans the full 0–10 severity scale. A `/ 10`
+/// divisor caps severity at 4.0, which makes the `error` band unreachable
+/// and emits 0.0 for a healthy file — GitHub reads that as "no severity".
+/// Floored at 0.1 so every emitted finding carries one (it ranked; the
+/// floor is the "still a finding, just structurally healthy" grade).
+///
+/// `level` comes from the same scale rather than from a separate threshold
+/// on a percentile-rank score, which is bound to the current run's
+/// repository and rendered inconsistently across repo sizes — a small repo
+/// whose top hotspot scored 0.4 emitted zero warnings while a larger one
+/// emitted many. Severity bands are absolute and match how SARIF consumers
+/// actually grade results.
+///
+/// Shared rather than duplicated because it already drifted once: the
+/// PR-mode emitter in the CLI kept the `/ 10` divisor and a hardcoded
+/// level after this one was corrected, so the same repository graded
+/// differently depending on whether `analyze` or `diff` produced the file.
+#[must_use]
+pub fn health_grade(cognitive_health: f64) -> (f64, &'static str) {
+    let security_severity = ((100.0 - cognitive_health) / 4.0).max(0.1);
     let level = if security_severity >= 7.0 {
         "error"
     } else if security_severity >= 4.0 {
@@ -231,6 +235,13 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     } else {
         "note"
     };
+    (security_severity, level)
+}
+
+fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
+    use serde_json::json;
+
+    let (security_severity, level) = health_grade(row.cognitive_health);
 
     // Stable fingerprint: sha256 of "<repo_root>|<path>"
     let fp = sha256_prefixed(&[repo_root, &row.path]);

@@ -3312,4 +3312,34 @@ Zero is refused rather than read as "no limit", which would abort every
 request instantly. Probe: making the parser ignore its argument fails the
 test with `left: 120, right: 600`.
 
-The next sweep re-opens at **F364**.
+### F364 (Fixed — Unreleased) — PR-mode SARIF kept the pre-correction severity scale
+
+`diff_output.rs` computed `((100 - cognitive_health) / 10).clamp(0, 10)`
+with a hardcoded `"level": "warning"`, while `output/sarif.rs` had moved to
+`((100 - health) / 4).max(0.1)` with the level derived from it. Same rows
+(`HotspotRow`), same repository, two grades — decided by whether `analyze`
+or `diff` wrote the file.
+
+The consequence is one-directional and lands on the worst surface.
+`cognitive_health` is bounded to [60, 100], so a tenth-scale severity never
+exceeds 4.0: the `error` band was unreachable, and a structurally healthy
+file emitted 0.0, which GitHub renders as "no severity". The under-reporting
+surface is the one that posts to pull requests.
+
+The derivation moved into `output/sarif.rs` as `health_grade`, returning
+severity and level as one value so they cannot disagree, called by both
+emitters. This follows an existing seam rather than creating one:
+`diff_output.rs` already imports `diff_finding_hash` and
+`primary_location_line_hash` from that module. `score_increased` results
+are deliberately untouched — `ScoreDelta` carries no health field, so a
+grade would have to be invented.
+
+Probe: restoring the `/ 10` divisor fails the new sweep with
+`left: ["note", "warning"]` against `right: ["error", "note", "warning"]` —
+the unreachable band, named. That property is why the test sweeps the range
+instead of asserting a value: every single-value assertion still agreed with
+itself under the broken divisor, which is how the drift survived. A stale
+comment in the SARIF test file still documenting the `/ 10` formula was
+corrected with it.
+
+The next sweep re-opens at **F365**.

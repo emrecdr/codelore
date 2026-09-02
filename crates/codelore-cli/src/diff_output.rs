@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::analyses::delta_health::RiskClass;
 use codelore_lib::cli_api::facts::FactsDb;
-use codelore_lib::output::sarif::{SARIF_SCHEMA_URL, TOOL_INFO_URI};
+use codelore_lib::output::sarif::{SARIF_SCHEMA_URL, TOOL_INFO_URI, health_grade};
 
 use crate::diff::DiffOutput;
 
@@ -560,9 +560,17 @@ fn emit_sarif(
     let mut hotspot_results: Vec<serde_json::Value> = Vec::new();
     for h in &output.hotspots.rank_entrants {
         let evidence = evidence_for(&h.path);
+        // Same rows (`HotspotRow`) and same grade as the non-diff emitter.
+        // These two drifted: this surface kept a `/ 10` divisor and a
+        // hardcoded level after the shared one was corrected to `/ 4`, so
+        // the same repository graded differently depending on whether
+        // `analyze` or `diff` produced the file — and, because `/ 10` caps
+        // severity below the `error` band, the PR-facing surface was the
+        // one under-reporting.
+        let (security_severity, level) = health_grade(h.cognitive_health);
         let mut result = json!({
             "ruleId": "CODELORE-HOTSPOT",
-            "level": "warning",
+            "level": level,
             "message": {
                 "text": format!(
                     "New hotspot in PR: '{}' (score={:.3}, revisions={}, cognitive={:.1})",
@@ -576,7 +584,7 @@ fn emit_sarif(
                 }
             }],
             "properties": {
-                "security-severity": ((100.0 - h.cognitive_health) / 10.0).clamp(0.0, 10.0),
+                "security-severity": security_severity,
                 "codelore/diff-classification": "rank-entrant",
                 "codelore/score": h.hotspot_score,
                 "tags": ["behavioral", "hotspot", "pr-diff"]

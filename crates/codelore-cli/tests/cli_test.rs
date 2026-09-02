@@ -2607,6 +2607,28 @@ fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
     );
 }
 
+/// A SARIF result's `level` is derived FROM its `security-severity`, so a
+/// result whose level disagrees with its own severity band was graded by
+/// something other than the shared derivation. The PR-mode emitter once
+/// hardcoded "warning" beside a severity computed with a divisor that
+/// capped below the error band; both halves of that fail here.
+fn assert_level_matches_severity(result: &serde_json::Value) {
+    let sev = result["properties"]["security-severity"]
+        .as_f64()
+        .expect("every hotspot result carries a security-severity");
+    let expected = if sev >= 7.0 {
+        "error"
+    } else if sev >= 4.0 {
+        "warning"
+    } else {
+        "note"
+    };
+    assert_eq!(
+        result["level"], expected,
+        "level must follow the severity band; severity was {sev}"
+    );
+}
+
 #[test]
 fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
     // Build a fixture where the base has no Rust files (no hotspots at base)
@@ -2699,6 +2721,8 @@ fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
         !tfl.is_empty(),
         "hotspot result must carry at least one evidence commit in codeFlows"
     );
+
+    assert_level_matches_severity(r);
 
     // Must carry relatedLocations — plain location objects, no "location" wrapper.
     let related = r["relatedLocations"]
