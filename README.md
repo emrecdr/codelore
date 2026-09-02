@@ -64,6 +64,8 @@ gh attestation verify codelore-<tag>-<target>.tar.gz \
   --signer-workflow emrecdr/codelore/.github/workflows/attest-artifact.yml
 ```
 
+Each release also ships one `<archive>.sigstore.json` attestation bundle per artifact, so the same check runs offline: `gh attestation verify <archive> --bundle <archive>.sigstore.json --owner emrecdr`.
+
 The rest of this README assumes `codelore` is on your PATH — substitute `./target/release/codelore` if you skipped the install step.
 
 ```bash
@@ -533,7 +535,7 @@ Run with `--group-file groups.txt`:
 codelore analyze --group-file groups.txt --analysis revisions
 ```
 
-Analyses then operate at the **group** level — `Auth`, `DB`, etc. — instead of raw paths. Plain-text LHS is matched as a prefix (anchored + slash-bound); regex LHS (starting with `^`) supports **full lookaround** via `fancy-regex` (code-maat's own test fixtures use this).
+Analyses then operate at the **group** level — `Auth`, `DB`, etc. — instead of raw paths. Plain-text LHS is matched as a prefix (anchored + slash-bound); regex LHS (starting with `^`) supports **full lookaround** via `fancy-regex` (code-maat's own test fixtures use this). A few analyses whose joins key on real paths — `clone-coupling`, `crossing`, `function-hotspots` — reject the flag instead of silently emptying.
 
 Default: **non-strict** (unmapped paths keep their raw names; safer than silent drop). Pass `--strict-grouping` to drop unmapped paths instead (code-maat's behavior).
 

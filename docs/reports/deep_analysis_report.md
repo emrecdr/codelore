@@ -3125,4 +3125,33 @@ wrote but refused to read back (closed-enum validated on read,
 emitted only when non-default). Browser tests pin the metric wiring via
 the build-hierarchy hook and the Escape-close path.
 
-The next sweep re-opens at **F357**.
+### F357 (Active) — `--format step-summary --output -` still creates a literal `-` file
+
+F351 taught `emit_to_output_or_stdout` the `-` = stdout convention and
+gated the three file-path formats (parquet, sqlite, spa) behind an
+explicit rejection — but the step-summary dispatch takes neither path:
+it writes the raw `--output` value through `atomic_publish` with no dash
+filter and no rejection, so `--format step-summary --output -`
+reproduces F351's exact failure shape — a junk file named `-` plus a
+`✓ step-summary written to -` confirmation. Either route the dispatch
+through the shared dash filter or add step-summary to the rejection
+list; the default stdout path (no `--output`) is unaffected, and no
+documented recipe exercises the combination. Surfaced by the 2026-09-02
+docs-currency audit while verifying F351's coverage.
+
+### F358 (Active) — `codelore diff`'s SARIF emitter still carries the pre-F347 severity shape
+
+F347 aligned the analyze/check emitter (`output/sarif.rs`): hotspot
+`security-severity` became `max(0.1, (100 − cognitive_health) / 4)`
+with band-derived levels. The CLI's own diff emitter
+(`diff_output.rs`) was not touched: rank-entrant hotspot results still
+compute `(100 − cognitive_health) / 10` clamped to [0, 10],
+score-increase results carry a hardcoded `warning` level and no
+`security-severity` at all, and diff-mode CODELORE-CLONE emits a fixed
+`note` level with no severity. A Code Scanning instance consuming both
+surfaces ranks the same file differently depending on which command
+produced the finding. The user guide's SARIF rule table is scoped to
+the analyze/check emitters until the two share one severity mapping.
+Surfaced by the 2026-09-02 docs-currency audit.
+
+The next sweep re-opens at **F359**.
