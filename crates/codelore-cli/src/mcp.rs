@@ -1876,20 +1876,27 @@ pub fn run_mcp_server(
     // surfaces the misconfiguration at connect time with the fix named.
     {
         use codelore_lib::cli_api::repo::Repo as _;
+        // Both failures are repository errors, so they must reach `main`'s
+        // chain-walk as a typed `CodeLoreError` — `anyhow::Error::new(e)`
+        // keeps the variant in the chain, the same construction
+        // `preflight_and_open_repo` uses. A bare `anyhow!("… {e} …")` would
+        // render the error into a STRING, leaving nothing to downcast, and
+        // the exit code would silently fall back to 1 instead of the spec's
+        // 3 for a repo error.
         let git_repo = codelore_lib::cli_api::repo::GixRepo::open(&repo).map_err(|e| {
-            anyhow::anyhow!(
-                "cannot serve MCP for {}: {e} — run codelore mcp from the \
+            anyhow::Error::new(e).context(format!(
+                "cannot serve MCP for {} — run codelore mcp from the \
                  repository root, or pass --repo <repo-root>",
                 repo.display()
-            )
+            ))
         })?;
         git_repo.head_sha().map_err(|e| {
-            anyhow::anyhow!(
-                "cannot serve MCP for {}: no resolvable HEAD ({e}) — the \
-                 path is not a usable git repository (empty repo, or a \
-                 corrupt/bare checkout)",
+            anyhow::Error::new(e).context(format!(
+                "cannot serve MCP for {}: no resolvable HEAD — the path is \
+                 not a usable git repository (empty repo, or a corrupt/bare \
+                 checkout)",
                 repo.display()
-            )
+            ))
         })?;
     }
     // Resolved once: every tool that opens the fact store reads this root,
