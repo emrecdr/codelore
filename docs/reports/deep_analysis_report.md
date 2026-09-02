@@ -2950,4 +2950,21 @@ chronological order exists. Seeded tests pin the modify-then-delete
 collapse and the guard's same-key/different-key behavior via a sentinel
 row; both fail on the unfixed shapes.
 
-The next sweep re-opens at **F347**.
+### F347 (Fixed — Unreleased) — the SARIF error band was unreachable, and the rule metadata undersold the findings
+
+The hotspot `security-severity` proxy divided by 10 a health value the
+hotspots analysis bounds to [60, 100], capping severity at 4.0: the
+`error` level (≥ 7.0) was dead code, `warning` fired only at exactly
+4.0, and a structurally healthy hotspot emitted 0.0 — which GitHub maps
+to "no severity". The emitter's own band tests could only reach the
+bands with out-of-range fixture health values, which is how the dead
+branch hid. The divisor now spans the real range, floored at 0.1, with
+in-range band tests and a floor test. All five rule surfaces also gained
+the consumer-read metadata that was missing (`fullDescription`, `help`
+with the markdown form GitHub prefers, `defaultConfiguration.level`,
+hotspot `precision`, and `properties.problem.severity` — the correct
+severity channel for non-security rules). Remaining from the same
+research, deliberately not in this change: self-truncation above the
+5,000-results display cap with disclosure.
+
+The next sweep re-opens at **F348**.
