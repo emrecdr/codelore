@@ -2822,4 +2822,18 @@ regression. Remaining bucketed-table hygiene (no build-once guard;
 lexicographic `MAX(change_type)` beside chronological `arg_max`) is
 recorded in the second-wave report and lands separately.
 
-The next sweep re-opens at **F339**.
+### F339 (Fixed — Unreleased) — three analyses summed overlapping complexity rows into per-file SLOC
+
+`complexity_metrics` rows overlap by construction (`collect_entities`
+pushes the root unit space, then recurses into every child).
+`effort_exposure::fetch_sloc_map`, `code_familiarity`'s `sloc_per_path`,
+and the knowledge DOE `head_sloc` all took `SUM(sloc)` per path — a ~1-3x
+inflation that does not cancel out of shares, tilting every ratio toward
+function-dense files; `effort_exposure`'s comment asserted the opposite
+rationale, while `code_health`'s file aggregation one module away already
+used the correct `MAX`. All three now take the unit row via `MAX`. The
+seeded regression test fails with the exact doubled value on the summing
+form, and the intended output shift was measured before/after on this
+repository (delta recorded in the fix PR).
+
+The next sweep re-opens at **F340**.

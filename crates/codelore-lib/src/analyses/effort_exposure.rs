@@ -102,12 +102,16 @@ const BANDS_DDL: &str = "
 
 /// Fetch per-file SLOC totals from `complexity_metrics` (HEAD snapshot).
 ///
-/// `SUM` collapses multiple entity rows (functions / methods) per file into one
-/// file-level SLOC value, matching the granularity of `eh_bands_v1`.
+/// `MAX` picks the file-spanning unit row: `complexity_metrics` holds the
+/// whole-file space PLUS one row per nested impl/class/function, whose
+/// spans overlap — summing them counts function bodies twice (and methods
+/// inside an impl three times), inflating every file's SLOC by a
+/// function-density-dependent factor. `code_health`'s file aggregation
+/// uses the same `MAX` for the same reason.
 fn fetch_sloc_map(db: &FactsDb) -> Result<HashMap<String, i64>> {
     let mut stmt = db
         .conn()
-        .prepare("SELECT path, COALESCE(SUM(sloc), 0) FROM complexity_metrics GROUP BY path")
+        .prepare("SELECT path, COALESCE(MAX(sloc), 0) FROM complexity_metrics GROUP BY path")
         .map_err(|e| CodeLoreError::Analysis(format!("prepare sloc query: {e}")))?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
