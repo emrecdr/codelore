@@ -3154,4 +3154,28 @@ produced the finding. The user guide's SARIF rule table is scoped to
 the analyze/check emitters until the two share one severity mapping.
 Surfaced by the 2026-09-02 docs-currency audit.
 
-The next sweep re-opens at **F359**.
+### F359 (Fixed — Unreleased) — three silent-pass holes closed, and the new cross-backend gate caught a real oracle divergence
+
+Three guard classes, one immediate payoff. (1) The spa-browser CI job
+now exports `CODELORE_REQUIRE_BROWSER` and every Chrome-skip site
+asserts it is unset before skipping, so a broken Chrome install fails
+the only JS-executing job instead of producing a silent two-minute
+green; probe: a sabotaged launcher fails the suite with the guard's
+message under the env var and still skips cleanly without it. (2)
+`check`'s gate evaluator exhaustively destructures the thresholds
+struct — every field annotated as gate, policy, or modifier — so an
+unclassified new threshold is a compile error at the evaluator; probe:
+a synthetic field fails the build with E0027 at the destructure. (3)
+The per-table fact-store digest moved to `test_support`, and a new
+differential test ingests the fixture through BOTH `Repo` backends
+requiring byte-identical digests per table — the promise CLAUDE.md
+states but no test ever checked end-to-end (`hunks` excluded by name
+for the recorded emits-none divergence, with an assert that deletes
+the exclusion the day it stops being true). First run caught
+`GitCliRepo` trimming the trailing newline git stores in every commit
+message (`trim_end_matches` on the `%B` field) while `GixRepo`'s
+`message_raw()` keeps it — all fifty fixture rows diverged; the oracle
+now keeps `%B` byte-exact, and the probe is the trim itself restored.
+Production walker untouched; no cache impact.
+
+The next sweep re-opens at **F360**.

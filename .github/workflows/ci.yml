@@ -352,6 +352,12 @@ jobs:
         # fixture helpers. `cargo test --features` doesn't include
         # default features automatically; spelling each one keeps the
         # invocation reproducible across `cargo` upgrades.
+        # CODELORE_REQUIRE_BROWSER turns a Chrome-launch failure from a
+        # silent skip into a hard failure: this job is the only place the
+        # dashboard's JS executes, and a broken Chrome install used to
+        # read as a fast green.
+        env:
+          CODELORE_REQUIRE_BROWSER: "1"
         run: cargo test --features browser-tests,spa,test-support -p codelore-lib --test spa_browser_test
 
   deny:

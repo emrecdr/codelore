@@ -605,6 +605,36 @@ fn eval_arch_gates(
 /// This is a pure compute layer: it records each gate's verdict in the returned
 /// ledger records (including `"skipped"` and `"degraded"`) and prints nothing.
 /// `run_check_cmd` renders the skip/degraded notices from those records.
+/// Compile-time exhaustiveness anchor for the AUTHORITATIVE gate surface,
+/// mirroring the destructure the MCP `check_gates` tool already carries:
+/// adding a field to `Gates` fails to compile HERE until the new gate is
+/// classified — wired into one of the `eval_*` functions below, or
+/// documented as a policy flag / modifier. Without this anchor, a gate
+/// added to `Gates` and `.codelore-thresholds.toml` could be configured
+/// and silently enforce nothing in CI (the structural half of the
+/// ledger's warning-table finding): `check` evaluated gates across
+/// independent branches with nothing holding the set together, while the
+/// advisory MCP surface was the only one guarded.
+fn assert_every_gate_is_classified(g: &codelore_lib::cli_api::quality_gates::Gates) {
+    use codelore_lib::cli_api::quality_gates::Gates;
+    let Gates {
+        cognitive_max: _,               // evaluated: eval_hotspot_gates
+        hotspot_score_max: _,           // evaluated: eval_hotspot_gates
+        hotspot_anchored_max: _,        // evaluated: eval_hotspot_gates
+        code_health_min: _,             // evaluated: eval_code_health_gate
+        disallow_clone_type_1: _,       // evaluated: the clone gate in evaluate_all_gates
+        max_dependency_cycles: _,       // evaluated: eval_arch_gates
+        max_propagation_cost: _,        // evaluated: eval_arch_gates
+        max_red_effort_pct: _,          // evaluated: the effort gate in evaluate_all_gates
+        code_familiarity_min: _,        // evaluated: the familiarity gate in evaluate_all_gates
+        max_findings_in_hot_files: _,   // evaluated: the external-findings gate
+        corpus_percentile_max: _,       // evaluated: the corpus-lens gate
+        fail_on_degraded: _,            // policy: degraded-gate exit semantics, not a gate
+        fail_on_skipped: _,             // policy: cross-surface exit-code semantics
+        red_effort_exempt_improving: _, // modifier of max_red_effort_pct
+    } = g;
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
 fn evaluate_all_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
@@ -625,6 +655,7 @@ fn evaluate_all_gates(
     let mut violations = Vec::new();
     let mut recs = Vec::new();
     let g = &thresholds.gates;
+    assert_every_gate_is_classified(g);
 
     let ((hs_v, hs_r), hotspot_rows) = eval_hotspot_gates(thresholds, db, opts, ts, head_sha)?;
     let hotspot_count = hotspot_rows.len();
