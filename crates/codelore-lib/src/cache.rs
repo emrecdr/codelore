@@ -25,7 +25,13 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v20`) orphans entries whose `clones` and
+/// The current epoch (`schema_v21`) orphans entries whose Kamei enrichment
+/// (`ndev`/`nuc`/`age`/`sexp` on `commits`) was computed through the
+/// un-time-bounded rename-lineage join: a recycled filename merged two
+/// unrelated files' histories into one entity, and that attribution was
+/// persisted into the cached fact store at ingest time.
+///
+/// The prior epoch (`schema_v20`) orphans entries whose `clones` and
 /// `imports` tables were ingested under case-sensitive extension dispatch
 /// that also skipped `.pyi` stubs for clones — repositories carrying such
 /// files hold correct-but-incomplete facts under the old epoch.
@@ -44,7 +50,7 @@ use crate::Options;
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v20";
+pub const CACHE_EPOCH: &str = "schema_v21";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
