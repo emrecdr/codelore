@@ -70,7 +70,7 @@ pub struct ArchitectureTrendRow {
 pub(crate) fn sampled_commits(db: &FactsDb) -> Result<Vec<(String, String)>> {
     let commits: Vec<(String, String)> = crate::analyses::query::query_map_collect(
         db,
-        "SELECT rev, CAST(date AS TEXT) FROM commits ORDER BY date ASC, rowid ASC",
+        "SELECT rev, CAST(date AS TEXT) FROM commits ORDER BY date ASC, rowid DESC",
         [],
         "sampled-commits",
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),

@@ -2836,4 +2836,57 @@ seeded regression test fails with the exact doubled value on the summing
 form, and the intended output shift was measured before/after on this
 repository (delta recorded in the fix PR).
 
-The next sweep re-opens at **F340**.
+### F340 (Fixed — Unreleased) — the gix diff cap sat ~512x below the git default it claimed to match
+
+`MAX_DIFF_BLOB_BYTES` was 1 MiB under a comment claiming parity with
+git's `core.bigFileThreshold` default (512 MiB), so every text file past
+1 MiB entered `changes` with zero `loc_added`/`loc_deleted` on the
+production backend while `git log --numstat` counted its lines — churn,
+hotspot-velocity, code-health's churn term, and the Kamei size features
+silently drained on exactly the files most likely to be large. The
+divergence was reproduced against real git during the second-wave audit
+and is invisible to the differential suite's aggregate drift band. The
+cap now matches git's actual threshold, oversized blobs are rejected via
+an object-header size probe before their bytes load, and a differential
+test generates a multi-megabyte text file at test time pinning both
+backends to identical, nonzero per-file counts.
+
+### F341 (Fixed — Unreleased) — six chronology tiebreaks violated or ignored the rowid convention
+
+The ingest documents that gix walks reverse-chronologically (smaller
+`rowid` = newer commit) and defines the tiebreak idiom; six query sites
+diverged: coordination-needs' author-interleave LAG window visited
+same-second commits newest-first inside an ascending scan (flipping
+`prev` and corrupting the interleave count at ties), cycle-origins and
+architecture-trend inverted their historical walks the same way, the
+Kamei sparkline's last-N picked the OLDER of a same-second pair, and two
+newest-first lookups — `window_start_rev` (shared with the `[new_code]`
+gate) and the SARIF evidence chain — tiebroke on SHA lex order, which the
+ingest comments call topologically meaningless. All six now follow the
+documented rowid direction; deterministic before and after, just no
+longer chronologically wrong at ties. The seeded regression uses two
+same-second commits whose SHAs sort AGAINST chronology, so the old
+tiebreaks fail it by construction.
+
+### F342 (Fixed — Unreleased) — knowledge signals counted dead and renamed-away paths as live
+
+Two liveness holes in the knowledge family. `knowledge_shares` excluded
+deletion *events* (`change_type != 'deleted'`) but never deleted *paths*,
+so a long-deleted file kept its pre-deletion contributions and flowed
+into every consumer — coordination-needs emitted an output row per dead
+file and code-familiarity counted authors who only ever touched deleted
+files; the reviewer-credit query could re-introduce a dead path even
+after the authored rows were filtered. Separately, the knowledge
+prevalence tile's denominator (`count_live_files`) ran over raw `changes`,
+where a renamed-away source path's most recent own event is its
+pre-rename row — live forever — while the numerator was lineage-aware:
+unlike populations in one ratio. The materializer now drops dead paths at
+both stages, and the denominator reads the same lineage-aware source as
+its numerator (raw paths on both sides when lineage is off). Seeded
+regressions pin a dead path staying out of shares beside a live control
+and the renamed-away fold under lineage against the lineage-off
+population. The ingest-side `query_live_paths` shares the renamed-away
+shape but only wastes blob lookups (correctly bucketed `NotCounted`) and
+is deliberately unchanged.
+
+The next sweep re-opens at **F343**.

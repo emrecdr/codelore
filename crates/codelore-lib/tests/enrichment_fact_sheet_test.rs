@@ -293,7 +293,7 @@ fn fact_sheet_defect_evidence_section_is_additive() {
 
 #[test]
 fn numeric_values_extracts_floats() {
-    // A hand-built sheet: only whole-number-parseable values are extracted, in
+    // A hand-built sheet: whole-number-parseable values are extracted, in
     // section then key order; string values (band, author) are skipped.
     let sheet = FileFactSheet {
         path: "src/foo.rs".to_string(),

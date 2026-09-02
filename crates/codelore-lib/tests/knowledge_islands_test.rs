@@ -438,3 +438,108 @@ fn knowledge_islands_min_revs_gates_single_commit_files() {
         solo_row.total_loc,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Liveness hygiene: dead paths must not survive into knowledge_shares, and
+// the knowledge-prevalence denominator must count the same population as
+// its lineage-aware numerator.
+// ---------------------------------------------------------------------------
+
+fn seed_commit(db: &FactsDb, rev: &str, day: u32) {
+    db.execute_batch(&format!(
+        "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+         canonical_author, date, committer_date, message, is_merge, parent_count) \
+         VALUES ('{rev}', 'a@x', 'A', 'a@x', 'a@x', \
+         '2026-03-{day:02} 12:00:00', '2026-03-{day:02} 12:00:00', 'm', false, 1)"
+    ))
+    .expect("seed commit");
+}
+
+/// A path whose most recent event is a deletion keeps its pre-deletion
+/// `added`/`modified` rows past the row-level filter — the materializer
+/// must drop the PATH, not just the deletion events, or every shares
+/// consumer emits rows for files that no longer exist.
+#[test]
+fn deleted_paths_do_not_survive_into_knowledge_shares() {
+    let db = FactsDb::new_in_memory().expect("db");
+    // Newest first: c3 deletes dead.rs; c2 modifies live.rs; c1 adds both.
+    seed_commit(&db, "c3", 3);
+    seed_commit(&db, "c2", 2);
+    seed_commit(&db, "c1", 1);
+    for stmt in [
+        "INSERT INTO author_aliases VALUES ('A', 'a@x', 'a@x', false)",
+        "INSERT INTO changes VALUES ('c1', 'dead.rs', 'added', NULL, 10, 0)",
+        "INSERT INTO changes VALUES ('c1', 'live.rs', 'added', NULL, 10, 0)",
+        "INSERT INTO changes VALUES ('c2', 'live.rs', 'modified', NULL, 3, 1)",
+        "INSERT INTO changes VALUES ('c3', 'dead.rs', 'deleted', NULL, 0, 10)",
+    ] {
+        db.execute_batch(stmt).expect("seed");
+    }
+    let opts = Options {
+        min_revs: 1,
+        ..Options::default()
+    };
+    codelore_lib::analyses::knowledge::shares::materialize_knowledge_shares(&db, &opts)
+        .expect("materialize");
+
+    let dead: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_shares WHERE path = 'dead.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query dead");
+    assert_eq!(
+        dead, 0,
+        "a path whose last event is a deletion must not appear in knowledge_shares"
+    );
+    let live: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_shares WHERE path = 'live.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query live");
+    assert!(live >= 1, "the live control path must remain present");
+}
+
+/// A renamed-away source path's most recent own event is its pre-rename
+/// row, so on the raw table it reads live forever. The denominator must
+/// use the same lineage-aware source as the numerator: under lineage the
+/// retired name folds onto its canonical target and the count is 1.
+#[test]
+fn count_live_files_folds_renamed_away_paths_under_lineage() {
+    use codelore_lib::analyses::knowledge_islands::count_live_files;
+
+    let db = FactsDb::new_in_memory().expect("db");
+    seed_commit(&db, "c2", 2);
+    seed_commit(&db, "c1", 1);
+    for stmt in [
+        "INSERT INTO changes VALUES ('c1', 'a.rs', 'added', NULL, 5, 0)",
+        "INSERT INTO changes VALUES ('c2', 'b.rs', 'renamed', 'a.rs', 0, 0)",
+    ] {
+        db.execute_batch(stmt).expect("seed");
+    }
+
+    let lineage_on = Options {
+        min_revs: 1,
+        use_canonical_lineage: true,
+        ..Options::default()
+    };
+    assert_eq!(
+        count_live_files(&db, &lineage_on).expect("count"),
+        1,
+        "under lineage the retired name folds onto its canonical target — one live file"
+    );
+
+    let lineage_off = Options {
+        min_revs: 1,
+        use_canonical_lineage: false,
+        ..Options::default()
+    };
+    assert_eq!(
+        count_live_files(&db, &lineage_off).expect("count"),
+        2,
+        "with lineage off both sides consistently use raw paths (documented population)"
+    );
+}

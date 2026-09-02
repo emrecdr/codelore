@@ -179,7 +179,7 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
                  ch.path,
                  co.canonical_author                                        AS cur,
                  LAG(co.canonical_author) OVER (
-                     PARTITION BY ch.path ORDER BY co.date, co.rowid
+                     PARTITION BY ch.path ORDER BY co.date, co.rowid DESC
                  )                                                          AS prev
              FROM {src} ch
              JOIN commits co ON co.rev = ch.rev

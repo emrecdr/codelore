@@ -26,8 +26,11 @@ pub struct EvidenceCommit {
 
 /// Return the top-N commits that most recently touched `path`, lineage-aware.
 ///
-/// Results are ordered newest-first (by `commits.date DESC, rev DESC` for
-/// determinism when two commits share the same timestamp).  `n` is capped at
+/// Results are ordered newest-first (by `commits.date DESC, rowid ASC` —
+/// gix walks reverse-chronologically so smaller rowids are newer, which
+/// keeps same-timestamp ties both deterministic AND chronological; a
+/// SHA-lex tiebreak was deterministic but topologically arbitrary).  `n`
+/// is capped at
 /// 5 by the caller contract — GitHub renders `codeFlows` in full but chains
 /// longer than 5 entries add noise without improving actionability.
 ///
@@ -56,7 +59,7 @@ pub fn evidence_for_path(
          FROM {src} c
          JOIN commits co USING (rev)
          WHERE c.path = ?
-         ORDER BY co.date DESC, co.rev DESC
+         ORDER BY co.date DESC, co.rowid ASC
          LIMIT ?"
     );
 

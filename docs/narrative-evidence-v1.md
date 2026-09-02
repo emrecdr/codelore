@@ -1,7 +1,7 @@
 # CodeLore — Narrative Groundedness Evidence
 
 **Status:** deterministic characterization of the citation check on a labelled corpus, plus the first model-study leg (a pinned 3B local model over this repository); the paired frontier-model leg is pending an endpoint.
-**Date:** 2026-08-31 (corpus numbers), 2026-09-01 (model-study numbers); corpus and assertions current as of the `enrichment_citation_corpus_test` gate.
+**Date:** 2026-09-02 (corpus numbers), 2026-09-01 (model-study numbers); corpus and assertions current as of the `enrichment_citation_corpus_test` gate.
 **Methodology:** the document carries two kinds of numbers, held honest in two different ways. Every **corpus** number is recomputed on every CI run — the corpus is frozen in-tree and replayed through the real `check_citations` by `crates/codelore-lib/tests/enrichment_citation_corpus_test.rs`, which asserts the exact per-entry verdicts and the exact aggregate counts published here, so a checker change that moves any corpus number fails the build until this document is updated with it. **Model-study** numbers are point-in-time evidence, not CI-gated: they are recomputable from the committed per-item record beside this document, and they change only when a study leg is deliberately re-run.
 
 ## What is being measured
@@ -39,7 +39,7 @@ Per-class agreement between the checker's verdict and the verdict the class pred
 
 | Class | n | Ground truth | Checker verdict | Agreement | Wilson 95% |
 |---|---:|---|---|---:|---|
-| `clean` | 16 | faithful | passes | 16/16 | [0.806, 1.000] |
+| `clean` | 18 | faithful | passes | 18/18 | [0.824, 1.000] |
 | `fabricated-value` | 6 | fabricated number | flags | 6/6 | [0.610, 1.000] |
 | `sign-inversion` | 3 | inverted sign | flags | 3/3 | [0.438, 1.000] |
 | `fn-small-int` | 5 | fabricated count ≤ 12 | **misses** | 5/5 | [0.566, 1.000] |
@@ -47,12 +47,12 @@ Per-class agreement between the checker's verdict and the verdict the class pred
 | `fn-wrong-attachment` | 5 | real value, wrong claim | **misses** | 5/5 | [0.566, 1.000] |
 | `fp-version-fragment` | 4 | faithful (version string) | **flags** | 4/4 | [0.510, 1.000] |
 | `fp-date-fragment` | 3 | faithful (date/vintage) | **flags** | 3/3 | [0.438, 1.000] |
-| `fp-ci-bound` | 3 | faithful (CI bound quote) | **flags** | 3/3 | [0.438, 1.000] |
+| `fp-ci-bound` | 1 | faithful (CI confidence-level quote) | **flags** | 1/1 | [0.207, 1.000] |
 | `fp-ordinal-percentile` | 3 | faithful (ordinal phrasing) | **flags** | 3/3 | [0.438, 1.000] |
 | `fp-derived-arithmetic` | 3 | faithful (correct derivation) | **flags** | 3/3 | [0.438, 1.000] |
 | `fp-function-span` | 3 | faithful (function-span quote) | **flags** | 3/3 | [0.438, 1.000] |
 
-Confusion matrix over the whole corpus (faithful ground truth × checker verdict): **TN 16, FP 19, TP 9, FN 15** over 59 entries. The `fp-function-span` rows are the corpus's first model-generated entries (`source: "model:llama3.2-t0-s42"`, from the study below).
+Confusion matrix over the whole corpus (faithful ground truth × checker verdict): **TN 18, FP 17, TP 9, FN 15** over 59 entries. The `fp-function-span` rows are the corpus's first model-generated entries (`source: "model:llama3.2-t0-s42"`, from the study below).
 
 Read the matrix carefully: its cell sizes are corpus-composition choices, so ratios like "FP rate = 19/35" are statements about this corpus, not about the world. The informative results are the class rows:
 
@@ -60,7 +60,7 @@ Read the matrix carefully: its cell sizes are corpus-composition choices, so rat
 - **Every over-flagging route demonstrably fires**, including two routes surfaced by building this corpus that §8.5's original honest-limits list did not name (see below).
 - **Everything the check claims to catch, it caught**: 9/9 fabrications and sign inversions flagged, 16/16 faithful narratives passed.
 
-For readers coming from the detector-benchmark literature, the conventional summary metrics on this corpus (positive class = `⚠ contains uncited claims`): precision 0.321, recall 0.375, F1 0.346, balanced accuracy 0.416. Present them with their caveat welded on: this corpus is *deliberately stratified toward the checker's known failure modes* — nearly 60% of entries are constructed adversarial cases — so these numbers characterize the checker under attack, not its field performance. On a corpus of typical narratives the same checker would score far higher; that corpus does not exist yet (see the extension plan below).
+For readers coming from the detector-benchmark literature, the conventional summary metrics on this corpus (positive class = `⚠ contains uncited claims`): precision 0.346, recall 0.375, F1 0.360, balanced accuracy 0.445. Present them with their caveat welded on: this corpus is *deliberately stratified toward the checker's known failure modes* — more than half of the entries are constructed adversarial cases — so these numbers characterize the checker under attack, not its field performance. On a corpus of typical narratives the same checker would score far higher; that corpus does not exist yet (see the extension plan below).
 
 ## The over-flagging routes (the safe failure direction)
 
@@ -68,7 +68,7 @@ For readers coming from the detector-benchmark literature, the conventional summ
 
 1. **Version fragments** — `2.1.0` decomposes into `2.1` (flagged) and `0` (exempt). Documented in the code before this evidence cut.
 2. **Date/vintage fragments** — `defects-2026-07-15` flags `2026` and `15` while `07` rides the small-int exemption. Documented in the code before this evidence cut.
-3. **CI-bound quotes** — the sheet renders `corpus_percentile_ci` as a single en-dash string (`0.62–0.81`), which never parses into the fact-value set, so a narrative quoting either bound — including quoting the sheet's own string verbatim — is flagged. The interval's confidence level (`95%`) is not a sheet value either and flags with it. *Surfaced by this corpus.*
+3. **CI confidence levels** — the sheet renders `corpus_percentile_ci` as a single en-dash string (`0.62–0.81`) whose two printed endpoints parse into the fact-value set, so quoting either bound — including the sheet's own string verbatim — grounds. The interval's confidence level (`95%`) is not a printed sheet value and flags when quoted. *Surfaced by this corpus.*
 4. **Ordinal percentiles** — percentiles live on the sheet as fractions (`percentile = 0.97`); the phrasing "the 97th percentile" carries no `%` sign, so the ×100 fallback never applies and `97` flags. The prompt's "cite the exact number" instruction steers models away from this phrasing but cannot prevent it. *Surfaced by this corpus.*
 5. **Derived arithmetic** — "a net 114 lines" from a sheet stating 210 added / 96 removed is correct arithmetic and still flags: the contract demands quotes, not derivations. Contract-level correct, user-level false alarm.
 6. **Function-span quotes** — the `functions` section names entries like `write_top_hotspots@72-114`; a narrative quoting a function this way carries line numbers that live on the sheet only inside strings, so they flag. *Discovered in the wild by the model study below and seeded into the corpus from its captured narratives — the dominant over-flagging route real narratives actually hit.*
