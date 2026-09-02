@@ -1246,7 +1246,7 @@ Each generated narrative is persisted as a JSON sidecar under the per-repo cache
 | `diff --llm` | One-line stderr warning; the deterministic output and exit code are untouched. |
 | MCP `explain_file` | The call succeeds; the fact sheet is returned with a `narrative_error` field instead of a narrative. |
 
-Requests use a single bounded timeout and no retries — enrichment is interactive, not batch.
+Requests use a single bounded timeout and no retries — enrichment is interactive, not batch. That bound is 120 seconds, covering connect through body read, and it is compiled in: no environment variable and no flag moves it. A model, runtime, or gateway slower than the bound aborts the run rather than retrying it, which is what a large local model on a cold runtime is most likely to meet.
 
 ### Advisory guarantees
 
