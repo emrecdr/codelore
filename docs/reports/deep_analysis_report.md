@@ -3027,4 +3027,19 @@ naming the versions, with a `should_panic` matcher self-test — probed on
 a synthetic string, because cargo regenerates the real lockfile before
 tests read it and silently scrubs an appended fake entry.
 
-The next sweep re-opens at **F351**.
+### F351 (Fixed — Unreleased) — `--output -` created a literal file named `-`, and diff's report write was not atomic
+
+No `-`-as-stdout handling existed anywhere in the CLI, while the
+README's flagship CI recipe piped `codelore diff … --output - >>
+"$GITHUB_STEP_SUMMARY"` — the markdown went into a file named `-` in the
+working tree, the step summary stayed empty, and the junk file surfaced
+as an untracked change to the next gate run. `-` now streams to stdout
+for every streaming format in both `analyze` and `diff` (the documented
+recipes work as written — their pre-fix droppings, a literal `-` plus
+`-.provenance.json`, were still sitting in this repository's own
+working tree from test runs). The path-based formats reject `-` up
+front. Routing `diff` through the shared output helper also replaced
+its raw truncate-on-create with atomic publication, so a failing run no
+longer destroys the previous good report.
+
+The next sweep re-opens at **F352**.
