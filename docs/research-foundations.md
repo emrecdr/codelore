@@ -156,8 +156,8 @@ pairs, polyglot). Same algorithm, genuinely different signal — see the
   (at high |V|, this means a *significant* fraction of all file pairs
   move together in git).
 
-**Empirical calibration**: measured on CodeLore's own repository at
-v0.4.4 — 59 candidate nodes, 47 Fisher-significant edges, density
+**Empirical calibration**: an example run on CodeLore's own
+repository — 59 candidate nodes, 47 Fisher-significant edges, density
 `≈ 0.0275`.
 
 **Implementation**: `crates/codelore-lib/src/analyses/coupling.rs`
@@ -512,7 +512,7 @@ MI column is CodeLore's bridge to the static-analysis tradition: every
 practitioner reading a SonarQube / SEI / Visual Studio report already
 knows what `mi: 54.0` means.
 
-**Related research** (for the v0.5.x roadmap items that extend this):
+**Related research** (for the graph analyses that extend this):
 - Ben Khalfallah, H. (2025). "Code Health Meter: A Quantitative and
   Graph-Theoretic Foundation for Automated Code Quality and Architecture
   Assessment." *ACM Transactions on Software Engineering and Methodology
@@ -520,19 +520,25 @@ knows what `mi: 54.0` means.
   ([doi:10.1145/3737670](https://doi.org/10.1145/3737670),
   [Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.15501897.svg))
   — surveys MI alongside Louvain modularity and centrality on the
-  *static* dependency graph for JS/TS. CodeLore's v0.5.x roadmap adapts
-  Louvain to the *behavioral* change-coupling graph (different signal,
-  same algorithm).
+  *static* dependency graph for JS/TS. CodeLore's `communities` and
+  `centrality` analyses adapt the same machinery to the *behavioral*
+  change-coupling graph (different signal, Leiden rather than
+  Louvain); the `architecture-*` analyses apply the graph-theoretic
+  lens to the static import graph.
 - Newman, M. E. J. (2006). "Modularity and community structure in
   networks." *PNAS*, **103**(23), pages 8577–8582
   ([doi:10.1073/pnas.0601602103](https://doi.org/10.1073/pnas.0601602103))
-  — modularity score (Q) foundation, planned for v0.5.x.
+  — modularity score (Q) foundation; the `communities` analysis
+  reports the partition's overall Q.
 - Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E.
   (2008). "Fast unfolding of communities in large networks."
   *Journal of Statistical Mechanics: Theory and Experiment*,
   P10008
   ([doi:10.1088/1742-5468/2008/10/P10008](https://doi.org/10.1088/1742-5468/2008/10/P10008))
-  — the Louvain algorithm itself, planned for v0.5.x.
+  — the Louvain algorithm itself; the `communities` analysis runs its
+  successor, Leiden (Traag, Waltman & van Eck 2019), which guarantees
+  well-connected communities where Louvain can leave them
+  disconnected.
 
 ---
 

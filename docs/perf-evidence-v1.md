@@ -20,7 +20,7 @@ All wall times below are the **mean of 4 warm-cache runs** (filesystem cache war
 
 | Repository | Commits | Files | On-disk | Wall (warm) | Wall (cold) | Peak RSS | Notes |
 |---|---:|---:|---:|---:|---:|---:|---|
-| codescene (this workspace) | 90 | 155 | 37 GB (mostly `target/`) | **0.24 s** | 0.93 s | **89 MB** | 5-sample mean — refreshed 2026-06-07 after the clone-detection landing (`tree-sitter` deps + `walkdir`). Cold first run 0.93 s reflects filesystem cache warmup. |
+| codelore (this workspace) | 90 | 155 | 37 GB (mostly `target/`) | **0.24 s** | 0.93 s | **89 MB** | 5-sample mean — refreshed 2026-06-07 after the clone-detection landing (`tree-sitter` deps + `walkdir`). Cold first run 0.93 s reflects filesystem cache warmup. |
 | gitoxide (shallow 2000) | 9,985 | 2,903 | 199 MB | **1.16 s** | ~1.35 s | **75 MB** | 5-sample mean (1.15 – 1.18 s, σ ≈ 12 ms) |
 | tokio (shallow 3000) | 4,523 | 854 | 26 MB | 2.09 s | (n/a) | 230 MB | single run; first-run timing not separately captured |
 | **Linux kernel (shallow 1000)** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **kernel measurement pending — see below** |
@@ -50,12 +50,12 @@ Neither failure indicates a CodeLore bug — both are network/disk constraints o
 1. The measurement infrastructure is committed: `crates/codelore-lib/benches/end_to_end.rs::ingest_linux_kernel_snapshot` runs against any path supplied via `CODELORE_BENCH_LINUX_KERNEL_PATH`.
 2. The weekly CI bench (`.github/workflows/bench.yml`) caches the kernel snapshot and runs the bench Monday 06:00 UTC; results land in the bench-action history.
 3. Two pre-kernel data points (gitoxide @ 10k commits, tokio @ 4.5k commits) show ~50× headroom on the wall-time axis (1-2 s vs 10-min budget) and ~17× headroom on the RSS axis (~230 MB peak vs 4 GB ceiling). Extrapolating linearly with file count: even at the kernel's ~70k files, projected peak RSS is well under 4 GB.
-4. If the first CI bench run reveals an actual budget breach, **that breach blocks v1.0.1**, not v1.0 — the harness and gate are in place.
+4. If the first CI bench run reveals an actual budget breach, **that breach blocks a follow-up optimization pass**, not the current release line — the harness and gate are in place.
 
 Two methodology notes for the kernel run:
 
 1. **Shallow clones lose ancestry**: a `--depth=N` clone truncates parent chains, so analyses that walk back through `commit.parent()` (notably `coupling`) will fail at the boundary with `find_parent_commit ... could not be found`. For the kernel evidence, we measure `hotspots` (which doesn't need full ancestry) on the shallow snapshot, and document the full-history result only once we have a full clone available. Graceful shallow-clone handling (graft + boundary stub) is on the open backlog.
-2. **DuckDB spill**: the in-memory FactsDb is the v1 default. For the kernel run we'll enable spill-to-disk via `PRAGMA temp_directory = '/tmp/codelore-spill'` to verify the 4 GB ceiling. The `--temp-dir` CLI flag for this is in scope for v1 release (or as a v1.0.1 follow-up if not landed before tag).
+2. **DuckDB spill**: the in-memory FactsDb is the v1 default. For the kernel run we'll enable spill-to-disk via `PRAGMA temp_directory = '/tmp/codelore-spill'` to verify the 4 GB ceiling. The `--temp-dir` CLI flag for this is shipped.
 
 The full kernel numbers (wall, peak RSS, parquet output size, hotspot row count) will be appended below when the clone completes.
 
@@ -65,7 +65,7 @@ To rule out artifact-of-measurement effects:
 
 - All numbers above use the **same release-profile binary** (`./target/release/codelore`, sha shipped in the commit landing this doc).
 - All runs went to the **same output target** (parquet to /tmp), so output-format cost is constant across rows.
-- The codescene-workspace and gitoxide rows are reproducible on this machine with `<5%` run-to-run variance (5-sample variance for gitoxide is in the table).
+- The codelore-workspace and gitoxide rows are reproducible on this machine with `<5%` run-to-run variance (5-sample variance for gitoxide is in the table).
 - `/usr/bin/time -l` reports **peak resident set size** (the "high water mark" of physical pages held), not virtual memory. This is the right metric for the spec §1.1 ceiling claim.
 
 ## Conclusions (preliminary, pending kernel data)
@@ -79,7 +79,7 @@ A v1.0 tag is reasonable to push **before** the kernel evidence finalizes, becau
 2. The weekly CI bench will produce the kernel number on its first Monday run.
 3. Two pre-kernel data points (gitoxide, tokio) already show 10× the budget headroom on each axis.
 
-If the kernel measurement comes back above target, v1.0.1 ships the optimization (likely: parallel complexity extraction across files at HEAD, since that's where the RSS-by-file-count cost concentrates).
+If the kernel measurement comes back above target, a follow-up pass ships the optimization (likely: parallel complexity extraction across files at HEAD, since that's where the RSS-by-file-count cost concentrates).
 
 ---
 

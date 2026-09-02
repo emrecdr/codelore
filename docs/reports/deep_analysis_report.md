@@ -3,7 +3,7 @@
 Read-only audit log. Findings are immutable F-IDs; the status field tracks state.
 Shipped/fixed findings are condensed to a one-line closure row once validated against `main` (full history in `CHANGELOG.md` + git); refuted findings stay documented to prevent rediscovery.
 
-**Last pass: 2026-07-02.** The 2026-07-01 validation + 5-dimension discovery pass added **F200–F230**; the 2026-07-02 implementation pass landed 28 of them on `main` (PRs #71, #74) and refuted F188/F202. See §3 "Implemented" tables + §6 for the current disposition.
+**Last pass: 2026-09-02** (the second-wave discovery report, `docs/reports/2026-09-02-deep-analysis-second-wave.md`). The 2026-07-01 validation + 5-dimension discovery pass added **F200–F230**; the 2026-07-02 implementation pass landed 28 of them on `main` (PRs #71, #74) and refuted F188/F202. See §3 "Implemented" tables + §6 for the current disposition.
 
 ---
 
@@ -242,9 +242,9 @@ wrong it has been corrected in place rather than left to mislead.
 *   **State on main**: All emitters still take a fully-materialized slice; no `EmitterStream`. Peak memory grows with row count; a 200k-path monorepo CSV export can spike multi-GB. SARIF stays batch (needs run-level totals); CSV/JSON/markdown are the streamable targets.
 
 #### F177 — Three schema-version sentinels still coexist
-*   **Location**: `facts/schema.rs` (`CURRENT_SCHEMA_VERSION`, now `"8"`), `cache.rs` (`CACHE_EPOCH`, now `"schema_v18"`), `schema_v1.sql` filename literal reached through `facts::schema::SCHEMA_V1`
+*   **Location**: `facts/schema.rs` (`CURRENT_SCHEMA_VERSION`, now `"8"`), `cache.rs` (`CACHE_EPOCH`, now `"schema_v21"`), `schema_v1.sql` filename literal reached through `facts::schema::SCHEMA_V1`
 *   **Severity**: MED · **Category**: duplicated source-of-truth · **Status**: PARTIAL
-*   **State on main**: Both named sub-fixes landed — CLI `profile` now derives the schema string from `CURRENT_SCHEMA_VERSION`, and the cache sentinel was renamed to the honest `CACHE_EPOCH` (matches CLAUDE.md). But three version constants remain structurally disjoint (none derived from another), and they have drifted independently since — `CURRENT_SCHEMA_VERSION` is now `"8"` while `CACHE_EPOCH` reads `"schema_v18"`, two sentinels whose shared `schema_v` spelling implies a correspondence that does not exist. The stray `"schema_v3"` help literal is **gone** (0 occurrences), so that half of the residual is closed. Residual: unify or cross-reference the three, or rename `CACHE_EPOCH`'s value so it stops looking like a schema version.
+*   **State on main**: Both named sub-fixes landed — CLI `profile` now derives the schema string from `CURRENT_SCHEMA_VERSION`, and the cache sentinel was renamed to the honest `CACHE_EPOCH` (matches CLAUDE.md). But three version constants remain structurally disjoint (none derived from another), and they have drifted independently since — `CURRENT_SCHEMA_VERSION` is now `"8"` while `CACHE_EPOCH` reads `"schema_v21"`, two sentinels whose shared `schema_v` spelling implies a correspondence that does not exist. The stray `"schema_v3"` help literal is **gone** (0 occurrences), so that half of the residual is closed. Residual: unify or cross-reference the three, or rename `CACHE_EPOCH`'s value so it stops looking like a schema version.
 
 #### F186 — Bench regression gate never runs on PRs (advisory-only weekly cron)
 *   **Location**: `.github/workflows/bench.yml:3` (`schedule` + `workflow_dispatch`, no `pull_request`), `:116` (`fail-on-alert: false`)
@@ -260,7 +260,7 @@ wrong it has been corrected in place rather than left to mislead.
 
 ### 4.2 Discovery pass — 2026-07-01 (deferred remainder)
 
-The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and F200 (+ F188/F202 refutations) in the 2026-07-02 pass (see the §3 "Implemented" tables). The entries below are the deferred remainder — each is a large refactor with regression surface, a dependency-migration needing CI validation, or a low-value mechanical sweep, not a quick safe change. Since then F206 (HEAD-scan blob I/O) and F230 (gix bump) have shipped — marked Fixed inline below; F215 and F218 are the open remainder.
+The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and F200 (+ F188/F202 refutations) in the 2026-07-02 pass (see the §3 "Implemented" tables). The entries below are the deferred remainder — each is a large refactor with regression surface, a dependency-migration needing CI validation, or a low-value mechanical sweep, not a quick safe change. Since then F206 (HEAD-scan blob I/O) and F230 (gix bump) have shipped — marked Fixed inline below — and F215 was closed, not fixed (see its entry); F218 is the open remainder.
 
 #### Backend performance
 
@@ -1646,7 +1646,7 @@ confirms is not a check.
     the scan are in `CHANGELOG.md`, where historical numbers are correct by
     design. No live gap.
 
-## 13. Backlog decisions, researched (F304)
+## 13. Backlog decisions, researched (F304 onward)
 
 Every item that had been sitting as "open, user's call" was researched against
 current tooling and standards and decided. Three produced work; four are
@@ -2050,8 +2050,8 @@ crate rustdoc, the advanced-usage docs, and two separate lists in the workspace
 a later pass found the two README sites — the highest-traffic surface of the
 set. A hand-written census of hand-written facts reproduces the defect it
 documents, so the guard below should enumerate the sites rather than a person.
-None is compiler-checked and none is tested. Two were stale before the fix; a third (`codelore-rca`'s rustdoc) is
-still stale and tracked as [F309].
+None is compiler-checked and none is tested. Two were stale before the fix; a third (`codelore-rca`'s rustdoc) was
+still stale until [F309] closed it.
 
 **The grammar pins** are written out in four places — `codelore-rca`'s manifest,
 `codelore-lib`'s manifest (declared to exist "for parser-ABI compat", so the two
@@ -2836,4 +2836,19 @@ seeded regression test fails with the exact doubled value on the summing
 form, and the intended output shift was measured before/after on this
 repository (delta recorded in the fix PR).
 
-The next sweep re-opens at **F340**.
+### F340 (Fixed — Unreleased) — the gix diff cap sat ~512x below the git default it claimed to match
+
+`MAX_DIFF_BLOB_BYTES` was 1 MiB under a comment claiming parity with
+git's `core.bigFileThreshold` default (512 MiB), so every text file past
+1 MiB entered `changes` with zero `loc_added`/`loc_deleted` on the
+production backend while `git log --numstat` counted its lines — churn,
+hotspot-velocity, code-health's churn term, and the Kamei size features
+silently drained on exactly the files most likely to be large. The
+divergence was reproduced against real git during the second-wave audit
+and is invisible to the differential suite's aggregate drift band. The
+cap now matches git's actual threshold, oversized blobs are rejected via
+an object-header size probe before their bytes load, and a differential
+test generates a multi-megabyte text file at test time pinning both
+backends to identical, nonzero per-file counts.
+
+The next sweep re-opens at **F341**.
