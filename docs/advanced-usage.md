@@ -43,7 +43,7 @@ CodeLore ships **dozens of behavioral analyses** across four tiers (the registry
 | `main-dev` | "Who is the main developer of each entity by lines added?" | Per-entity author with max `added` (default metric) | Knowledge-owner discovery |
 | `main-dev-by-revs` | "Who is the main developer by revision count?" | Per-entity author with max revision count | Use when added-lines is misleading (e.g., reformatters) |
 | `main-dev-by-deletions` (alias: `refactoring-main-dev`) | "Who is the main refactorer of each entity?" | Per-entity author with max `deleted` lines | Spot quiet refactor leaders |
-| `change-coupling` | "Which files always change together?" | Fisher exact-filtered logical (temporal) coupling at `p < 0.05` | Hidden architectural debt |
+| `coupling` | "Which files always change together?" | Fisher exact-filtered logical (temporal) coupling at `p < 0.05` | Hidden architectural debt |
 | `soc` | "Sum of Coupling — how central is each file in the change-coupling graph?" | Σ(N−1) over each commit of size N the file appears in | Find systemic-coupling hubs (high `SoC`) |
 | `messages` | "Which entities co-occur with commits matching this message regex?" | Server-side `regexp_matches(message, --expression-to-match)` join with `changes` | Bug-fix density, label-driven hotspots |
 
@@ -120,11 +120,16 @@ codelore explain <metric>           # formula + citation + SQL source for any me
 codelore explain <path>             # per-file evidence dossier (add --llm for a grounded
                                     # advisory narrative — see §8.5)
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
+codelore gate                       # working-tree quality gate: uncommitted edits vs HEAD
 codelore diff <base>..<head>        # PR-mode quality gate
 codelore profile                    # operational telemetry
 codelore docs                       # markdown analysis catalogue
 codelore completions <shell>        # bash | zsh | fish | powershell | elvish
 codelore schema <row-type>          # JSON Schema 2020-12 emit
+codelore mcp --repo <path>          # Model Context Protocol server over stdio — see §11.9
+codelore ingest-sarif <files>...    # store external scanner findings for finding-hotspot-overlap
+codelore calibrate                  # build a corpus-calibration artifact (--calibration)
+codelore calibrate-defects          # mine + validate own-repo defect calibration (--defect-calibration)
 ```
 
 `codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration.
@@ -139,10 +144,13 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 |---|---|---|
 | `csv` (default) | Code-maat compatibility; pipe into other tools | snake_case headers by default; code-maat-exact hyphenated headers only under `--code-maat-compat` |
 | `json` | Programmatic consumption | Pretty-printed; serde-derived |
+| `ndjson` | Streaming consumers (`jq -c`, CI log pipelines, LSP integrations) | Newline-delimited JSON — one compact object per line, stream-parseable as rows arrive |
 | `markdown` | `$GITHUB_STEP_SUMMARY` in CI | GFM tables; one analysis per `# CodeLore <name>` header |
 | `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
+| `gha` | Inline PR annotations in GitHub Actions without a SARIF upload step | Emits `::error` / `::warning` / `::notice` workflow commands to stdout; the runner renders each finding as a diff annotation |
+| `html` | Shareable single-file report of one analysis run | Self-contained static HTML (inline CSS + vanilla JS, no CDN); the analysis rows are embedded as a JSON block |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
-| `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps 8 tables: `commits`, `changes`, `hunks`, `entities`, `complexity_metrics`, `author_aliases`, `provenance`, `clones`. |
+| `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps the fact tables: `commits`, `changes`, `hunks`, `entities`, `complexity_metrics`, `author_aliases`, `provenance`, `clones`, `imports`, `commit_parents`. |
 | `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` optional (defaults to `.codelore/spa.html`); ~1.5 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
 | `step-summary` | GitHub Actions `$GITHUB_STEP_SUMMARY`. Single GFM Markdown summary with KPI table, top-10 hotspots (MI band emoji), MI band breakdown (unicode bars), behavioral coupling density, knowledge islands `<details>` collapsible. | Streams to stdout by default; redirect with `>> $GITHUB_STEP_SUMMARY` in CI. Typical 2–10 KB; well under GitHub's 1 MB step-summary cap. Same composite-dashboard inputs as `--format spa` so a single ingest run can emit BOTH (run `--format step-summary` first to stdout, then `--format spa` to file). Requires the same `spa` Cargo feature as `--format spa`. |
 
@@ -581,6 +589,13 @@ codelore analyze [OPTIONS]
       --window-days N           Trailing-window length in days for activity-scoped
                                 analyses (effort-exposure, team-composition, etc.)
                                 [default: 90]; anchored to the repo's last commit date
+      --departed-threshold-days N
+                                An author is "departed" when their most recent
+                                commit anywhere in the repo is older than this
+                                many days at the anchor moment (used by
+                                `knowledge-islands`) [default: 90]. Lower for
+                                fast-moving startups (30–45); raise for
+                                academia / OSS-maintainer codebases (180+)
       --rework-window-days N    Rework-detection window in days for `delivery-metrics`
                                 [default: 21]
       --release-tag-glob GLOB   Tag-name glob for `release-cadence` [default: v*]
@@ -624,7 +639,8 @@ codelore analyze [OPTIONS]
                                 sliding-window --temporal-period. Materializes
                                 `changes_bucketed` via DuckDB
                                 `date_trunc(<unit>, commit.date)` and routes
-                                the coupling-family analyses through it.
+                                the analyses that opt in — `coupling`, `soc`,
+                                `hotspots`, and `code-health` — through it.
                                 Non-overlapping buckets — no commit-duplication
                                 artifact.
 
@@ -690,6 +706,19 @@ codelore analyze [OPTIONS]
                                 a one-time notice is printed. Applies to both
                                 `analyze` and `check`.
 
+  # ── Defect calibration ────────────────────────────────────────────
+      --defect-calibration <FILE>
+                                Own-repo defect-calibration artifact (build one
+                                with `codelore calibrate-defects`). Its smell
+                                weights replace the built-in code-health
+                                defaults for this run; hard error if the
+                                artifact was mined from a different repository.
+                                See §1's Defect-calibration section.
+      --allow-foreign-calibration
+                                Apply a defect-calibration artifact mined from
+                                a different repository (forks, moved checkouts):
+                                skips the repo-identity guard.
+
   # ── Team mapping ──────────────────────────────────────────────────
   -p, --team-map-file <FILE>    Optional CSV `author,team` mapping that aliases
                                 author identities to logical teams in every
@@ -733,9 +762,6 @@ codelore diff <RANGE> [OPTIONS]
                             (three-dot recommended for PR mode)
 
   -a, --analysis KIND       hotspots | coupling | clones | all  [default: hotspots]
-                            (NB: diff's `coupling` corresponds to analyze's
-                            `change-coupling`; the diff subcommand uses the
-                            shorter form throughout)
   -r, --repo PATH           Git repo path [default: .]
       --top-n N             Hotspot rank threshold for entrant detection [default: 10]
       --score-threshold F   Min hotspot score delta to report [default: 0.05]
@@ -750,6 +776,12 @@ codelore diff <RANGE> [OPTIONS]
                             finding to be reportable [default: 5]
       --absence-fisher-p F  Max Fisher p-value for coupling-absence finding
                             [default: 0.05]
+      --thresholds-file PATH
+                            Thresholds file (default name
+                            `.codelore-thresholds.toml`); its `[diff]` section
+                            is evaluated against this run's deltas — see §4's
+                            quality-gate comparison table. Violations force a
+                            non-zero exit even under `--fail-on none`
       --min-revs N          Same as analyze [default: 5]
       --exclude PATTERN     Same as analyze (repeatable)
       --llm                 Append an advisory LLM PR narrative (text/markdown
@@ -889,7 +921,7 @@ Why a rolling window rather than a pinned baseline ("all code after tag X is new
 
 ### `.codeloreignore`
 
-Drop a file at the repo root with one glob per line. `#` comments + blank lines ignored (gitignore convention). Honored by `clones` today; rolling out to the rest of the analyses next.
+Drop a file at the repo root with one glob per line. `#` comments + blank lines ignored (gitignore convention). Applied at ingest: together with `.gitignore` and `.git/info/exclude` it decides which paths reach the fact store at all, so every analysis honors it.
 
 ```
 # .codeloreignore — vendored / generated code
@@ -945,6 +977,8 @@ Automated commits (dependency-bump bots, CI bots, release bots) skew Conway-styl
 - `pre-commit-ci[bot]`
 
 Match is plain substring containment, so `dependabot[bot]@noreply.github.com` matches `dependabot[bot]`. Bot commits still land in the fact store (so you can still query them in SQL via the SQLite/Parquet export) but they get the `ai-authored` attribution and the author-based analyses treat them as automated agents rather than human contributors.
+
+The built-in list is user-extensible via a `.codelorebots` file at the repo root: one pattern per line, `#` comments and blank lines ignored (the `.codeloreignore` convention), each matched case-insensitively as a substring of the author email or name. The user list is purely additive — the built-in patterns can never be turned off, so GitHub-published bots always classify as bots. The file's content is hashed into the persistent-cache key ([§8](#8-persistent-cache-mechanics)), so editing it invalidates cached fact stores as it should.
 
 ### 6.3 AI-authorship classification
 
@@ -1053,9 +1087,9 @@ The tile is absent when all three proxy inputs are unavailable (no merge commits
 
 ## 8. Persistent cache mechanics
 
-CodeLore caches the DuckDB fact store at `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`. Second invocation on the same `(repo_path, HEAD sha, options, schema_version, codelore_version)` opens read-only in ≈ 10 ms instead of re-walking history.
+CodeLore caches the DuckDB fact store at `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`. Second invocation on the same `(canonical repo path, HEAD sha, crate version, ingest-affecting options, cache epoch)` opens read-only in ≈ 10 ms instead of re-walking history. The cache epoch is a manual cache-buster constant, deliberately independent of the on-disk schema version: it is bumped for any correctness fix that should orphan existing cache files, whether or not a table shape changed. Analysis-only thresholds (e.g. `--min-revs`) are not part of the key — none of them can change a row the ingest writes — so sweeping a threshold across runs keeps hitting the same cached fact store.
 
-The `options` component is not just the flags you typed. Seven repository files that change what gets ingested are hashed by *content* into the key, so editing any of them invalidates it: `.mailmap`, `.codelorebots`, `.codelore-teams`, `.codeloreignore`, `.gitignore`, `.git/info/exclude`, and whatever `--group-file` / `--calibration` / `--defect-calibration` point at. The last two ignore files matter most for correctness: they feed `paths_filter`, which decides which rows reach `changes` at all — and `.git/info/exclude` is untracked, so nothing else about a run would change when you edit it.
+The `options` component is not just the flags you typed. Seven repository files that change what gets ingested are hashed by *content* into the key, so editing any of them invalidates it: `.mailmap`, `.codelorebots`, `.codelore-teams`, `.codeloreignore`, `.gitignore`, `.git/info/exclude`, and whatever `--group-file` points at. The last two ignore files matter most for correctness: they feed `paths_filter`, which decides which rows reach `changes` at all — and `.git/info/exclude` is untracked, so nothing else about a run would change when you edit it. The calibration artifacts (`--calibration` / `--defect-calibration`) are deliberately *not* in this set: they are analysis-only inputs — editing one changes output columns and weights, never an ingested fact — so they don't invalidate the fact store.
 
 ```bash
 # Skip the cache (always fresh in-memory)
@@ -1076,9 +1110,9 @@ Eviction: 5 entries per repo + 2 GB global cap, oldest-ingest-first. Pruning run
 
 The cache key includes `head_sha` but NOT the working tree, and that is now correct for the whole fact store rather than only for the history-reading analyses. Every HEAD-time pass — `ingest_complexity_at_head`, `populate_clones_at_head`, the import scan — sources blobs through `Repo::blob_reader_at("HEAD")` rather than from disk, so the ingested facts are a function of HEAD and the options. Uncommitted edits do not make them stale; they make them *about HEAD*, which is what a `head_sha`-keyed cache should hold.
 
-Two consequences follow, and they are the opposite of what this section used to describe.
+Two consequences follow.
 
-**A dirty tree no longer skips the cache write.** It used to, on the grounds that disk-read HEAD metrics would poison the clean-`head_sha` key. With blob reads that hazard is gone, and keeping the skip cost a full re-ingest on *every* invocation for anyone with uncommitted work — the normal state of an edit-and-gate loop. The one worktree dependency that survived the blob migration was the ignore-file set: `paths_filter` reads `.gitignore` and `.git/info/exclude`, and those decide which rows reach `changes`. Both are content-digested into the cache key, which is what makes dropping the skip safe. That ordering mattered: `.git/info/exclude` is untracked, so editing it moved neither `head_sha` nor the dirty flag — before it was hashed, a clean-tree re-run served the pre-edit file set with no signal at all.
+**A dirty tree does not skip the cache write.** Such a skip would only guard against disk-read HEAD metrics poisoning the clean-`head_sha` key — a hazard the blob reads eliminate — and it would cost a full re-ingest on *every* invocation for anyone with uncommitted work, the normal state of an edit-and-gate loop. The one worktree dependency the ingest retains is the ignore-file set: `paths_filter` reads `.gitignore` and `.git/info/exclude`, and those decide which rows reach `changes`. Both are content-digested into the cache key, which is what makes the write safe: `.git/info/exclude` is untracked, so editing it moves neither `head_sha` nor the dirty flag — the content digest is the only signal that forces a re-ingest.
 
 **The remaining caveat is a mixed snapshot, not staleness.** Analyses that walk the working tree at *analysis* time — clone detection in its default working-tree mode, and the agent-loop change-set projection — describe your uncommitted edits, while everything derived from the fact store describes HEAD. Code health is **not** in that set: its DRY biomarker reads the `clones` table the ingest builds from HEAD blobs, so `check`, the SPA, `factors` and `refactoring-targets` describe HEAD even on a dirty tree. `codelore gate` is the surface that reports uncommitted duplication. The warning says so:
 
@@ -1202,7 +1236,7 @@ Requests use a single bounded timeout and no retries — enrichment is interacti
 
 ### Advisory guarantees
 
-- **Byte-identical without the flag.** Without `--llm`, every command's output is byte-identical to a build without the feature — no network reads, no default-path behavior change. (`explain <path>` is itself additive: a path argument was previously an unknown-topic error.)
+- **Byte-identical without the flag.** Without `--llm`, every command's output is byte-identical to a build without the feature — no network reads, no default-path behavior change. (`explain <path>` is itself additive: the path dossier sits beside the metric-topic surface without changing it.)
 - **Additive with the flag.** With `--llm`, analysis rows, SARIF, gate verdicts, exit codes, fact-store cache keys, and the provenance manifest are unchanged; narratives are additive text (or additive MCP fields) only.
 - **Scoring isolation.** No module in the scoring path imports the enrichment layer; the dependency arrow points one way and is enforced by a structural guard test.
 - **Grounding is visible.** Every narrative carries its model id and groundedness verdict inline.
@@ -1238,7 +1272,7 @@ Per `docs/perf-evidence-v1.md` (warm-cache numbers):
 
 | Repository | Commits | Source files | Wall (warm) | Peak RSS |
 |---|---:|---:|---:|---:|
-| codescene (this workspace) | ~95 | 131 .rs | 0.24 s | 89 MB |
+| codelore (this workspace) | ~95 | 131 .rs | 0.24 s | 89 MB |
 | gitoxide (shallow 2000) | 9,985 | 2,903 | 1.16 s | 75 MB |
 | tokio (shallow 3000) | 4,523 | 854 | 2.09 s | 230 MB |
 | Linux kernel | 1.4M | 70k | < 10 min target | < 4 GB target |
@@ -1526,6 +1560,10 @@ codelore mcp --repo /path/to/repo --defect-calibration defects.calib.json
 
 This does not add a network dependency — the artifact is a local JSON file produced by a prior `codelore calibrate-defects` run, consulted entirely offline like every other tool.
 
+Pass `--calibration <path>` (built with `codelore calibrate`) to replace the embedded world corpus with your own corpus-calibration artifact for every lens-consuming tool — the same override the CLI's `--calibration` applies on `analyze`/`check`. It is startup-only in the same way: the artifact is loaded when the server starts, and a missing or malformed file is a startup error, never a failure on a later tool call. Unlike defect calibration, a corpus artifact is repo-agnostic — it pools distributions from many repositories and applies anywhere, so there is no repo-identity guard to satisfy.
+
+`--allow-foreign-calibration` is the third startup flag: it skips the defect artifact's repo-identity guard so an artifact mined from a different repository (a fork, a moved checkout) can be applied — the same semantics the flag has on the CLI.
+
 ### Client configuration
 
 Add an entry to your client's MCP config (exact filename varies by client):
@@ -1718,7 +1756,7 @@ Each tool call opens its own `FactsDb` connection via the warm-cache path. This 
 | Hotspot scores are all `0.0` | Repo has only one commit, OR `fetch-depth: 0` not set in CI | Set `fetch-depth: 0` in `actions/checkout` |
 | An analysis prints only its header row (no data) and exits 0 | A threshold filtered every entity out — most often `--min-revs` (default 5), which nothing meets on a young or small repo | Re-run with `--min-revs 1` to confirm the filter is the cause; the pre-flight banner's `Analysis:` line shows the filter values in effect for the run |
 | `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all supported analyses |
-| Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; tracked in [`roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) (Tier 3, "Rename tracking") |
+| Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Rename-aware aggregation is off for this run — `--no-canonical-lineage` was passed, or `--code-maat-compat` implied it | Drop those flags; by default a file's pre-rename history is merged onto its current canonical path |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
 | `--format parquet` fails with "requires --output" | Binary format can't stream to stdout | Pass `--output FILE.parquet` |
 | `--format sarif` fails with "supported: hotspots, clones, clone-coupling" | Other analyses don't have a SARIF rule yet | Use one of the supported analyses, or `--format json` |
@@ -1740,11 +1778,17 @@ codelore/
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
 │   │   │   ├── analyses/                 # analyses (one file each)
-│   │   │   ├── output/                   # 11 format emitters
+│   │   │   ├── output/                   # output-format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity
 │   │   │   ├── clones/                   # Type 1+2 fingerprinting
-│   │   │   ├── identity/                 # mailmap + bots.toml
+│   │   │   ├── imports/                  # import-graph resolution (architecture tier)
+│   │   │   ├── arch_rules/               # .codelore-arch-rules.toml validation
+│   │   │   ├── quality_gates/            # threshold gates + ratchet + run ledger
+│   │   │   ├── enrichment/               # advisory LLM narratives (§8.5)
+│   │   │   ├── external/                 # external-findings sidecar (ingest-sarif)
+│   │   │   ├── defect_calibration/       # AG-SZZ mining + weight tuning
+│   │   │   ├── identity/                 # mailmap + bots.rs + team_map.rs
 │   │   │   ├── kamei/                    # 14-feature change vector
 │   │   │   ├── cache.rs                  # persistent fact-store cache
 │   │   │   ├── provenance/               # manifest sidecar
@@ -1753,10 +1797,17 @@ codelore/
 │   │   └── benches/end_to_end.rs         # criterion harness
 │   ├── codelore-cli/                     # clap CLI
 │   │   └── src/
-│   │       ├── main.rs                   # analyze dispatch
+│   │       ├── main.rs                   # thin subcommand dispatch
 │   │       ├── args.rs                   # CLI surface
+│   │       ├── analyze.rs                # codelore analyze
+│   │       ├── check.rs                  # codelore check
+│   │       ├── gate.rs                   # codelore gate (working tree)
 │   │       ├── diff.rs                   # codelore diff implementation
 │   │       ├── diff_output.rs            # diff output emitters
+│   │       ├── explain.rs                # codelore explain
+│   │       ├── calibrate.rs              # codelore calibrate
+│   │       ├── calibrate_defects.rs      # codelore calibrate-defects
+│   │       ├── suggest.rs                # did-you-mean for free-string args
 │   │       └── mcp.rs                    # MCP server implementation
 │   └── codelore-rca/                     # vendored Mozilla rust-code-analysis (MPL-2.0)
 ├── docs/
