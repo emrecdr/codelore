@@ -2889,4 +2889,18 @@ population. The ingest-side `query_live_paths` shares the renamed-away
 shape but only wastes blob lookups (correctly bucketed `NotCounted`) and
 is deliberately unchanged.
 
-The next sweep re-opens at **F343**.
+### F343 (Fixed — Unreleased) — `--group-file` silently zeroed the clone- and import-joining analyses
+
+Grouping rewrites `changes.path` and builds a grouped complexity rollup
+(whose own documentation explains why the rollup is necessary), but
+`clones` and `imports` keep raw file paths. `clone-coupling` matched raw
+clone-pair paths against a coupling map keyed on grouped paths and
+`crossing` joined raw import edges against grouped coupling — zero keys
+matched, so both returned an empty result that read as a clean bill. The
+combination is now rejected at the CLI boundary (exit 2), the same gate
+shape as the pre-existing `function-hotspots` rejection; one regression
+test drives both analyses and fails with the gate stashed. A grouped
+`imports` rollup (group→group edges) remains a defensible future
+alternative; a grouped `clones` rollup is not meaningful.
+
+The next sweep re-opens at **F344**.

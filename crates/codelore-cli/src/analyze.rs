@@ -186,6 +186,30 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         .into());
     }
 
+    // Same class of mismatch, different tables: grouping rewrites
+    // `changes.path` (and builds a grouped complexity rollup, whose own doc
+    // explains why), but `clones` and `imports` keep raw file paths.
+    // `clone-coupling` matches raw clone-pair paths against a coupling map
+    // keyed on grouped paths, and `crossing` joins raw import paths against
+    // grouped coupling — zero keys match, so both silently return an empty
+    // result that reads as a clean bill. Reject rather than emit it.
+    if opts.group_file.is_some()
+        && matches!(
+            analysis,
+            AnalysisName::CloneCoupling | AnalysisName::Crossing
+        )
+    {
+        return Err(CodeLoreError::InvalidOptions(format!(
+            "--group-file is not supported for analysis {} (grouping rewrites \
+             change paths but clone and import paths stay raw, so the join \
+             matches nothing and the result would be silently empty). Run {} \
+             without --group-file.",
+            analysis.as_str(),
+            analysis.as_str()
+        ))
+        .into());
+    }
+
     let analysis_name = args.analysis.as_str();
 
     // clones is a HEAD-only filesystem + tree-sitter walk — no git

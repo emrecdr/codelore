@@ -1037,6 +1037,38 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ));
 }
 
+/// `--group-file` with `clone-coupling` or `crossing` must be rejected at
+/// the CLI boundary: grouping rewrites change paths while clone and import
+/// paths stay raw, so the joins match nothing and both analyses silently
+/// returned an empty result that read as a clean bill. Exit 2.
+#[test]
+fn group_file_rejected_for_clone_and_import_joining_analyses() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let group_file = tiny.dir.path().join("groups.txt");
+    std::fs::write(&group_file, "core => src/\n").expect("write group file");
+    for analysis in ["clone-coupling", "crossing"] {
+        codelore_cmd()
+            .args([
+                "analyze",
+                "--analysis",
+                analysis,
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--format",
+                "csv",
+                "--no-banner",
+                "--no-cache",
+                "--group-file",
+                group_file.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("--group-file is not supported"))
+            .stderr(predicate::str::contains("silently empty"));
+    }
+}
+
 /// `--time-bucket` combined with a composite format must be rejected at the
 /// CLI boundary. The per-analysis gate keys on the NAMED analysis, but the
 /// spa / step-summary composites fan out to dozens of analyses with the same
