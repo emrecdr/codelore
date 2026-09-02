@@ -869,6 +869,9 @@
         buttons[i].classList.toggle('tab-active', isCurrent);
         buttons[i].classList.toggle('active', isCurrent);
         buttons[i].setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+        // Keep the roving tabindex on the selected tab (see the colour-
+        // toggle click handler for the full rationale).
+        buttons[i].setAttribute('tabindex', isCurrent ? '0' : '-1');
       }
     }
     currentHotspotColorMode = step.lens;
@@ -928,6 +931,9 @@
         buttons[i].classList.toggle('tab-active', isCurrent);
         buttons[i].classList.toggle('active', isCurrent);
         buttons[i].setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+        // Keep the roving tabindex on the selected tab (see the colour-
+        // toggle click handler for the full rationale).
+        buttons[i].setAttribute('tabindex', isCurrent ? '0' : '-1');
       }
     }
     renderGuidedTour();
@@ -1013,7 +1019,28 @@
   (async function bootWidgets() {
     for (var i = 0; i < WIDGETS.length; i++) {
       var w = WIDGETS[i];
-      w.render();
+      // Per-widget isolation — the one fan-out that lacked it: a throw in
+      // widget N used to abort every widget after it, leaving later panels
+      // empty with their headings intact, which reads as "this repo has no
+      // data" (every OTHER fan-out in this file is individually guarded).
+      // The failed panel gets an in-place note instead of silence; its
+      // rerender hooks are still registered so a later theme/layout pass
+      // can retry it.
+      try {
+        w.render();
+      } catch (err) {
+        try {
+          console.error('codelore: widget "' + w.name + '" failed to render', err);
+          const section = document.querySelector('[data-widget="' + w.name + '"]');
+          const note = document.createElement('p');
+          note.className = 'text-sm opacity-70';
+          note.textContent =
+            'This panel failed to render (' +
+            (err && err.message ? err.message : String(err)) +
+            ') — the rest of the dashboard is unaffected.';
+          if (section) section.appendChild(note);
+        } catch (_ignored) { /* reporting must never re-throw */ }
+      }
       if (w.rerender === 'theme') {
         registerThemeRerender(w.render);
       } else if (w.rerender !== false) {
