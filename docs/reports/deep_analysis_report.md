@@ -2807,4 +2807,19 @@ retirements, and excludes `copied` rows from seeding or extending chains.
 `CACHE_EPOCH` → `schema_v21`. The recycled-name regression test fails on
 the unfixed join; see `docs/reports/2026-09-02-deep-analysis-second-wave.md`.
 
-The next sweep re-opens at **F338**.
+### F338 (Fixed — Unreleased) — the `--time-bucket` gate covered the named analysis but not the composite fan-out
+
+`supports_time_bucket()` is enforced against `--analysis` only; `--format
+spa` / `step-summary` then run ~30 further analyses with the same
+`Options`. Their `lineage::source_table` resolves to `changes_bucketed`,
+whose `rev` is a date-truncated string, so commit-keyed joins return zero
+rows — and the composite's degradation wrappers catch `Err`, not empty, so
+the widgets silently blank (with the bucketed `knowledge_shares` build
+poisoning its once-guard for the rest of the run). The combination is now
+rejected at the CLI boundary (exit 2); the regression test names a
+bucket-aware analysis so the pre-existing per-analysis gate cannot mask a
+regression. Remaining bucketed-table hygiene (no build-once guard;
+lexicographic `MAX(change_type)` beside chronological `arg_max`) is
+recorded in the second-wave report and lands separately.
+
+The next sweep re-opens at **F339**.
