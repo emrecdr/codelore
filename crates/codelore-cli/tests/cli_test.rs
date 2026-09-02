@@ -1250,6 +1250,46 @@ fn format_analysis_combinations_reject_early_with_exit_2() {
 /// parser rejects an unknown `--analysis` with 2, and `schema` / `explain`
 /// now agree instead of wearing the analysis-crash code.
 #[test]
+fn nonexistent_repo_exits_3_on_every_gating_surface() {
+    // `gate` and `check` are the commands a pipeline branches on, and both
+    // reported PASS for a repository that does not exist: `Thresholds::discover`
+    // resolves `<repo>/.codelore-thresholds.toml`, and a missing file yields the
+    // default empty set — which a missing repo root satisfies trivially. The
+    // vacuous-pass branch then exited 0 and wrote `result=pass`, so a typo'd
+    // `--repo` produced a green gate.
+    //
+    // Both `check` formats are pinned deliberately: its vacuous branch opened
+    // the repository only under `--format sarif`, so the same bad path exited 3
+    // as SARIF and 0 as text. A single-format test would have passed while the
+    // defect was live.
+    let missing = "/definitely/not/a/repository";
+    for args in [
+        vec!["gate", "--repo", missing],
+        vec!["gate", "--repo", missing, "--format", "json"],
+        vec!["check", "--repo", missing, "--format", "text"],
+        vec!["check", "--repo", missing, "--format", "sarif"],
+        vec![
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            missing,
+            "--no-banner",
+        ],
+    ] {
+        let out = codelore_cmd().args(&args).output().expect("spawn codelore");
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "`codelore {}` must report a repository error (spec exit 3), got {:?}: {}",
+            args.join(" "),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
 fn unknown_names_exit_2_on_every_surface() {
     codelore_cmd()
         .args(["schema", "no-such-row-type"])
