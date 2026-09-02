@@ -3206,7 +3206,36 @@ carry the language entry their real-world counterparts have. Probe:
 with the check removed, the rejection test's `expect_err` fails on
 `Ok`; the same test pins the pools-only acceptance each run.
 
-### F361 (Fixed — Unreleased) — `--format step-summary --output -` wrote a file named `-`
+### F361 (Fixed — Unreleased) — the MCP startup guard's repo errors never reached the exit-code mapping
+
+The `codelore mcp` startup fail-fast raised both failures (repository
+open, HEAD resolution) through `anyhow::anyhow!("... {e} ...")`.
+Interpolating `{e}` renders the error into a string; it does not survive
+as a source. `main`'s `e.chain().find_map(downcast_ref::<CodeLoreError>())`
+therefore found nothing and `map_or(1, exit_code)` returned 1, while
+spec §6.6 assigns 3 to a repository error. Behaviour and message were
+correct throughout — only the number was wrong, on precisely the
+misconfiguration path the guard was added to serve.
+
+Both sites now use `anyhow::Error::new(e).context(...)`, the construction
+`preflight_and_open_repo` already uses and which keeps the variant in the
+chain (`Error::context` is inherent on `anyhow::Error`, so no trait
+import is involved). Probe: restoring the interpolating form makes the
+test report `Some(1)`.
+
+Why it survived review and a full CI matrix: the covering test asserted
+a bare `!status.success()`, which accepts any nonzero status — including
+the 101 a panic yields under this workspace's unwind strategy, and a
+signal kill, whose code is `None`. It now pins `Some(3)`. This is the
+concrete argument for the exit-code assertion sweep: tightening one
+assertion exposed a live contract violation, so that work is not
+hygiene.
+
+A sweep of every `anyhow!` interpolation in the CLI found only these two
+sites. The two remaining ones wrap `rmcp` transport failures, which carry
+no `CodeLoreError` to preserve, so their fallback to 1 is correct.
+
+### F362 (Fixed — Unreleased) — `--format step-summary --output -` wrote a file named `-`
 
 The dash gate in `analyze.rs` rejects `-` for `parquet | sqlite | spa`,
 formats that cannot stream at all. `step-summary` streams to stdout by
@@ -3231,4 +3260,4 @@ left in the working directory. No test previously exercised step-summary's
 output routing at all — the format's only prior appearance in the CLI suite
 was the time-bucket rejection.
 
-The next sweep re-opens at **F362**.
+The next sweep re-opens at **F363**.
