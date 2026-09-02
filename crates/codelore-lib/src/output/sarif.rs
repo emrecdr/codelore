@@ -1,7 +1,7 @@
 //! SARIF 2.1.0 emitter for hotspot results — Behavioral SARIF taxonomy (spec §5.4).
 //!
 //! Rule `CODELORE-HOTSPOT`: properties.tags includes "behavioral" and "hotspot"
-//! security-severity proxy: `(100 − cognitive_health) / 10`
+//! security-severity proxy: `(100 − cognitive_health) / 4`
 //! partialFingerprints for stable identity across CI runs.
 
 use crate::Result;
@@ -144,9 +144,37 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
         "shortDescription": {
             "text": "Behavioral hotspot: high churn × high complexity"
         },
+        "fullDescription": {
+            "text": "A file ranking high on BOTH change frequency and cognitive \
+                     complexity — the empirically strongest predictor of where \
+                     defects and excess maintenance cost concentrate. The score is \
+                     percentile_rank(revisions) × percentile_rank(cognitive) × \
+                     structural-health deduction."
+        },
+        // `help.markdown` is what GitHub renders in the alert panel (it is
+        // preferred over `help.text` when both are present); `text` is the
+        // required fallback for consumers without markdown rendering.
+        "help": {
+            "text": "Prioritize refactoring where churn and complexity overlap. \
+                     Run `codelore explain hotspots` for the formula and its \
+                     citations, or `codelore analyze --analysis function-hotspots` \
+                     to locate the hot function inside a flagged file.",
+            "markdown": "Prioritize refactoring where churn and complexity \
+                         overlap.\n\n- `codelore explain hotspots` — formula and \
+                         citations\n- `codelore analyze --analysis \
+                         function-hotspots` — the hot function inside a flagged \
+                         file\n- `codelore analyze --analysis x-ray` — line-range \
+                         evidence"
+        },
         "helpUri": "https://codescene.com/docs/guides/technical/hotspots.html",
+        "defaultConfiguration": { "level": "warning" },
         "properties": {
-            "tags": ["behavioral", "hotspot"]
+            "tags": ["behavioral", "hotspot"],
+            "precision": "high",
+            // The correct severity channel for a non-security rule —
+            // `security-severity` is a vulnerability score consumers grade
+            // on the CVSS bands, while this gates default visibility.
+            "problem": { "severity": "warning" }
         }
     });
 
@@ -178,8 +206,15 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
 fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     use serde_json::json;
 
-    // security-severity proxy: (100 - cognitive_health) / 10  (range 0.0–10.0)
-    let security_severity = (100.0 - row.cognitive_health) / 10.0;
+    // security-severity proxy on the REAL health range: `cognitive_health`
+    // is bounded to [60, 100] (the cognitive term deducts at most 40
+    // points), so `(100 - health) / 4` spans the full 0–10 severity scale.
+    // The earlier `/ 10` divisor capped severity at 4.0 — the `error`
+    // branch below was unreachable and a healthy file emitted 0.0, which
+    // GitHub maps to "no severity". Floored at 0.1 so every emitted
+    // hotspot carries a severity (it ranked; the floor is the "still a
+    // hotspot, just structurally healthy" grade).
+    let security_severity = ((100.0 - row.cognitive_health) / 4.0).max(0.1);
 
     // SARIF `level` derived from the same security-severity scale that
     // populates `properties.security-severity`. One source of truth —
@@ -332,10 +367,20 @@ fn build_clones_sarif(rows: &[ClonesRow], repo_root: &str) -> serde_json::Value 
                      renamed/parameterized. See CODELORE-LIVE-CLONE for the \
                      higher-severity intersection with change-coupling."
         },
+        "help": {
+            "text": "Confirm the family is intentional (generated code, test \
+                     scaffolding) or consolidate it. CODELORE-LIVE-CLONE flags \
+                     the families that also co-change — fix those first.",
+            "markdown": "Confirm the family is intentional (generated code, test \
+                         scaffolding) or consolidate it.\n\n`CODELORE-LIVE-CLONE` \
+                         flags the families that also co-change — fix those first."
+        },
         "helpUri": CODELORE_RESEARCH_FOUNDATIONS_URL,
+        "defaultConfiguration": { "level": "note" },
         "properties": {
             "precision": "medium",
-            "tags": ["behavioral", "clone", "type-1", "type-2"]
+            "tags": ["behavioral", "clone", "type-1", "type-2"],
+            "problem": { "severity": "recommendation" }
         }
     });
 
@@ -494,10 +539,20 @@ fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> ser
                      actionable the finding is. Live clones are real technical \
                      debt; dead clones (filtered out) are noise."
         },
+        "help": {
+            "text": "Copies that change together are one logical unit paying \
+                     double maintenance. Extract the shared function, or record \
+                     why the duplication is deliberate.",
+            "markdown": "Copies that change together are one logical unit paying \
+                         double maintenance.\n\nExtract the shared function, or \
+                         record why the duplication is deliberate."
+        },
         "helpUri": CODELORE_RESEARCH_FOUNDATIONS_URL,
+        "defaultConfiguration": { "level": "warning" },
         "properties": {
             "precision": "high",
-            "tags": ["behavioral", "clone", "live-clone", "co-change", "x-ray"]
+            "tags": ["behavioral", "clone", "live-clone", "co-change", "x-ray"],
+            "problem": { "severity": "warning" }
         }
     });
 
@@ -694,7 +749,27 @@ fn build_check_sarif<S: std::hash::BuildHasher>(
                 "shortDescription": {
                     "text": format!("Quality gate: {gate}")
                 },
-                "helpUri": "https://github.com/emrecdr/codelore/blob/main/docs/advanced-usage.md#check-gates"
+                "fullDescription": {
+                    "text": format!(
+                        "The `{gate}` threshold from .codelore-thresholds.toml \
+                         was exceeded. Each result carries the measured value, \
+                         the configured threshold, and commit-level evidence."
+                    )
+                },
+                "help": {
+                    "text": "Compare the measured value against the threshold in \
+                             .codelore-thresholds.toml; the result's code flow \
+                             lists the commits that drove the metric.",
+                    "markdown": "Compare the measured value against the threshold \
+                                 in `.codelore-thresholds.toml`; the result's \
+                                 code flow lists the commits that drove the \
+                                 metric."
+                },
+                "helpUri": "https://github.com/emrecdr/codelore/blob/main/docs/advanced-usage.md#check-gates",
+                "defaultConfiguration": { "level": "error" },
+                "properties": {
+                    "problem": { "severity": "error" }
+                }
             })
         })
         .collect();
