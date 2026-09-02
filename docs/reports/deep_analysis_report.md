@@ -2933,4 +2933,21 @@ epoch-bounded `path_lineage` now carries enough information to build
 one). Designed fix, not a two-line patch — recorded rather than
 half-fixed.
 
-The next sweep re-opens at **F346**.
+### F346 (Fixed — Unreleased) — `changes_bucketed` rebuilt on every call and collapsed `change_type` lexicographically
+
+The bucketed table had no build-once guard (its sibling `changes_lineage`
+gained one under F184 for exactly this cost), so every bucket-aware
+analysis in a run re-ran the full `changes ⋈ commits` scan; and its
+`change_type` collapsed with lexicographic `MAX` one line away from the
+chronological `arg_max` on `rename_from` — a file modified then deleted
+inside one bucket read 'modified' and stayed live under every downstream
+deletion rule. The new guard keys on `(bucket unit, lineage)` so a
+different bucketing still rebuilds, and `apply_grouping`'s swap
+invalidates it alongside the lineage guard; `change_type` now takes the
+chronologically last event. `apply_grouping`'s own `MAX(change_type)` is
+deliberately untouched — that collapse is within one commit, where no
+chronological order exists. Seeded tests pin the modify-then-delete
+collapse and the guard's same-key/different-key behavior via a sentinel
+row; both fail on the unfixed shapes.
+
+The next sweep re-opens at **F347**.
