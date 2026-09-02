@@ -302,9 +302,12 @@ impl std::fmt::Debug for Resolved {
 /// error.
 const VALID_PROVIDERS: &str = "\"anthropic\" or \"openai-compat\"";
 
-/// Choose a client shape from environment inputs. Explicit provider wins; with
-/// none, an Anthropic key implies the Anthropic dialect, otherwise the
-/// local-first OpenAI-compatible dialect.
+/// Choose a client shape from environment inputs. An explicit provider is
+/// REQUIRED for the hosted dialect: an ambient `ANTHROPIC_API_KEY` alone —
+/// commonly exported for unrelated tooling — must never redirect repository
+/// evidence to a hosted endpoint under a local-first posture, so key
+/// presence without a provider is an error naming the fix, not a silent
+/// dialect switch.
 fn resolve(env: &LlmEnv) -> Result<Resolved> {
     match env.provider.as_deref().map(str::trim) {
         Some(provider) if provider.eq_ignore_ascii_case("anthropic") => resolve_anthropic(env),
@@ -314,7 +317,13 @@ fn resolve(env: &LlmEnv) -> Result<Resolved> {
         Some(other) => Err(CodeLoreError::Analysis(format!(
             "unknown CODELORE_LLM_PROVIDER {other:?} — set it to {VALID_PROVIDERS}"
         ))),
-        None if env.anthropic_key.is_some() => resolve_anthropic(env),
+        None if env.anthropic_key.is_some() => Err(CodeLoreError::Analysis(
+            "ANTHROPIC_API_KEY is set but CODELORE_LLM_PROVIDER is not — refusing to \
+             infer a hosted endpoint from an ambient credential. Set \
+             CODELORE_LLM_PROVIDER=anthropic to send fact sheets to the hosted API, \
+             or leave it unset to stay on the local OpenAI-compatible endpoint."
+                .to_string(),
+        )),
         None => resolve_openai_compat(env),
     }
 }
@@ -347,23 +356,56 @@ fn resolve_openai_compat(env: &LlmEnv) -> Result<Resolved> {
                 .to_string(),
         )
     })?;
+    let base_url = env
+        .base_url
+        .clone()
+        .unwrap_or_else(|| DEFAULT_OPENAI_COMPAT_BASE_URL.to_string());
+    // A bearer token over plaintext HTTP is only acceptable to a loopback
+    // listener (ollama, llama.cpp, LM Studio all bind localhost): any other
+    // http:// host would leak the credential to the network path.
+    if env.api_key.is_some() && base_url.starts_with("http://") && !is_loopback_http(&base_url) {
+        return Err(CodeLoreError::Analysis(format!(
+            "CODELORE_LLM_API_KEY is set but CODELORE_LLM_BASE_URL ({base_url}) is \
+             plain http:// to a non-loopback host — the bearer token would cross \
+             the network unencrypted. Use https://, or a loopback endpoint."
+        )));
+    }
     Ok(Resolved::OpenAiCompat {
-        base_url: env
-            .base_url
-            .clone()
-            .unwrap_or_else(|| DEFAULT_OPENAI_COMPAT_BASE_URL.to_string()),
+        base_url,
         api_key: env.api_key.clone(),
         model,
     })
+}
+
+/// Whether an `http://` base URL points at a loopback host (`localhost`,
+/// `127.0.0.0/8`, or `[::1]`), the only place a bearer token may travel
+/// unencrypted.
+fn is_loopback_http(base_url: &str) -> bool {
+    let Some(rest) = base_url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?']).next().unwrap_or("");
+    let host = authority
+        .strip_prefix('[')
+        .and_then(|h| h.split(']').next())
+        .unwrap_or_else(|| authority.rsplit_once(':').map_or(authority, |(h, _)| h));
+    // Parse as a real address rather than prefix-matching: a hostname like
+    // `127.evil.example` must not pass as loopback.
+    host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Resolve a [`ChatClient`] from environment inputs (local-first).
 ///
 /// With an explicit `CODELORE_LLM_PROVIDER`, that dialect is used — the
 /// Anthropic dialect requires `ANTHROPIC_API_KEY`, the OpenAI-compatible dialect
-/// requires `CODELORE_LLM_MODEL`. With no provider set, an `ANTHROPIC_API_KEY`
-/// selects the Anthropic dialect; otherwise resolution falls to the local-first
-/// OpenAI-compatible dialect (which still requires a model).
+/// requires `CODELORE_LLM_MODEL`. With no provider set, resolution is
+/// local-first and stays local: an ambient `ANTHROPIC_API_KEY` without the
+/// explicit provider is an error, never a silent redirect of repository
+/// evidence to a hosted endpoint.
 pub fn resolve_client(env: &LlmEnv) -> Result<Box<dyn ChatClient>> {
     Ok(match resolve(env)? {
         Resolved::Anthropic {
@@ -460,8 +502,24 @@ mod tests {
     }
 
     #[test]
-    fn an_anthropic_key_implies_the_anthropic_dialect() {
+    fn an_ambient_anthropic_key_without_a_provider_is_an_error() {
+        // Local-first contract: a key exported for unrelated tooling must
+        // never silently redirect repository evidence to a hosted endpoint.
         let env = LlmEnv {
+            anthropic_key: Some("secret".to_string()),
+            ..LlmEnv::default()
+        };
+        let err = resolve(&env).expect_err("ambient key must not select a dialect");
+        assert!(
+            err.to_string().contains("CODELORE_LLM_PROVIDER"),
+            "the error must name the fix: {err}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_anthropic_provider_selects_the_dialect() {
+        let env = LlmEnv {
+            provider: Some("anthropic".to_string()),
             anthropic_key: Some("secret".to_string()),
             ..LlmEnv::default()
         };
@@ -469,6 +527,35 @@ mod tests {
             resolve(&env).expect("resolves"),
             Resolved::Anthropic { .. }
         ));
+    }
+
+    #[test]
+    fn a_bearer_token_over_plain_http_requires_a_loopback_host() {
+        let base = |url: &str| LlmEnv {
+            provider: Some("openai-compat".to_string()),
+            model: Some("llama3".to_string()),
+            base_url: Some(url.to_string()),
+            api_key: Some("bearer".to_string()),
+            ..LlmEnv::default()
+        };
+        for ok in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]:8080/v1",
+            "https://api.example.com/v1",
+        ] {
+            assert!(resolve(&base(ok)).is_ok(), "{ok} should resolve");
+        }
+        for bad in [
+            "http://llm.internal:8080/v1",
+            "http://127.evil.example/v1", // hostname, not a loopback IP
+        ] {
+            let err = resolve(&base(bad)).expect_err("non-loopback http + bearer");
+            assert!(
+                err.to_string().contains("unencrypted"),
+                "the error must explain the leak: {err}"
+            );
+        }
     }
 
     #[test]
@@ -489,6 +576,7 @@ mod tests {
     fn debug_redacts_credential_material() {
         // Anthropic dialect: the required key must never appear in `{:?}`.
         let anthropic = resolve(&LlmEnv {
+            provider: Some("anthropic".to_string()),
             anthropic_key: Some("sk-ant-super-secret".to_string()),
             ..LlmEnv::default()
         })
@@ -541,6 +629,7 @@ mod tests {
     #[test]
     fn resolve_client_wires_the_model_id() {
         let anthropic = LlmEnv {
+            provider: Some("anthropic".to_string()),
             anthropic_key: Some("secret".to_string()),
             ..LlmEnv::default()
         };
