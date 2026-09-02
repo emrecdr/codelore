@@ -2967,4 +2967,23 @@ severity channel for non-security rules). Remaining from the same
 research, deliberately not in this change: self-truncation above the
 5,000-results display cap with disclosure.
 
-The next sweep re-opens at **F348**.
+### F348 (Fixed — Unreleased) — attestations never reached release assets, and the Action's checksum check failed open
+
+The signing pipeline was complete and correct — matrix-attested archives,
+enforced L3 permission split — but bundles went only to the GitHub
+attestations API, while asset-based verifiers (OpenSSF Scorecard's
+Signed-Releases check among them) inspect release assets for
+`*.sigstore.json` and never consult the API: releases scored as unsigned
+forever. Each bundle now publishes as an `<archive>.sigstore.json` asset.
+The trusted signer stays first-party-actions-only — the signing-isolation
+guard rejected this change's first draft for adding a rename shell step
+beside the token, exactly its designed enforcement — so the per-archive
+rename lives in the token-free release job, behind a zero-staged-bundles
+cardinality floor. Separately, `action.yml`'s SHA256SUMS verification
+skipped on ANY fetch failure (absence indistinguishable from a 5xx, a
+proxy, or an adversary dropping the manifest); it now branches on HTTP
+status — 404 (pre-manifest release) warns, everything else and a
+manifest lacking the archive's entry refuses to run an unverified
+binary. Runtime proof of the bundle wiring lands with the next `v*` tag.
+
+The next sweep re-opens at **F349**.
