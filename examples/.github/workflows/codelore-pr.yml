@@ -58,7 +58,7 @@ jobs:
           codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
             --analysis all \
             --top-n 10 \
-            --output markdown >> "$GITHUB_STEP_SUMMARY"
+            --format markdown >> "$GITHUB_STEP_SUMMARY"
 
       # SARIF output goes to the GitHub Security tab and annotates the PR
       # diff inline for findings whose line falls in the PR's changed lines.
@@ -66,7 +66,7 @@ jobs:
         run: |
           codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
             --analysis hotspots \
-            --output sarif > codelore-results.sarif
+            --format sarif > codelore-results.sarif
 
       - name: Upload SARIF to Code Scanning
         if: always()  # surface findings even on later step failures
@@ -86,4 +86,4 @@ jobs:
             --analysis hotspots \
             --top-n 10 \
             --fail-on rank-entrant \
-            --output text
+            --format text
