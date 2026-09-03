@@ -16,10 +16,10 @@
 /// considered healthy. Below this, the fact store is thin enough that every
 /// analysis reading the pass's table — and every gate reading those analyses
 /// — is drawing conclusions from a minority of the codebase.
-pub(super) const MIN_SCAN_COVERAGE: f64 = 0.9;
+pub(crate) const MIN_SCAN_COVERAGE: f64 = 0.9;
 
-pub(super) const REASON_BLOB_READ: &str = "blob read failed";
-pub(super) const REASON_PARSE_ERROR: &str = "parse error";
+pub(crate) const REASON_BLOB_READ: &str = "blob read failed";
+pub(crate) const REASON_PARSE_ERROR: &str = "parse error";
 
 /// What a HEAD scan did with one file.
 ///
@@ -43,7 +43,7 @@ pub(super) const REASON_PARSE_ERROR: &str = "parse error";
 /// fully covered and contributes an empty payload the drain skips. Classifying
 /// those as `NotCounted` would shrink the denominator and make coverage read
 /// better than it is, which is the exact blindness this type exists to remove.
-pub(super) enum ScanOutcome<T> {
+pub(crate) enum ScanOutcome<T> {
     /// No row, and none was owed: not an eligible source file; or a path
     /// carried by `changes` that HEAD no longer tracks (`live_paths` is derived
     /// from history, so a file deleted before HEAD is legitimately absent); or
@@ -68,7 +68,7 @@ pub(super) enum ScanOutcome<T> {
 }
 
 /// How much of the eligible file set a pass actually covered.
-pub(super) struct ScanCoverage {
+pub(crate) struct ScanCoverage {
     eligible: usize,
     scored: usize,
     /// Files skipped past the AST byte cap — outside the loss ratio, inside
@@ -79,7 +79,7 @@ pub(super) struct ScanCoverage {
 }
 
 impl ScanCoverage {
-    pub(super) fn tally<T>(outcomes: &[ScanOutcome<T>]) -> Self {
+    pub(crate) fn tally<T>(outcomes: &[ScanOutcome<T>]) -> Self {
         let mut scored = 0usize;
         let mut skipped_oversize = 0usize;
         let mut counts: std::collections::BTreeMap<&'static str, usize> =
@@ -107,7 +107,7 @@ impl ScanCoverage {
     /// repository carries no eligible source at all — a docs-only tree is
     /// honestly complete, not degraded.
     #[allow(clippy::cast_precision_loss)]
-    pub(super) fn ratio(&self) -> f64 {
+    pub(crate) fn ratio(&self) -> f64 {
         if self.eligible == 0 {
             1.0
         } else {
@@ -126,7 +126,7 @@ impl ScanCoverage {
     /// did not opt into logging. The per-file messages stay where they are —
     /// they say *which* file, this says *how much of the repository is
     /// missing*.
-    pub(super) fn warn_if_degraded(&self, scan: &str, table: &str) {
+    pub(crate) fn warn_if_degraded(&self, scan: &str, table: &str) {
         if self.eligible == 0 || self.ratio() >= MIN_SCAN_COVERAGE {
             return;
         }
@@ -155,7 +155,7 @@ impl ScanCoverage {
     /// deliberately not losses — so it is the predicate the oversize
     /// disclosure fires on. Its own tests call it directly, so the warning
     /// and the tests cannot drift apart.
-    pub(super) fn oversize_majority(&self) -> bool {
+    pub(crate) fn oversize_majority(&self) -> bool {
         self.skipped_oversize > self.scored
     }
 
@@ -163,7 +163,7 @@ impl ScanCoverage {
     /// what left the table thin. Same `warn!` rationale as
     /// [`Self::warn_if_degraded`]; fires only on a majority so the routine
     /// bundle-carrying repository stays quiet.
-    pub(super) fn warn_if_mostly_oversize(&self, scan: &str, table: &str) {
+    pub(crate) fn warn_if_mostly_oversize(&self, scan: &str, table: &str) {
         if !self.oversize_majority() {
             return;
         }

@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 use crate::analyses::query::query_map_collect;
 use crate::clones::{CloneLanguage, extract_functions, group_clones};
 use crate::facts::FactsDb;
+use crate::facts::ingest::coverage::{REASON_BLOB_READ, ScanCoverage, ScanOutcome};
 use crate::options::Options;
 use crate::{CodeLoreError, Result};
 
@@ -37,6 +38,50 @@ pub struct ClonesRow {
     pub node_count: u32,
     pub similarity: f64,
     pub family_size: u32,
+}
+
+/// Classify one candidate file for the working-tree clone scan.
+///
+/// Named rather than inlined so the classification is directly testable:
+/// the only observable difference between a counted loss and a silent drop
+/// is a `tracing` warning and the coverage denominator, neither of which a
+/// caller of [`run_clones`] can see. Testing the classifier is the same
+/// approach the coverage module takes with its disclosure predicates.
+///
+/// This scan is the one `analyze`, `gate`'s change-set projection and `diff`
+/// consume. It previously dropped an unreadable file with `.ok()?` — no
+/// message at any level — so a scan that reached five of five thousand files
+/// returned the same value as one that genuinely found no duplication.
+fn scan_one(
+    path: &std::path::Path,
+    rel: &str,
+    lang: CloneLanguage,
+) -> Result<ScanOutcome<Vec<crate::clones::FunctionFingerprint>>> {
+    let code = match fs::read(path) {
+        Ok(code) => code,
+        Err(e) => {
+            // Eligible and unreadable: a permission error, or a file removed
+            // mid-scan. Non-fatal — the rest of the scan still completes —
+            // but counted, and said out loud.
+            tracing::warn!("clones: read failed for {rel}: {e}");
+            return Ok(ScanOutcome::Lost(REASON_BLOB_READ));
+        }
+    };
+    // Skip oversized files (generated / minified) before tree-sitter to
+    // avoid OOM / stack-overflow on deeply nested generated code.
+    if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+        tracing::debug!(
+            "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+            size = code.len(),
+            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+        );
+        return Ok(ScanOutcome::SkippedOversize);
+    }
+    // A file that fingerprints to nothing is still fully covered — read and
+    // walked, simply holding no extractable functions.
+    extract_functions(rel, &code, lang)
+        .map(ScanOutcome::Scored)
+        .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
 }
 
 /// Run the clones analysis at HEAD. Walks `opts.repo_path`'s working tree,
@@ -88,28 +133,21 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     // Parallel phase: read + tree-sitter for each candidate.
     // `collect::<Result<Vec<_>>>()` preserves fail-fast semantics on
     // any extract_functions error.
-    let all_fns: Vec<_> = candidates
+    let outcomes: Vec<ScanOutcome<Vec<_>>> = candidates
         .into_par_iter()
-        .filter_map(|(path, rel, lang)| -> Option<Result<Vec<_>>> {
-            let code = fs::read(&path).ok()?;
-            // Skip oversized files (generated / minified) before
-            // tree-sitter to avoid OOM / stack-overflow on deeply nested
-            // generated code.
-            if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                tracing::debug!(
-                    "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
-                    size = code.len(),
-                    cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                );
-                return None;
-            }
-            Some(
-                extract_functions(&rel, &code, lang)
-                    .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}"))),
-            )
-        })
-        .collect::<Result<Vec<_>>>()?
+        .map(|(path, rel, lang)| scan_one(&path, &rel, lang))
+        .collect::<Result<Vec<_>>>()?;
+
+    let coverage = ScanCoverage::tally(&outcomes);
+    coverage.warn_if_degraded("clone", "clones");
+    coverage.warn_if_mostly_oversize("clone", "clones");
+
+    let all_fns: Vec<_> = outcomes
         .into_iter()
+        .filter_map(|o| match o {
+            ScanOutcome::Scored(fns) => Some(fns),
+            _ => None,
+        })
         .flatten()
         .collect();
     let groups = group_clones(all_fns, opts.min_clone_node_count);
@@ -199,6 +237,52 @@ fn relative(root: &Path, abs: &Path) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// The classification is what the fix changed, and it is the only thing
+    /// a caller cannot observe: `run_clones` returns rows either way, and the
+    /// difference between a counted loss and a silent drop shows up only in a
+    /// `tracing` warning and the coverage denominator. An end-to-end test
+    /// therefore passes whether or not the fix is present — verified by
+    /// probe — so the classifier is asserted directly instead.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_a_counted_loss_not_a_silent_drop() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let denied = dir.path().join("denied.rs");
+        let mut f = std::fs::File::create(&denied).unwrap();
+        writeln!(f, "fn denied() -> i32 {{ 1 }}").unwrap();
+        drop(f);
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let outcome = scan_one(&denied, "denied.rs", CloneLanguage::Rust).expect("non-fatal");
+
+        // Restore before teardown, which cannot remove a mode-000 file.
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            matches!(outcome, ScanOutcome::Lost(REASON_BLOB_READ)),
+            "an unreadable file must be counted as lost, not dropped from the denominator"
+        );
+    }
+
+    /// A readable file is `Scored` even when it holds no extractable
+    /// functions: it was reached and walked, so it is covered. Classifying it
+    /// as anything else would shrink the denominator and make coverage read
+    /// better than it is.
+    #[test]
+    fn a_readable_file_is_scored_even_when_it_yields_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty.rs");
+        std::fs::write(&empty, b"// no functions here\n").unwrap();
+
+        let outcome = scan_one(&empty, "empty.rs", CloneLanguage::Rust).expect("readable");
+        assert!(
+            matches!(outcome, ScanOutcome::Scored(ref fns) if fns.is_empty()),
+            "a readable file with no functions is covered, not uncounted"
+        );
+    }
 
     #[test]
     fn finds_type2_clone_pair_in_a_tempdir() {

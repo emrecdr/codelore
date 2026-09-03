@@ -3442,4 +3442,41 @@ and the first measurement was wrong (a shell redirect ordering bug
 reported 2 everywhere), caught only because the error text said
 "repository error" while the number said 2 and both could not be true.
 
-The next sweep re-opens at **F368**.
+### F368 (Fixed — Unreleased) — the working-tree clone scan had no coverage accounting
+
+`facts/ingest/coverage.rs` provides `ScanOutcome` / `ScanCoverage` and the
+HEAD-time clone pass (`clones_head.rs`) has used them since it was
+written. `analyses/clones.rs::run_clones` — the working-tree scan that
+`analyze`, `gate`'s change-set projection and `diff` consume — had none.
+Its per-file read was `fs::read(&path).ok()?`: an unreadable file
+vanished with no message at ANY level, not even `debug!`. A scan that
+reached five of five thousand files returned the same `Vec<ClonesRow>`
+as one that genuinely found no duplication, and nothing in the output
+distinguished them.
+
+The coverage module was `mod coverage;` (private) with `pub(super)`
+items, reachable only from inside `facts::ingest` — which is exactly why
+the instrumented pass had it and the uninstrumented one could not. It is
+now `pub(crate)`, and `run_clones` classifies each file the way its twin
+does: `Lost(REASON_BLOB_READ)` with a warning for an unreadable file,
+`SkippedOversize` for one past the AST cap, `Scored` otherwise, then
+`warn_if_degraded` and `warn_if_mostly_oversize`.
+
+**The first test for this was vacuous, and the probe is what caught it.**
+It drove `run_clones` end to end and asserted the readable clone pair was
+still found — which is true with or without the fix, because the only
+observable difference is a warning and the coverage denominator, neither
+visible to a caller. The classification is now a named `scan_one`
+asserted directly, the same approach the coverage module takes with its
+own disclosure predicates. Probe: reverting the classification fails the
+test naming the defect.
+
+Deliberately out of scope, still open: the two at-rev scans
+(`architecture_trend::resolve_imports_at_rev` and
+`facts/ingest/at_rev.rs`) remain uninstrumented, where the consequence is
+sharper — `architecture_trend` seeds its node count from the live-path
+list rather than from successful reads, so failed reads keep the
+denominator while losing edges, and a rev that scanned nothing renders as
+an improvement on the trend chart.
+
+The next sweep re-opens at **F369**.
