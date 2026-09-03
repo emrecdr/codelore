@@ -34,6 +34,9 @@ use std::collections::HashSet;
 use crate::analyses::import_graph::{build_import_graph_seeded, graph_metrics};
 use crate::complexity::Tier1Language;
 use crate::facts::FactsDb;
+use crate::facts::ingest::coverage::{
+    REASON_BLOB_READ, REASON_PARSE_ERROR, ScanCoverage, ScanOutcome,
+};
 use crate::repo::Repo;
 use crate::{Options, Result};
 
@@ -254,32 +257,64 @@ fn resolve_imports_at_rev<R: Repo>(
     // in full every time. A read/parse failure on one file skips that file
     // (a corrupt blob mustn't sink the whole sample point), matching the
     // HEAD scan's tolerance.
-    let edges: Vec<(String, String)> = candidates
+    let outcomes: Vec<ScanOutcome<Vec<(String, String)>>> = candidates
         .into_par_iter()
         .map_init(
             || repo.blob_reader_at(rev),
-            |reader, (rel, lang)| -> Vec<(String, String)> {
-                let mut out: Vec<(String, String)> = Vec::new();
-                let Ok(Some(code)) = reader.read(&rel) else {
-                    return out;
+            |reader, (rel, lang)| -> ScanOutcome<Vec<(String, String)>> {
+                // Every one of these branches used to be a bare `return
+                // out` — three silent drops, not even a `debug!`. The
+                // consequence is one-directional and lands on the trend
+                // chart: `seeds` above is built from the LIVE-PATH list,
+                // not from successful reads, so a rev whose blobs fail
+                // keeps its node count while losing its edges. Propagation
+                // cost falls, `arch_health` rises, and `HealthTrendRow.files`
+                // — the one column a reader could use to notice — is that
+                // same seed count and does not move. A rev that scanned
+                // nothing renders as full coverage at perfect health.
+                let code = match reader.read(&rel) {
+                    Ok(Some(code)) => code,
+                    // Not present at this rev: legitimately absent, and no
+                    // row was owed. `live_paths_at` is derived from history,
+                    // so this is expected rather than a loss.
+                    Ok(None) => return ScanOutcome::NotCounted,
+                    Err(e) => {
+                        tracing::warn!("architecture-trend: blob read failed for {rel}: {e}");
+                        return ScanOutcome::Lost(REASON_BLOB_READ);
+                    }
                 };
                 if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                    return out;
+                    return ScanOutcome::SkippedOversize;
                 }
                 let Ok(imports) = extract_imports(&code, lang) else {
-                    return out;
+                    tracing::warn!("architecture-trend: import parse failed for {rel}");
+                    return ScanOutcome::Lost(REASON_PARSE_ERROR);
                 };
+                let mut out: Vec<(String, String)> = Vec::new();
                 for imp in imports {
                     if let Some(target_path) = resolve_by_extension(&rel, &imp.target, &live_set) {
                         out.push((rel.clone(), target_path));
                     }
                 }
-                out
+                // A file with no resolvable imports is still fully covered —
+                // read and parsed, it simply contributes no edges.
+                ScanOutcome::Scored(out)
             },
         )
-        .flatten_iter()
         .collect();
-    edges
+
+    let coverage = ScanCoverage::tally(&outcomes);
+    coverage.warn_if_degraded("architecture-trend import", "import graph");
+    coverage.warn_if_mostly_oversize("architecture-trend import", "import graph");
+
+    outcomes
+        .into_iter()
+        .filter_map(|o| match o {
+            ScanOutcome::Scored(edges) => Some(edges),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 #[cfg(all(test, feature = "test-support"))]
