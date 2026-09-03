@@ -65,7 +65,7 @@ CodeLore ships **dozens of behavioral analyses** across four tiers (the registry
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
 | `knowledge-islands` ★ | "Which files are at risk because their primary author is gone?" | Bird et al. 2011 + departed-author detection | Bus-factor risk surfaced automatically (no manual ex-developer marking) |
-| `code-familiarity` ★ | "What fraction of this codebase is actively understood?" | SLOC-weighted decayed knowledge share; islands = files with no active ≥80%-owner | One-number knowledge-coverage question for the whole repo |
+| `code-familiarity` ★ | "What fraction of this codebase is actively understood?" | SLOC-weighted decayed knowledge share; islands = files where one author holds ≥80% of the knowledge with no substantial second owner | One-number knowledge-coverage question for the whole repo |
 | `team-composition` ★ | "How is commit activity distributed across tenure buckets?" | Contribution-span tenure classification (onboarded / experienced / veteran) with behavioral breadth gate | Onboarding throughput + veteran over-concentration at a glance |
 | `coordination-needs` ★ | "Which files generate the most coordination overhead?" | Fragmentation (HHI complement) × interleave (LAG-window author switches) × co-change entropy (Shannon, window-scoped) | Strongest predictors of merge friction and review delays |
 | `marginal-owner-risk` ★ | "Where does the most knowledgeable active author have the least context?" | Max decayed knowledge share among active authors, per yellow/red-band file | Predicts where the on-call person has the least context when a file breaks |
@@ -493,13 +493,13 @@ Presentation follows the project's honesty framing: **association, not causation
 
 The guided tour steps through the hero circle-pack map in a curated sequence designed to answer one coherent question per step before handing off to free-form exploration.
 
-**Step 1 — Code health:** sets the circle-pack colour mode to the bivariate health×activity view. Shows which files are both structurally unhealthy and actively churning. The danger quadrant (unhealthy + high activity) is the refactoring priority list.
+**Step 1 — Code health:** sets the circle-pack colour mode to the code-health band view. Shows which files are both structurally unhealthy and actively churning. The danger quadrant (unhealthy + high activity) is the refactoring priority list.
 
 **Step 2 — Hotspots:** switches to the Cognitive complexity colour mode. Highlights the files with the highest cognitive burden per commit. Compare with Step 1: files that appear in both views are the highest-leverage refactoring candidates.
 
 **Step 3 — Effort in red:** switches to the Friction (tech-debt) colour mode. Paired with the effort-exposure share bars, this step answers: "How much of our recent activity is landing in high-friction code?"
 
-**Step 4 — Refactoring targets:** returns to the bivariate health×activity view and brushes the top-10 hotspots by `hotspot_score`. Use this as a starting list for sprint planning.
+**Step 4 — Refactoring targets:** keeps the code-health band view and brushes the top-10 refactoring targets across every widget (falling back to the top hotspots by `hotspot_score` when the refactoring-targets data is absent). Exiting the tour restores the bivariate default. Use this as a starting list for sprint planning.
 
 After Step 4, the tour exits to free-form mode — the brush and colour mode are yours to adjust. Click any chip to jump to that step, or click Exit at any time. The tour state is not persisted across page loads.
 
@@ -809,7 +809,7 @@ The diff subcommand emits four SARIF rule types: CODELORE-HOTSPOT (newly-enterin
 
 ## 4. PR-mode: `codelore diff`
 
-The form you actually deploy in CI. Three findings per range:
+The form you actually deploy in CI. Four findings per range:
 
 ### Hotspot deltas
 
@@ -991,6 +991,7 @@ Automated commits (dependency-bump bots, CI bots, release bots) skew Conway-styl
 - `copilot[bot]`
 - `renovate[bot]`
 - `pre-commit-ci[bot]`
+- `devin-ai-integration[bot]`
 
 Match is plain substring containment, so `dependabot[bot]@noreply.github.com` matches `dependabot[bot]`. Bot commits still land in the fact store (so you can still query them in SQL via the SQLite/Parquet export) but they get the `ai-authored` attribution and the author-based analyses treat them as automated agents rather than human contributors.
 
@@ -1002,7 +1003,7 @@ Each commit is classified into one of three buckets and stamped in the `commits.
 
 | Class | Trigger (in priority order) |
 |---|---|
-| `ai-authored` | Author or committer matches one of the bot patterns above |
+| `ai-authored` | Author email or name matches one of the bot patterns above |
 | `ai-assisted` | Commit message carries a `Co-Authored-By:` trailer naming an AI assistant — Claude, Copilot, Cursor, Cody, Continue, Codeium, Windsurf, Devin, Tabnine, Amazon Q, or Aider |
 | `human` | Default — no AI signals found |
 
@@ -1307,9 +1308,13 @@ The complexity-extraction pass uses Rayon by default (one task per source file).
 
 ### Scan coverage and the AST size cap
 
-The three HEAD-time passes (complexity, clones, imports) keep a per-pass
-census. Two aggregate warnings can fire from it, both at the default log
-level:
+Every pass that reads and parses source keeps a per-pass census: the
+HEAD-time passes (complexity, clones, imports), the working-tree clone scan
+that `analyze --analysis clones`, `gate`'s change-set projection and `diff`
+consume, and the at-rev passes behind the historical trends. A cache hit
+skips the ingest, so on a warm run the working-tree scan is often the only
+census that executes. Two aggregate warnings can fire from any of them,
+both at the default log level:
 
 - **Degraded coverage** — a pass that *failed* to read or parse ≥10% of the
   eligible source files warns with the loss breakdown. The usual cause is a
@@ -1402,6 +1407,12 @@ The `--quiet` flag suppresses diagnostic noise (per-violation detail lines, inli
 | 3 | Repository error (not a git repo, no HEAD, etc.) |
 | 4 | Analysis error |
 | 5 | Output/I/O error |
+
+`check` and `gate` open the repository before reading thresholds, so a
+`--repo` that is missing or is not a git repository is an exit-3 repository
+error rather than a vacuous pass — a typo'd path in a CI job cannot produce
+a green gate. (`check --history` prints the gate-run ledger without
+evaluating anything and returns before that check.)
 
 Two out-of-band terminations sit outside this 0–5 contract:
 

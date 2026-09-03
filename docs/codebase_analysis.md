@@ -147,7 +147,7 @@ Spec §3.1 + Kamei et al. 2013 (TSE). Implemented as five SQL UPDATE passes afte
 
 ## 8. Advisory enrichment layer
 
-Opt-in (`--llm`) narrative layer over the deterministic dossiers — strictly outside the scoring path: no module in `analyses`, `quality_gates`, or `facts` imports it, and the `enrichment_isolation_test` integration test guards that one-way arrow.
+Opt-in (`--llm`) narrative layer over the deterministic dossiers — strictly outside the scoring path: no module anywhere under `src/` outside the layer itself, the crate root and the CLI facade imports it, and the `enrichment_isolation_test` integration test guards that one-way arrow — it scans every source file against a named exemption list, so a new module is covered by default rather than by being remembered.
 
 - **`enrichment/fact_sheet.rs`** — deterministic per-file and per-diff fact sheets: ordered sections of pre-formatted values; the canonical text is both the model's prompt input and the narrative-cache key, and `numeric_values()` extracts the fact set the citation check matches against
 - **`enrichment/client.rs`** — two-dialect chat client (Anthropic-native + OpenAI-compatible), configured through the environment only (`CODELORE_LLM_*`); the default endpoint is a local OpenAI-compatible server, so nothing leaves the machine without an explicit configuration change

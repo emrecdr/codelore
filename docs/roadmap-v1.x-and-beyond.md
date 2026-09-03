@@ -43,7 +43,7 @@ The current state of the codebase. For per-release history see `CHANGELOG.md`.
 
 ### Analysis surface
 
-- **The full analysis registry** (enumerated by `AnalysisName::all()` / `codelore --list`) including hotspots, change-coupling, ownership, code-health, clones, live-clones, Kamei JIT-SDP features, knowledge-islands, centrality, behavioural communities (Leiden), god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor, and refactoring-targets
+- **The full analysis registry** (enumerated by `AnalysisName::all()`, which `codelore profile` prints live) including hotspots, change-coupling, ownership, code-health, clones, live-clones, Kamei JIT-SDP features, knowledge-islands, centrality, behavioural communities (Leiden), god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor, and refactoring-targets
 - **MI (Maintainability Index) surfacing** — `mi_sei()` per-function values from `codelore-rca` joined onto hotspots and code-health, banded into Low/Moderate/High via SQL `CASE WHEN` and rolled up on the KPI tiles (Coleman 1994 + SEI variant; polyglot across the languages `codelore-rca` parses)
 - **Behavioural-graph centrality** as a first-class analysis (degree / in / out on the Fisher-significant co-change graph) — previously an internal TEMP TABLE, now a queryable output row type
 - **Behavioural communities (Leiden)** over the Fisher-significant coupling graph — different signal vs static-import modularity tools (we cluster on git co-change). Output: per-file community ID + global Q score, surfaced on a KPI tile, in the sankey node coloring, and in the drawer's "behavioural module" section

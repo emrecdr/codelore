@@ -685,7 +685,7 @@ CodeLore's default surface reflects modern stack capabilities; code-maat compati
 | `code-age` columns | `[entity, age-months]` | `[entity, age_months, age_days, last_modified]` — second-precision back-test, recency triage | ✓ — CSV writer emits `entity,age-months` under compat. |
 | Column casing | `n-authors`, `age-months`, `loc-added` (hyphens) | `n_authors`, `age_months`, `added` (snake_case — Rust idiom, also matches JSON/SARIF/parquet) | ✓ — compat-mode CSV writers (`summary`, `code-age`, `communication`, `ownership`, `authors`) emit code-maat's hyphenated names. |
 | Tie-break | Arbitrary | Secondary sort on canonical author name; cross-run reproducibility | (n/a — modernisation, no code-maat equivalent worth restoring.) |
-| Short flags | 13 single-letter flags (`-n -m -i -x -s -t -d -l -c -r`) | Long flags only (surviving shorts: `-a -r -f -o -g -p -e`) | (n/a — modern CLI convention; migration map below.) |
+| Short flags | 10 single-letter flags (`-n -m -i -x -s -t -d -l -c -r`) | Long flags only (surviving shorts: `-a -r -f -o -g -p -e`) | (n/a — modern CLI convention; migration map below.) |
 
 ### Short-flag migration map
 
