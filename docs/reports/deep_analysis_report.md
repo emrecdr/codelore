@@ -3125,7 +3125,9 @@ wrote but refused to read back (closed-enum validated on read,
 emitted only when non-default). Browser tests pin the metric wiring via
 the build-hierarchy hook and the Escape-close path.
 
-### F357 (Active) — `--format step-summary --output -` still creates a literal `-` file
+### F357 (Superseded by F362) — `--format step-summary --output -` still creates a literal `-` file
+
+**Superseded.** Fixed and recorded under F362; this entry is kept for the audit trail. `analyze.rs` now filters `-` out of the destination before the emitter sees it, and a regression test pins both halves — the summary reaching stdout, and no `-` file left behind. The finding below is the state at the time it was written.
 
 F351 taught `emit_to_output_or_stdout` the `-` = stdout convention and
 gated the three file-path formats (parquet, sqlite, spa) behind an
@@ -3139,7 +3141,9 @@ list; the default stdout path (no `--output`) is unaffected, and no
 documented recipe exercises the combination. Surfaced by the 2026-09-02
 docs-currency audit while verifying F351's coverage.
 
-### F358 (Active) — `codelore diff`'s SARIF emitter still carries the pre-F347 severity shape
+### F358 (Superseded by F364) — `codelore diff`'s SARIF emitter still carries the pre-F347 severity shape
+
+**Superseded.** Fixed and recorded under F364; this entry is kept for the audit trail. `diff_output.rs` now calls the shared `health_grade`, so PR-mode grades on the same scale as every other surface and its `error` band is reachable. The finding below is the state at the time it was written.
 
 F347 aligned the analyze/check emitter (`output/sarif.rs`): hotspot
 `security-severity` became `max(0.1, (100 − cognitive_health) / 4)`
