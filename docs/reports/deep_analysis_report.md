@@ -3125,7 +3125,7 @@ wrote but refused to read back (closed-enum validated on read,
 emitted only when non-default). Browser tests pin the metric wiring via
 the build-hierarchy hook and the Escape-close path.
 
-### F357 (Active) — `--format step-summary --output -` still creates a literal `-` file
+### F357 (Fixed — Unreleased) — `--format step-summary --output -` still creates a literal `-` file
 
 F351 taught `emit_to_output_or_stdout` the `-` = stdout convention and
 gated the three file-path formats (parquet, sqlite, spa) behind an
@@ -3139,7 +3139,8 @@ list; the default stdout path (no `--output`) is unaffected, and no
 documented recipe exercises the combination. Surfaced by the 2026-09-02
 docs-currency audit while verifying F351's coverage.
 
-### F358 (Active) — `codelore diff`'s SARIF emitter still carries the pre-F347 severity shape
+**Fixed as F362.** Recorded separately because the fix was written before this entry was re-read; the status here was left stale, which is the drift a ledger exists to prevent — the dash is now normalised once at the CLI boundary rather than per output site (see also **F365**, which found the provenance sidecar still reading it as a path).
+### F358 (Fixed — Unreleased) — `codelore diff`'s SARIF emitter still carries the pre-F347 severity shape
 
 F347 aligned the analyze/check emitter (`output/sarif.rs`): hotspot
 `security-severity` became `max(0.1, (100 − cognitive_health) / 4)`
@@ -3154,6 +3155,7 @@ produced the finding. The user guide's SARIF rule table is scoped to
 the analyze/check emitters until the two share one severity mapping.
 Surfaced by the 2026-09-02 docs-currency audit.
 
+**Fixed as F364.** Recorded separately because the fix was written before this entry was re-read; the status here was left stale, which is the drift a ledger exists to prevent — the severity proxy and its band ladder are now shared with the non-diff emitter.
 ### F359 (Fixed — Unreleased) — three silent-pass holes closed, and the new cross-backend gate caught a real oracle divergence
 
 Three guard classes, one immediate payoff. (1) The spa-browser CI job
@@ -3513,4 +3515,30 @@ is reachable without a `Repo` test double, and the classification is
 asserted directly. Probe: reverting the failed-read arm fails the test
 with the message naming the improving-health consequence.
 
-The next sweep re-opens at **F370**.
+### F370 (Fixed — Unreleased) — F367's guard left the unborn-HEAD case, and two ledger statuses were stale
+
+Two corrections, both found by the parallel session reviewing work I had
+already called done.
+
+**The residual.** `GixRepo::open` calls `gix::open` and nothing else, so
+it SUCCEEDS on an unborn HEAD. F367's guard therefore closed "the path is
+not a repository" and left "the repository has no commits": `git init`
+with no thresholds still exited 0 as text and 3 as SARIF, because only
+the SARIF arm went on to call `head_sha()`. The format-dependent split
+F367 was written to remove survived, one case narrower. Reported from
+source review; confirmed here by measurement against a built binary
+before anything was changed. Both commands now resolve HEAD as well,
+matching `analyze`'s pre-flight, and the matrix test covers the
+unborn-HEAD case across all four surfaces.
+
+**The stale statuses.** F357 and F358 were marked `Active` while their
+defects had been fixed under different numbers — F362 (the step-summary
+dash) and F364 (the diff SARIF severity shape). Both are now marked
+fixed with the closing number named. This is worth recording as its own
+finding rather than a silent edit: the ledger's status field is the part
+a reader trusts, and an integrity check that counts entries and looks for
+duplicate numbers — which is what had been run, and passed — cannot see a
+status that disagrees with the code. The remaining `Active` entries were
+audited against source in the same pass rather than assumed correct.
+
+The next sweep re-opens at **F371**.
