@@ -39,7 +39,17 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
     // repository error, the way `analyze` and `diff` already treat it, and
     // leaves the vacuous pass to mean what it says: a real repository with no
     // thresholds configured.
-    codelore_lib::cli_api::repo::GixRepo::open(&args.repo).context("open repo")?;
+    // `GixRepo::open` succeeds on an unborn HEAD — it calls `gix::open` and
+    // nothing else — so resolving HEAD is a SECOND condition, not a detail of
+    // the first. Without it this guard closed the general case and left the
+    // narrow one: a `git init` with no commits still passed vacuously as text
+    // and failed as SARIF, because only the SARIF arm went on to touch HEAD.
+    // `analyze`'s pre-flight already treats both as repository errors.
+    {
+        use codelore_lib::cli_api::repo::Repo as _;
+        let repo = codelore_lib::cli_api::repo::GixRepo::open(&args.repo).context("open repo")?;
+        repo.head_sha().context("resolve HEAD")?;
+    }
 
     let thresholds = if let Some(path) = &args.thresholds_file {
         Thresholds::from_path(path).context("load thresholds file")?

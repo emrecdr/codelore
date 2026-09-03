@@ -1263,6 +1263,42 @@ fn nonexistent_repo_exits_3_on_every_gating_surface() {
     // as SARIF and 0 as text. A single-format test would have passed while the
     // defect was live.
     let missing = "/definitely/not/a/repository";
+    // An initialised repo with NO COMMITS is the second case, and the first
+    // fix missed it: `GixRepo::open` succeeds on an unborn HEAD, so only the
+    // SARIF arm — which went on to resolve HEAD — reported the error, and the
+    // format-dependent split survived one case narrower than before.
+    let unborn = tempfile::tempdir().expect("tempdir");
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(unborn.path())
+        .status()
+        .expect("git init");
+    let unborn_path = unborn.path().to_str().expect("utf-8 tempdir");
+
+    for args in [
+        vec!["gate", "--repo", unborn_path],
+        vec!["check", "--repo", unborn_path, "--format", "text"],
+        vec!["check", "--repo", unborn_path, "--format", "sarif"],
+        vec![
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            unborn_path,
+            "--no-banner",
+        ],
+    ] {
+        let out = codelore_cmd().args(&args).output().expect("spawn codelore");
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "`codelore {}` on a repo with no commits must be a repository error, got {:?}: {}",
+            args.join(" "),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     for args in [
         vec!["gate", "--repo", missing],
         vec!["gate", "--repo", missing, "--format", "json"],
