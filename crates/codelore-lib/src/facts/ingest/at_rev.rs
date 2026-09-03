@@ -3,6 +3,7 @@
 //! tables, enabling the health timeline to build a `HealthScanCtx` that
 //! points at historical data instead of the HEAD tables.
 
+use super::coverage::{REASON_BLOB_READ, REASON_PARSE_ERROR, ScanCoverage, ScanOutcome};
 use crate::{CodeLoreError, Result};
 
 use super::FactsDb;
@@ -67,25 +68,36 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
     // Per-file errors are logged + skipped — a single unreadable file does
     // not abort the scan, matching the same resilience contract as the HEAD
     // pass.
-    let batches: Vec<Option<(String, Vec<crate::complexity::ComplexityEntity>)>> = live_paths
+    // Per-file logging existed here already, but nothing tallied it: a rev
+    // where every blob failed produced a stream of warnings and then a
+    // complexity table indistinguishable from a genuinely clean rev. The
+    // aggregate is what a caller can act on — `repo_code_health` returns
+    // 100.0 over zero rows, so an unaccounted scan reads as perfect health.
+    let outcomes: Vec<ScanOutcome<(String, Vec<crate::complexity::ComplexityEntity>)>> = live_paths
         .into_par_iter()
         .map_init(
             || repo.blob_reader_at(&rev_owned),
             |reader, path| {
-                let lang = Tier1Language::from_path(&path)?;
+                // Not a Tier-1 source file: no row owed, correctly outside
+                // the denominator.
+                let Some(lang) = Tier1Language::from_path(&path) else {
+                    return ScanOutcome::NotCounted;
+                };
                 let source = match reader.read(&path) {
                     Ok(Some(b)) => b,
                     Ok(None) => {
+                        // Absent at this rev — `live_paths` is derived from
+                        // history, so this is expected, not a loss.
                         tracing::debug!(
                             "at_rev complexity: {path} not tracked at {rev_owned}; skipping"
                         );
-                        return None;
+                        return ScanOutcome::NotCounted;
                     }
                     Err(e) => {
                         tracing::warn!(
                             "at_rev complexity: blob read failed for {path} at {rev_owned}: {e}"
                         );
-                        return None;
+                        return ScanOutcome::Lost(REASON_BLOB_READ);
                     }
                 };
                 if source.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
@@ -95,20 +107,33 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
                         size = source.len(),
                         cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
                     );
-                    return None;
+                    return ScanOutcome::SkippedOversize;
                 }
                 let synth_path = std::path::Path::new(&path);
                 let entities = match compute_for_file(synth_path, source, lang) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!("at_rev complexity: parse error {path} at {rev_owned}: {e}");
-                        return None;
+                        return ScanOutcome::Lost(REASON_PARSE_ERROR);
                     }
                 };
                 let deduped = dedup_entities(entities);
-                Some((path, deduped))
+                // A file with no entities is still covered — read and parsed.
+                ScanOutcome::Scored((path, deduped))
             },
         )
+        .collect();
+
+    let coverage = ScanCoverage::tally(&outcomes);
+    coverage.warn_if_degraded("at-rev complexity", dest_table);
+    coverage.warn_if_mostly_oversize("at-rev complexity", dest_table);
+
+    let batches: Vec<Option<(String, Vec<crate::complexity::ComplexityEntity>)>> = outcomes
+        .into_iter()
+        .map(|o| match o {
+            ScanOutcome::Scored(row) => Some(row),
+            _ => None,
+        })
         .collect();
 
     // Phase 2 (serial drain): batched multi-row INSERT.

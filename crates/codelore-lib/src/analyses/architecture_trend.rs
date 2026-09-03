@@ -34,6 +34,9 @@ use std::collections::HashSet;
 use crate::analyses::import_graph::{build_import_graph_seeded, graph_metrics};
 use crate::complexity::Tier1Language;
 use crate::facts::FactsDb;
+use crate::facts::ingest::coverage::{
+    REASON_BLOB_READ, REASON_PARSE_ERROR, ScanCoverage, ScanOutcome,
+};
 use crate::repo::Repo;
 use crate::{Options, Result};
 
@@ -223,6 +226,57 @@ pub(crate) fn live_paths_at(db: &FactsDb, ts: &str) -> Result<Vec<String>> {
     )
 }
 
+/// Classify one file for the at-rev import scan.
+///
+/// Named rather than inlined for the same reason `analyses::clones::scan_one`
+/// is: the difference between a counted loss and a silent drop is a warning
+/// and the coverage denominator, and a caller of `resolve_imports_at_rev`
+/// sees neither — an end-to-end test passes whether or not the accounting
+/// exists. Taking the read RESULT rather than a reader makes every branch
+/// reachable without a `Repo` test double.
+///
+/// Each branch here used to be a bare `return out`, with no log at any
+/// level. The consequence is one-directional and lands on the trend chart:
+/// the graph's node count is seeded from the live-path list rather than from
+/// successful reads, so a rev whose blobs fail keeps its denominator while
+/// losing its edges — propagation cost falls and `arch_health` rises. A rev
+/// that scanned nothing rendered as full coverage at perfect health.
+fn classify_import_file(
+    rel: &str,
+    read: crate::Result<Option<Vec<u8>>>,
+    lang: crate::imports::ImportLanguage,
+    live_set: &HashSet<String>,
+) -> ScanOutcome<Vec<(String, String)>> {
+    use crate::imports::{extract_imports, resolve_by_extension};
+
+    let code = match read {
+        Ok(Some(code)) => code,
+        // Absent at this rev: `live_paths_at` is derived from history, so a
+        // path the rev does not carry is expected rather than a loss.
+        Ok(None) => return ScanOutcome::NotCounted,
+        Err(e) => {
+            tracing::warn!("architecture-trend: blob read failed for {rel}: {e}");
+            return ScanOutcome::Lost(REASON_BLOB_READ);
+        }
+    };
+    if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+        return ScanOutcome::SkippedOversize;
+    }
+    let Ok(imports) = extract_imports(&code, lang) else {
+        tracing::warn!("architecture-trend: import parse failed for {rel}");
+        return ScanOutcome::Lost(REASON_PARSE_ERROR);
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for imp in imports {
+        if let Some(target_path) = resolve_by_extension(rel, &imp.target, live_set) {
+            out.push((rel.to_string(), target_path));
+        }
+    }
+    // A file with no resolvable imports is still fully covered — read and
+    // parsed, it simply contributes no edges.
+    ScanOutcome::Scored(out)
+}
+
 /// Extract + resolve every import edge among `live_paths` at `rev`,
 /// entirely in memory. Mirrors the HEAD scan's extract pass
 /// (`populate_imports_at_head`) and resolver dispatch
@@ -233,7 +287,7 @@ fn resolve_imports_at_rev<R: Repo>(
     rev: &str,
     live_paths: &[String],
 ) -> Vec<(String, String)> {
-    use crate::imports::{ImportLanguage, extract_imports, resolve_by_extension};
+    use crate::imports::ImportLanguage;
     use rayon::prelude::*;
 
     let live_set: HashSet<String> = live_paths.iter().cloned().collect();
@@ -254,38 +308,74 @@ fn resolve_imports_at_rev<R: Repo>(
     // in full every time. A read/parse failure on one file skips that file
     // (a corrupt blob mustn't sink the whole sample point), matching the
     // HEAD scan's tolerance.
-    let edges: Vec<(String, String)> = candidates
+    let outcomes: Vec<ScanOutcome<Vec<(String, String)>>> = candidates
         .into_par_iter()
         .map_init(
             || repo.blob_reader_at(rev),
-            |reader, (rel, lang)| -> Vec<(String, String)> {
-                let mut out: Vec<(String, String)> = Vec::new();
-                let Ok(Some(code)) = reader.read(&rel) else {
-                    return out;
-                };
-                if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                    return out;
-                }
-                let Ok(imports) = extract_imports(&code, lang) else {
-                    return out;
-                };
-                for imp in imports {
-                    if let Some(target_path) = resolve_by_extension(&rel, &imp.target, &live_set) {
-                        out.push((rel.clone(), target_path));
-                    }
-                }
-                out
-            },
+            |reader, (rel, lang)| classify_import_file(&rel, reader.read(&rel), lang, &live_set),
         )
-        .flatten_iter()
         .collect();
-    edges
+
+    let coverage = ScanCoverage::tally(&outcomes);
+    coverage.warn_if_degraded("architecture-trend import", "import graph");
+    coverage.warn_if_mostly_oversize("architecture-trend import", "import graph");
+
+    outcomes
+        .into_iter()
+        .filter_map(|o| match o {
+            ScanOutcome::Scored(edges) => Some(edges),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 #[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::live_paths_at;
     use crate::facts::FactsDb;
+
+    /// The classification is the whole of the fix, and it is the one thing a
+    /// caller cannot observe: `resolve_imports_at_rev` returns the same edge
+    /// list whether a failed read is counted or silently dropped, because the
+    /// difference lives in a warning and the coverage denominator. An
+    /// end-to-end test therefore passes with the fix reverted — that exact
+    /// mistake was made and caught by probe on the clone scan — so the
+    /// classifier is asserted directly.
+    #[test]
+    fn an_unreadable_blob_is_a_counted_loss_not_a_silent_drop() {
+        use super::{ScanOutcome, classify_import_file};
+        use crate::imports::ImportLanguage;
+        use std::collections::HashSet;
+
+        let live: HashSet<String> = HashSet::new();
+        let err = Err(crate::CodeLoreError::Repo("simulated odb failure".into()));
+        let outcome = classify_import_file("src/a.rs", err, ImportLanguage::Rust, &live);
+        assert!(
+            matches!(outcome, ScanOutcome::Lost(_)),
+            "a failed blob read must be counted as lost — the trend chart seeds \
+             its node count from live paths, so an uncounted failure keeps the \
+             denominator, drops edges, and reads as improving health"
+        );
+
+        // Absent at this rev is NOT a loss: `live_paths_at` is derived from
+        // history, so a path the rev does not carry is expected. Counting it
+        // would mark healthy repositories degraded.
+        let absent = classify_import_file("src/a.rs", Ok(None), ImportLanguage::Rust, &live);
+        assert!(matches!(absent, ScanOutcome::NotCounted));
+
+        // Read and parsed with no resolvable imports is still full coverage.
+        let empty = classify_import_file(
+            "src/a.rs",
+            Ok(Some(b"fn main() {}\n".to_vec())),
+            ImportLanguage::Rust,
+            &live,
+        );
+        assert!(
+            matches!(empty, ScanOutcome::Scored(ref e) if e.is_empty()),
+            "a file with no imports was still reached and parsed — covered, not uncounted"
+        );
+    }
 
     fn seed_commit(db: &FactsDb, rev: &str, day: u32) {
         db.execute_batch(&format!(

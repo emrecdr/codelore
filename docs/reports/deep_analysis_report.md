@@ -3479,4 +3479,38 @@ list rather than from successful reads, so failed reads keep the
 denominator while losing edges, and a rev that scanned nothing renders as
 an improvement on the trend chart.
 
-The next sweep re-opens at **F369**.
+### F369 (Fixed — Unreleased) — the at-rev scans behind the trend charts had no coverage accounting
+
+The follow-up F368 scoped. `resolve_imports_at_rev` had three bare
+`return out` paths — blob-read failure, over-cap, parse failure — with no
+log at any level, not even `debug!`. `ingest_complexity_at_rev` logged
+per file but never tallied, so a rev where every blob failed emitted a
+stream of warnings and then wrote a `complexity_metrics` table
+indistinguishable from a genuinely clean rev.
+
+The consequence is one-directional and lands on the chart, which is why
+this was worth its own change rather than bundling:
+
+- `architecture_trend.rs` builds `seeds` from the extension-filtered
+  LIVE-PATH list, never from successful reads. A rev whose blobs fail
+  keeps its node count and loses its edges → `propagation_cost` falls →
+  `arch_health` RISES.
+- `health_trend.rs` `arch_health` returns 100.0 when `n == 0`;
+  `repo_code_health` returns 100.0 when `rows.is_empty()`.
+- `HealthTrendRow.files` is assigned from `m.n` — the same seed count —
+  so the ONE column a reader could use to notice a thin scan does not
+  move. A rev that scanned nothing rendered as full coverage at perfect
+  health.
+
+Both scans now classify with `ScanOutcome` and tally with `ScanCoverage`,
+matching the HEAD-time passes and the working-tree clone scan.
+
+Testing followed the lesson F368 paid for: an end-to-end test cannot see
+this fix, because the edge list and the complexity table are identical
+whether a failed read is counted or dropped — the difference is a warning
+and the denominator. `classify_import_file` is extracted so every branch
+is reachable without a `Repo` test double, and the classification is
+asserted directly. Probe: reverting the failed-read arm fails the test
+with the message naming the improving-health consequence.
+
+The next sweep re-opens at **F370**.
