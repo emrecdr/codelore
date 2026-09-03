@@ -1307,9 +1307,13 @@ The complexity-extraction pass uses Rayon by default (one task per source file).
 
 ### Scan coverage and the AST size cap
 
-The three HEAD-time passes (complexity, clones, imports) keep a per-pass
-census. Two aggregate warnings can fire from it, both at the default log
-level:
+Every pass that reads and parses source keeps a per-pass census: the
+HEAD-time passes (complexity, clones, imports), the working-tree clone scan
+that `analyze --analysis clones`, `gate`'s change-set projection and `diff`
+consume, and the at-rev passes behind the historical trends. A cache hit
+skips the ingest, so on a warm run the working-tree scan is often the only
+census that executes. Two aggregate warnings can fire from any of them,
+both at the default log level:
 
 - **Degraded coverage** — a pass that *failed* to read or parse ≥10% of the
   eligible source files warns with the loss breakdown. The usual cause is a
@@ -1402,6 +1406,12 @@ The `--quiet` flag suppresses diagnostic noise (per-violation detail lines, inli
 | 3 | Repository error (not a git repo, no HEAD, etc.) |
 | 4 | Analysis error |
 | 5 | Output/I/O error |
+
+`check` and `gate` open the repository before reading thresholds, so a
+`--repo` that is missing or is not a git repository is an exit-3 repository
+error rather than a vacuous pass — a typo'd path in a CI job cannot produce
+a green gate. (`check --history` prints the gate-run ledger without
+evaluating anything and returns before that check.)
 
 Two out-of-band terminations sit outside this 0–5 contract:
 

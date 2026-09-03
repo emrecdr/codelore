@@ -1,6 +1,8 @@
-//! Scan-coverage accounting shared by the HEAD-time passes.
+//! Scan-coverage accounting shared by every pass that reads and parses
+//! source: the HEAD-time passes, the working-tree clone scan, and the
+//! at-rev passes.
 //!
-//! Each pass — complexity, clones, imports — walks the live-at-HEAD file set
+//! Each pass walks its own file set
 //! and produces rows for some of it. Without a tally, a pass that failed on
 //! most of the repository is arithmetically indistinguishable from a small
 //! repository: the tables are simply thinner, and every analysis and gate
