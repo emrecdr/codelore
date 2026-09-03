@@ -2758,10 +2758,18 @@ Hunks attach inline during the walk (both backends), so `Repo::diff_hunks`
 is dead surface that every future backend must still implement and the
 differential suite still pays to cross-check. Adjacent divergence:
 `GitCliRepo::walk_commits` always emits `hunks: []` while `GixRepo`
-populates them, and no differential assertion compares the field — an
-unenforced corner of the parity guarantee. Needs a remove-or-repurpose
-decision; if removed, the differential hunk test retires with it, and if
-kept, the field comparison joins the gate.
+populates them. Needs a remove-or-repurpose decision; if removed, the
+differential hunk test retires with it, and if kept, the field comparison
+joins the gate.
+
+**Amended.** This entry originally added "and no differential assertion
+compares the field". That is no longer true: F359's cross-backend
+fact-store digest gate compares every table and excludes `hunks` BY NAME,
+with an assert that fails if the two ever stop diverging — so the
+divergence is now enforced-as-known rather than unenforced. The
+remove-or-repurpose decision is what remains open. Recorded rather than
+silently edited because the stale half was retired by my own later work
+and never traced back here.
 
 
 ### F335 (Active) — the ignored-flag warning table trails the flag surface
@@ -2770,10 +2778,17 @@ kept, the field comparison joins the gate.
 (the coupling and clone families) warn nothing when set on an unrelated
 analysis. Sibling paper cut: `CalibrateDefectsArgs::window_days` shares a
 name with `Options::window_days` under different ranges and semantics.
-Sibling structural gap: nothing ties `Gates`/`DiffGates` fields to
-evaluator branches or `RatchetMetrics` — a gate added to config but not the
-evaluator (or ratchet) fails nothing. One enforcement test per pair is the
+Sibling structural gap: nothing ties `DiffGates` fields to evaluator
+branches, or `RatchetMetrics` to the ratchet — a gate added to config but
+not the evaluator fails nothing. One enforcement test per pair is the
 cheap form.
+
+**Amended.** This entry originally named `Gates` alongside `DiffGates`.
+The `Gates` half is closed: F359 added an exhaustive destructure that
+makes an unclassified threshold a compile error at the evaluator itself.
+`DiffGates` and `RatchetMetrics` still have no such anchor, which is why
+this stays Active. Same cause as F334's amendment — a multi-part landing
+whose sub-closures were never traced back to the entries they retired.
 
 ### F336 (Active) — `dependabot-auto-merge` grants both jobs the union of their scopes, and its comment claims the union is irreducible
 
@@ -3531,7 +3546,19 @@ before anything was changed. Both commands now resolve HEAD as well,
 matching `analyze`'s pre-flight, and the matrix test covers the
 unborn-HEAD case across all four surfaces.
 
-**The stale statuses.** F357 and F358 were marked `Active` while their
+**The stale statuses.** All twelve remaining `Active` entries were then
+audited against current source rather than assumed correct. Every one is
+correctly Active — each still has a live defect or a live deferred
+decision — but TWO carry stale text, and the cause is the same in both:
+F359 was a multi-part landing whose sub-closures were never traced back
+to the entries they retired. F334 claimed "no differential assertion
+compares the field" when F359's cross-backend digest gate now excludes
+`hunks` by name with a self-invalidating assert; F335 named `Gates`
+alongside `DiffGates` when F359 made an unclassified threshold a compile
+error. Both entries are amended in place, with the amendment marked
+rather than the original quietly rewritten.
+
+F357 and F358 were marked `Active` while their
 defects had been fixed under different numbers — F362 (the step-summary
 dash) and F364 (the diff SARIF severity shape). Both are now marked
 fixed with the closing number named. This is worth recording as its own
