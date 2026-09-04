@@ -19,7 +19,7 @@ inputs:
     required: false
     default: 'hotspots'
   format:
-    description: 'Output format (csv | json | sarif | markdown | parquet | sqlite | html). Applies to `command: analyze` only.'
+    description: 'Output format (csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa | step-summary). Applies to `command: analyze` only.'
     required: false
     default: 'sarif'
   output:

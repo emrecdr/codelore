@@ -179,7 +179,7 @@ The dashboard composes its widgets in one HTML file — grouped into the six tit
 
 **Linked brushing:** selecting a file in any of these views highlights it across all of them at once (and announces it to screen readers); the health×activity legend also supports a set-brush. The **file detail drawer** groups its sections into Overview / Coupling / People tabs, plus Health and X-Ray when the file has a health series or function-level data (keyboard-navigable). One shared focus; highlight, not hide.
 
-Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter + selection/brush buses) + Apache ECharts + d3-hierarchy. All four vendored at build time, SHA-pinned in `build.rs`; bundle stays fully self-contained (~1.9 MB rendered SPA, no CDN at runtime).
+Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter + selection/brush buses) + Apache ECharts + d3-hierarchy. The four JS dependencies are vendored at build time and SHA-pinned in `build.rs`; the Tailwind/DaisyUI CSS is precompiled and committed. The bundle stays fully self-contained (~1.5 MB rendered SPA, no CDN at runtime).
 
 The emitter runs every analysis each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`, `entity_ownership`, `xray`, `daily_commits`, `trends`, `effort_exposure`, `code_familiarity`, plus a clone-summary helper and a health-trend scan that populates the file health series and improvements feed) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
 
@@ -1291,7 +1291,7 @@ Per `docs/perf-evidence-v1.md` (warm-cache numbers):
 
 | Repository | Commits | Source files | Wall (warm) | Peak RSS |
 |---|---:|---:|---:|---:|
-| codelore (this workspace) | ~95 | 131 .rs | 0.24 s | 89 MB |
+| codelore (this workspace) | 90 | 155 | 0.24 s | 89 MB |
 | gitoxide (shallow 2000) | 9,985 | 2,903 | 1.16 s | 75 MB |
 | tokio (shallow 3000) | 4,523 | 854 | 2.09 s | 230 MB |
 | Linux kernel | 1.4M | 70k | < 10 min target | < 4 GB target |
@@ -1421,7 +1421,7 @@ Two out-of-band terminations sit outside this 0–5 contract:
 
 ### Warm-cache performance
 
-The first `codelore check` run on a repo ingests the full git history into a DuckDB cache file. Subsequent runs (same HEAD SHA, same options) read from the cache in milliseconds. The cache lives at `<XDG_CACHE_HOME>/codelore/<repo_hash>/` and is keyed on HEAD SHA + package version, so a push that changes HEAD re-ingests only when the cache entry is cold.
+The first `codelore check` run on a repo ingests the full git history into a DuckDB cache file. Subsequent runs (same HEAD SHA, same options) read from the cache in milliseconds. The cache lives at `<XDG_CACHE_HOME>/codelore/<repo_hash>/` and is keyed on the canonical repo path, HEAD SHA, crate version, ingest-affecting options and the cache epoch (§8), so a push that changes HEAD re-ingests, and so does a change to any option the ingest reads.
 
 ### PR-mode in hooks
 
