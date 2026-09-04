@@ -46,7 +46,7 @@ fn corpus() -> Corpus {
 /// Per-class corpus composition. Published in `docs/narrative-evidence-v1.md`;
 /// update both together.
 const EXPECTED_CLASS_COUNTS: [(&str, usize); 12] = [
-    ("clean", 18),
+    ("clean", 20),
     ("fabricated-value", 6),
     ("sign-inversion", 3),
     ("fn-small-int", 5),
@@ -57,7 +57,7 @@ const EXPECTED_CLASS_COUNTS: [(&str, usize); 12] = [
     ("fp-ci-bound", 1),
     ("fp-ordinal-percentile", 3),
     ("fp-derived-arithmetic", 3),
-    ("fp-function-span", 3),
+    ("fp-function-span", 6),
 ];
 
 #[test]
@@ -142,45 +142,101 @@ fn confusion_matrix_matches_the_published_numbers() {
 
     let expected: BTreeMap<&str, usize> = EXPECTED_CLASS_COUNTS.into_iter().collect();
     assert_eq!(class_counts, expected, "corpus composition moved");
-    assert_eq!(corpus.entries.len(), 59, "corpus size moved");
+    assert_eq!(corpus.entries.len(), 64, "corpus size moved");
 
     // Published in docs/narrative-evidence-v1.md §"Checker behavior on the
     // labelled corpus" — update the doc with any change here.
     assert_eq!(
         (tn, fp, tp, fn_),
-        (18, 17, 9, 15),
+        (20, 20, 9, 15),
         "confusion matrix (tn, fp, tp, fn) moved"
     );
 }
 
+/// Per-provenance blind-spot tallies.
+#[derive(Default)]
+struct BlindSpots {
+    entries: usize,
+    exempt_entries: usize,
+    exempt_tokens: usize,
+    fallback_entries: usize,
+    fallback_tokens: usize,
+}
+
+/// Blind-spot incidence, split by provenance.
+///
+/// The checker's two instrumented blind spots are exercised by disjoint halves
+/// of the corpus: every model-generated narrative trips the small-int exemption
+/// — they enumerate zero-valued biomarkers field by field — while only
+/// hand-authored ones reach the percent fallback. A single combined total
+/// therefore describes neither route honestly, and lets one contributed batch
+/// carry the headline: five of the sixty-four entries account for 86 of the 114
+/// exempted tokens. The spread is not merely human-versus-model either, since
+/// the two contributed models differ from each other by roughly six times per
+/// entry. All three rows are published in `docs/narrative-evidence-v1.md`;
+/// update the doc with any change here.
 #[test]
 fn blind_spot_incidence_matches_the_published_numbers() {
     let corpus = corpus();
 
-    let (mut exempt_entries, mut exempt_tokens) = (0usize, 0usize);
-    let (mut fallback_entries, mut fallback_tokens) = (0usize, 0usize);
+    let (mut authored, mut model) = (BlindSpots::default(), BlindSpots::default());
     for entry in &corpus.entries {
         let verdict = check_citations(&entry.narrative, &entry.fact_values);
+        let bucket = if entry.source.starts_with("model:") {
+            &mut model
+        } else {
+            &mut authored
+        };
+        bucket.entries += 1;
         if !verdict.exempt_small_ints.is_empty() {
-            exempt_entries += 1;
-            exempt_tokens += verdict.exempt_small_ints.len();
+            bucket.exempt_entries += 1;
+            bucket.exempt_tokens += verdict.exempt_small_ints.len();
         }
         if !verdict.percent_fallback_only.is_empty() {
-            fallback_entries += 1;
-            fallback_tokens += verdict.percent_fallback_only.len();
+            bucket.fallback_entries += 1;
+            bucket.fallback_tokens += verdict.percent_fallback_only.len();
         }
     }
 
-    // Published in docs/narrative-evidence-v1.md §"Blind-spot incidence" —
-    // update the doc with any change here.
     assert_eq!(
-        (exempt_entries, exempt_tokens),
-        (20, 28),
-        "small-int exemption incidence moved"
+        (
+            authored.entries,
+            authored.exempt_entries,
+            authored.exempt_tokens,
+            authored.fallback_entries,
+            authored.fallback_tokens
+        ),
+        (56, 17, 19, 8, 8),
+        "hand-authored blind-spot incidence moved"
     );
     assert_eq!(
-        (fallback_entries, fallback_tokens),
+        (
+            model.entries,
+            model.exempt_entries,
+            model.exempt_tokens,
+            model.fallback_entries,
+            model.fallback_tokens
+        ),
+        (8, 8, 95, 0, 0),
+        "model-generated blind-spot incidence moved"
+    );
+
+    // The combined figures the doc leads with, pinned as the sum of the strata
+    // so the headline can never drift from the rows that explain it.
+    assert_eq!(
+        (
+            authored.exempt_entries + model.exempt_entries,
+            authored.exempt_tokens + model.exempt_tokens
+        ),
+        (25, 114),
+        "combined small-int exemption incidence moved"
+    );
+    assert_eq!(
+        (
+            authored.fallback_entries + model.fallback_entries,
+            authored.fallback_tokens + model.fallback_tokens
+        ),
         (8, 8),
-        "percent-fallback incidence moved"
+        "combined percent-fallback incidence moved"
     );
 }
