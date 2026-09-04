@@ -25,7 +25,16 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v21`) orphans entries whose Kamei enrichment
+/// The current epoch (`schema_v22`) orphans entries written before the HEAD
+/// complexity scan recorded its coverage into `provenance`. Those stores hold
+/// correct facts, but they cannot say how much of the repository the scan
+/// actually reached, so the code-health gate reads their coverage as unknown
+/// and cannot enforce the floor against them. Left in place they would keep
+/// greening on partial coverage indefinitely, because a cache hit never re-runs
+/// the scan that would record it — the one case where an entry must be
+/// discarded for what it *omits* rather than for anything wrong in it.
+///
+/// The prior epoch (`schema_v21`) orphans entries whose Kamei enrichment
 /// (`ndev`/`nuc`/`age`/`sexp` on `commits`) was computed through the
 /// un-time-bounded rename-lineage join: a recycled filename merged two
 /// unrelated files' histories into one entity, and that attribution was
@@ -50,7 +59,7 @@ use crate::Options;
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v21";
+pub const CACHE_EPOCH: &str = "schema_v22";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

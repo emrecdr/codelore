@@ -105,6 +105,21 @@ impl ScanCoverage {
         }
     }
 
+    /// Denominator behind [`Self::ratio`] — scored plus lost, with routine
+    /// skips (non-Tier-1, history-only paths, oversize) already excluded.
+    ///
+    /// Exposed so the value can be persisted and the same predicate recomputed
+    /// later by a consumer that never saw the scan, rather than having that
+    /// consumer invent its own denominator from the HEAD tree.
+    pub(crate) fn eligible(&self) -> usize {
+        self.eligible
+    }
+
+    /// Numerator behind [`Self::ratio`]. See [`Self::eligible`].
+    pub(crate) fn scored(&self) -> usize {
+        self.scored
+    }
+
     /// Fraction of eligible files the scan covered. Vacuously 1.0 when the
     /// repository carries no eligible source at all — a docs-only tree is
     /// honestly complete, not degraded.

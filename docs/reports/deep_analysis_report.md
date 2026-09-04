@@ -2217,7 +2217,7 @@ not run.
     than at review time, and the honest response then is to port the code rather
     than to downgrade the lint.
 
-### F315 (Active) — scan coverage is disclosed but not gated
+### F315 (Fixed — Unreleased) — scan coverage is disclosed but not gated
 
 The HEAD complexity scan now tallies eligible-but-skipped files and warns below a
 90% floor. The `degraded` verdict still does not consume it. `eval_code_health_gate`
@@ -2249,6 +2249,27 @@ minority of the repository is not empty, so the gate still reports `passed`.
 *   **Anti-vacuity requirement**: the self-test must reject a *partial* scan, not
     just an empty one. A test that only pins the empty case would pass against the
     current code and prove nothing about the change.
+
+*   **Resolution**: the HEAD complexity scan now records its own `eligible` and
+    `scored` counts into the `provenance` table, and `eval_code_health_gate`
+    classifies them against the same `MIN_SCAN_COVERAGE` floor the disclosure
+    warning uses. `provenance` rather than an ingest counter because the gate
+    runs on cache hits, where the scan never re-executes — the store is the
+    cache, so a row there survives what an in-memory stat does not. The
+    predicate lives beside the floor in `FactsDb::head_scan_coverage_verdict`
+    rather than at the call site, so the gate and the warning cannot drift into
+    disagreeing about the same scan.
+*   **Four-way verdict, not a boolean**: `Unknown` (a store predating the keys)
+    and `Vacuous` (a docs-only tree, honestly complete) are kept distinct from
+    `Met` and `Below`, because collapsing either direction is wrong — reading
+    absence as met greens a blind run, reading it as below fails a correct one.
+    A half-written or unparseable pair also reads `Unknown`, so a storage fault
+    cannot manufacture a failing verdict.
+*   **`CACHE_EPOCH` → `schema_v22`**: existing entries hold correct facts but
+    cannot say what the scan reached, so they would read `Unknown` forever and
+    keep greening on partial coverage — a cache hit never re-runs the scan that
+    would record it. The one case where an entry is discarded for what it omits
+    rather than for anything wrong in it.
 
 ### F316 (Fixed — v0.29.0) — the clones and imports HEAD passes share the silent-skip shape
 
