@@ -1034,6 +1034,10 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ])
         .assert()
         .failure()
+        // Exit 4: the late per-analysis gate reports this as an analysis failure. Pinned rather than left as a bare
+        // failure, which accepts ANY nonzero status — including the 101 a
+        // panic yields under this workspace's unwind strategy.
+        .code(4)
         .stderr(predicate::str::contains("--time-bucket is not supported"))
         .stderr(predicate::str::contains(
             "coupling, soc, hotspots, code-health",
@@ -1698,6 +1702,10 @@ fn explain_covers_every_registered_analysis_or_allowlists_it() {
         if allowlisted {
             assert
                 .failure()
+                // Exit 2: an allowlisted (uncovered) topic is rejected as an
+                // options mistake, the same code every other unknown-name
+                // surface returns.
+                .code(2)
                 .stderr(predicate::str::contains("unknown topic"));
         } else {
             assert.success();
@@ -1714,6 +1722,10 @@ fn explain_unknown_topic_suggests_nearest() {
         .args(["explain", "hotspot"])
         .assert()
         .failure()
+        // Exit 2: an unknown topic is an options mistake. Pinned rather than left as a bare
+        // failure, which accepts ANY nonzero status — including the 101 a
+        // panic yields under this workspace's unwind strategy.
+        .code(2)
         .stderr(predicate::str::contains("unknown topic"))
         .stderr(predicate::str::contains("did you mean"))
         .stderr(predicate::str::contains("hotspots"));
@@ -3249,6 +3261,12 @@ fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
         ])
         .assert()
         .failure()
+        // Exit 1, NOT an error code: a gate violation is a verdict the tool
+        // computed correctly, which is exactly what the exit-code contract
+        // distinguishes from a repository, options, analysis or IO failure.
+        // Pinning it here is what proves --quiet suppresses the detail lines
+        // without also degrading the verdict into some other failure.
+        .code(1)
         .stderr(predicate::str::contains("FAIL"))
         // Per-violation detail lines name the gate; --quiet must suppress them.
         .stderr(predicate::str::contains("code_health_min").not());
@@ -4897,6 +4915,14 @@ mod explain_path {
             ])
             .assert()
             .failure()
+            // Exit 3: an unreadable calibration artifact is a read-side IO
+            // error, which the chain-walk maps to the repository code. Pinned
+            // rather than left bare, which accepts ANY nonzero status —
+            // including the 101 a panic yields under this workspace's unwind
+            // strategy. Measured against a built binary, not inferred: an
+            // earlier attempt to reason it out from the source path gave the
+            // wrong answer, because the run failed before reaching the load.
+            .code(3)
             .stderr(predicate::str::contains(bad_path.to_str().unwrap()));
     }
 
@@ -4912,6 +4938,10 @@ mod explain_path {
             ])
             .assert()
             .failure()
+            // Exit 2: an unresolvable argument is an options mistake. Pinned rather than left as a bare
+            // failure, which accepts ANY nonzero status — including the 101 a
+            // panic yields under this workspace's unwind strategy.
+            .code(2)
             .stderr(predicate::str::contains("topic"))
             .stderr(predicate::str::contains("file"));
     }
@@ -4971,6 +5001,10 @@ mod explain_path {
         ])
         .assert()
         .failure()
+        // Exit 4: a missing LLM configuration surfaces as an analysis failure. Pinned rather than left as a bare
+        // failure, which accepts ANY nonzero status — including the 101 a
+        // panic yields under this workspace's unwind strategy.
+        .code(4)
         .stderr(predicate::str::contains("CODELORE_LLM_MODEL"));
     }
 
@@ -5236,6 +5270,10 @@ mod llm_flag_scope {
             .args(["analyze", "--analysis", "hotspots", "--llm", "--repo", "."])
             .assert()
             .failure()
+            // Exit 2: clap rejects the flag before dispatch. Pinned rather than left as a bare
+            // failure, which accepts ANY nonzero status — including the 101 a
+            // panic yields under this workspace's unwind strategy.
+            .code(2)
             .stderr(predicate::str::contains("unexpected argument"))
             .stderr(predicate::str::contains("--llm"));
     }
@@ -5246,6 +5284,10 @@ mod llm_flag_scope {
             .args(["check", "--repo", ".", "--llm"])
             .assert()
             .failure()
+            // Exit 2: clap rejects the flag before dispatch. Pinned rather than left as a bare
+            // failure, which accepts ANY nonzero status — including the 101 a
+            // panic yields under this workspace's unwind strategy.
+            .code(2)
             .stderr(predicate::str::contains("unexpected argument"))
             .stderr(predicate::str::contains("--llm"));
     }

@@ -3571,4 +3571,36 @@ duplicate numbers — which is what had been run, and passed — cannot see a
 status that disagrees with the code. The remaining `Active` entries were
 audited against source in the same pass rather than assumed correct.
 
-The next sweep re-opens at **F371**.
+### F371 (Fixed — Unreleased) — ten failing-command tests accepted any nonzero exit
+
+A bare `.assert().failure()` passes on ANY nonzero status. Under this
+workspace's `panic = "unwind"` a panic escaping `main` exits 101, and a
+signal kill reports no code at all — both satisfy it. Ten CLI assertions
+had no `.code(N)`, so they could not distinguish the contract's exit
+codes from each other or from a crash.
+
+This is the generalisation of F361, where a repository misconfiguration
+exited 1 instead of 3 for an entire release behind exactly such an
+assertion. The gating surfaces were pinned by F367/F370's matrix test;
+these ten are the rest.
+
+Every code was MEASURED against a built binary, not reasoned from the
+source path — and that distinction earned itself twice. Two codes
+changed answer on re-measurement: the bad-calibration case reads 3 only
+once the run gets far enough to load the artifact, and the LLM-config
+case reads 4 only once it reaches resolution. Measuring against a
+fixture that lacked a source file made both fail earlier, at exit 2,
+which is the answer source-reading would also have given.
+
+The gate-violation assertion is pinned to 1 deliberately: a violation is
+a verdict the tool computed correctly, which is precisely what the
+contract distinguishes from a repository, options, analysis or IO
+failure.
+
+Probe: flipping a measured pin to the value the wrong measurement gave
+fails the test. The first attempt at that probe was itself vacuous —
+`cargo fmt` had reflowed the comment the patch anchored on, so nothing
+changed and the test passed — caught by checking the diff rather than
+the exit status.
+
+The next sweep re-opens at **F372**.
