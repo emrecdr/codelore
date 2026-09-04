@@ -67,6 +67,25 @@ fn apply_memory_pragmas_with_limit(
     Ok(())
 }
 
+/// How the HEAD complexity scan's recorded coverage compares to the floor.
+///
+/// Four cases rather than a bool because they demand different handling and
+/// collapsing them loses the distinction that matters: a store with no
+/// recorded coverage is *unknown*, and a tree with nothing to scan is
+/// *complete*. Treating either as "below" would fail runs that are fine;
+/// treating either as "met" would green a run that is blind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanCoverageVerdict {
+    /// The store predates the coverage keys. Nothing can be concluded.
+    Unknown,
+    /// No eligible source to scan — a docs-only tree is honestly complete.
+    Vacuous,
+    /// Coverage met the floor.
+    Met { scored: u64, eligible: u64 },
+    /// Coverage fell below the floor.
+    Below { scored: u64, eligible: u64 },
+}
+
 pub struct FactsDb {
     conn: Connection,
     /// Type-erased, per-`FactsDb` slot map for the analyses layer's process-
@@ -541,6 +560,84 @@ impl FactsDb {
         Ok(())
     }
 
+    /// Record one `provenance` key, replacing any existing value.
+    ///
+    /// For facts a later run must see even though it will not recompute them.
+    /// The fact store is the cache, so a row written here survives the cache
+    /// hit that skips ingest entirely — which an in-memory ingest counter,
+    /// computed by a pass that never runs again, does not.
+    pub(crate) fn set_provenance(&self, key: &str, value: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO provenance (key, value) VALUES (?, ?)",
+                duckdb::params![key, value],
+            )
+            .map(|_| ())
+            .map_err(|e| CodeLoreError::Analysis(format!("provenance insert {key}: {e}")))
+    }
+
+    /// Read one `provenance` key, or `None` when the store predates it.
+    ///
+    /// Absence is a real state, not an error: a fact store written before a
+    /// key existed simply lacks it, and callers must distinguish that from a
+    /// recorded zero.
+    pub fn provenance_value(&self, key: &str) -> Result<Option<String>> {
+        let got: std::result::Result<String, duckdb::Error> = self.conn.query_row(
+            "SELECT value FROM provenance WHERE key = ?",
+            duckdb::params![key],
+            |r| r.get(0),
+        );
+        match got {
+            Ok(v) => Ok(Some(v)),
+            Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(CodeLoreError::Analysis(format!(
+                "provenance read {key}: {e}"
+            ))),
+        }
+    }
+
+    /// The HEAD complexity scan's coverage as `(scored, eligible)`, or `None`
+    /// when the store predates the keys or the scan recorded nothing.
+    ///
+    /// Returned as counts rather than a ratio so a caller can report the
+    /// actual figures, and so the vacuous `eligible == 0` case (a docs-only
+    /// tree, honestly complete) stays distinguishable from thin coverage.
+    pub fn head_scan_coverage(&self) -> Result<Option<(u64, u64)>> {
+        let parse = |s: String| s.parse::<u64>().ok();
+        let scored = self
+            .provenance_value(schema::KEY_HEAD_SCAN_SCORED)?
+            .and_then(parse);
+        let eligible = self
+            .provenance_value(schema::KEY_HEAD_SCAN_ELIGIBLE)?
+            .and_then(parse);
+        Ok(match (scored, eligible) {
+            (Some(s), Some(e)) => Some((s, e)),
+            _ => None,
+        })
+    }
+
+    /// Classify the stored HEAD-scan coverage against the disclosure floor.
+    ///
+    /// The predicate lives here, beside the floor it enforces, rather than at
+    /// the call site: a consumer that recomputed its own ratio would be free to
+    /// drift from the threshold the warning uses, and the two would then
+    /// disagree about the same scan.
+    pub fn head_scan_coverage_verdict(&self) -> Result<ScanCoverageVerdict> {
+        let Some((scored, eligible)) = self.head_scan_coverage()? else {
+            return Ok(ScanCoverageVerdict::Unknown);
+        };
+        if eligible == 0 {
+            return Ok(ScanCoverageVerdict::Vacuous);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = scored as f64 / eligible as f64;
+        Ok(if ratio < ingest::coverage::MIN_SCAN_COVERAGE {
+            ScanCoverageVerdict::Below { scored, eligible }
+        } else {
+            ScanCoverageVerdict::Met { scored, eligible }
+        })
+    }
+
     pub fn list_tables(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
@@ -693,6 +790,100 @@ impl FactsDb {
     /// connection.
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+}
+
+#[cfg(test)]
+mod scan_coverage_verdict_tests {
+    use super::{FactsDb, ScanCoverageVerdict, schema};
+
+    fn record(db: &FactsDb, scored: &str, eligible: &str) {
+        db.set_provenance(schema::KEY_HEAD_SCAN_SCORED, scored)
+            .expect("scored");
+        db.set_provenance(schema::KEY_HEAD_SCAN_ELIGIBLE, eligible)
+            .expect("eligible");
+    }
+
+    #[test]
+    fn a_store_without_the_keys_is_unknown_not_clean() {
+        // The cache-hit case for stores written before the keys existed.
+        // Reading absence as "met" would green exactly the runs this gate was
+        // widened to catch.
+        let db = FactsDb::new_in_memory().expect("db");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Unknown
+        );
+    }
+
+    #[test]
+    fn nothing_eligible_is_vacuous_not_degraded() {
+        // A docs-only tree scans nothing and is honestly complete. Dividing
+        // here would be 0/0; reporting `Below` would fail a correct run.
+        let db = FactsDb::new_in_memory().expect("db");
+        record(&db, "0", "0");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Vacuous
+        );
+    }
+
+    #[test]
+    fn the_floor_is_the_boundary_and_it_is_inclusive() {
+        // Anti-vacuity: the two sides must actually differ, or the predicate
+        // is decorative. 90/100 sits exactly on the floor and must pass;
+        // 89/100 is the smallest step below it and must not.
+        let db = FactsDb::new_in_memory().expect("db");
+        record(&db, "90", "100");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Met {
+                scored: 90,
+                eligible: 100
+            }
+        );
+        record(&db, "89", "100");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Below {
+                scored: 89,
+                eligible: 100
+            }
+        );
+    }
+
+    #[test]
+    fn a_scan_reaching_a_minority_is_below_though_it_returned_rows() {
+        // The gap this closes: the emptiness witness sees rows and says
+        // nothing, because a partial scan is not an empty one.
+        let db = FactsDb::new_in_memory().expect("db");
+        record(&db, "40", "200");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Below {
+                scored: 40,
+                eligible: 200
+            }
+        );
+    }
+
+    #[test]
+    fn a_half_written_or_unparseable_pair_reads_as_unknown() {
+        // One key without the other, or a non-numeric value, must not be
+        // silently coerced to zero — that would manufacture a `Below` verdict
+        // out of a storage fault and fail an innocent run.
+        let db = FactsDb::new_in_memory().expect("db");
+        db.set_provenance(schema::KEY_HEAD_SCAN_SCORED, "40")
+            .expect("scored only");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Unknown
+        );
+        record(&db, "40", "not-a-number");
+        assert_eq!(
+            db.head_scan_coverage_verdict().expect("verdict"),
+            ScanCoverageVerdict::Unknown
+        );
     }
 }
 

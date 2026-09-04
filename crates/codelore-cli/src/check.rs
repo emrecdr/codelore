@@ -544,8 +544,30 @@ fn eval_code_health_gate(
     // — it cannot witness an ingest that went blind. A source-less tree (docs or
     // config only) legitimately yields no rows and stays a vacuous pass. The `&&`
     // short-circuit keeps the tree walk off every healthy run.
-    let degraded = code_health.is_empty()
+    let blind = code_health.is_empty()
         && codelore_lib::cli_api::quality_gates::head_has_scorable_source(repo, opts);
+    // Partial coverage is the other way this gate can green on blindness, and
+    // the emptiness witness above cannot see it: a scan that reached a minority
+    // of the repository still returns rows, so `is_empty()` is false and the
+    // gate reports on whatever it happened to measure. The scan's own eligible
+    // count is the honest denominator — a HEAD-tree ratio would fire spuriously
+    // under `--after`/`--before`, where attempting fewer files than the tree
+    // holds is correct — and it is read from `provenance` because a cache hit
+    // never re-runs the scan that computed it.
+    let coverage = db.head_scan_coverage_verdict()?;
+    let thin_coverage = matches!(
+        coverage,
+        codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { .. }
+    );
+    if let codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { scored, eligible } = coverage
+    {
+        tracing::warn!(
+            "code-health gate degraded: the HEAD complexity scan scored {scored} of \
+             {eligible} eligible files, below the coverage floor — the health rows \
+             below describe only the part of the repository that was measured"
+        );
+    }
+    let degraded = blind || thin_coverage;
     let worst = code_health
         .iter()
         .map(|r| r.score)

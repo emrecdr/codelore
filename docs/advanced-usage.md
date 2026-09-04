@@ -1320,7 +1320,16 @@ both at the default log level:
   eligible source files warns with the loss breakdown. The usual cause is a
   blobless partial clone (`git clone --filter=blob:none`, or
   `actions/checkout` with a filter), which the shallow-clone check cannot
-  detect because such a clone has complete commit history.
+  detect because such a clone has complete commit history. For the HEAD
+  complexity pass this is more than a warning: its `eligible` and `scored`
+  counts are recorded in the fact store, and `codelore check`'s code-health
+  gate reports **`degraded`** when they fall below the same floor — so a scan
+  that reached a minority of the repository fails the gate under the default
+  `fail_on_degraded = true` instead of passing on the part it happened to
+  measure. The counts are stored rather than recomputed because a cache hit
+  never re-runs the scan; a store written before they were recorded reads as
+  *unknown* and does not trigger the verdict, and a repository with no
+  eligible source is *complete*, not degraded.
 - **Majority oversize** — files larger than the AST byte cap (2 MiB) are
   skipped by design: real hand-written source essentially never reaches that
   size, and parsing generated or minified bundles would cost memory for

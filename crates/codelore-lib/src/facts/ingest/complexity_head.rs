@@ -118,6 +118,21 @@ impl FactsDb {
         coverage.warn_if_degraded("complexity", "complexity_metrics");
         coverage.warn_if_mostly_oversize("complexity", "complexity_metrics");
 
+        // Persist what the warning above only said out loud. The quality gate
+        // consults this to decide `degraded`, and it runs on cache hits — where
+        // this scan never executes and the warning is never emitted. Storing it
+        // in `provenance` puts it inside the artifact the cache restores, so
+        // the gate sees the coverage of the scan that actually produced the
+        // facts it is judging, not of a scan that did not run.
+        self.set_provenance(
+            crate::facts::schema::KEY_HEAD_SCAN_ELIGIBLE,
+            &coverage.eligible().to_string(),
+        )?;
+        self.set_provenance(
+            crate::facts::schema::KEY_HEAD_SCAN_SCORED,
+            &coverage.scored().to_string(),
+        )?;
+
         // Collapse back to the shape the serial drain already consumes. The
         // drain is unchanged; only the classification above is new.
         let batches: Vec<Option<(String, Vec<crate::complexity::ComplexityEntity>)>> = outcomes
