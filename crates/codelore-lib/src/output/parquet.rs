@@ -29,6 +29,10 @@ pub fn write_hotspots_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Resu
     // of the SQL that had to be hand-synced after every formula change.
     crate::analyses::lineage::materialize_source(db, opts)?;
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    // This writer bypasses `run_hotspots`, so the exclusion disclosure has to
+    // be invoked here too — otherwise Parquet output would be the one surface
+    // that drops unscanned files without saying so.
+    crate::analyses::hotspots::warn_on_unscanned_files(db, opts, cm_src)?;
     let row_limit = opts.rows_limit.map_or(i64::MAX, i64::from);
     let query =
         crate::analyses::hotspots::build_inlined_sql(opts, cm_src, opts.min_revs, row_limit);
