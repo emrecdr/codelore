@@ -1108,7 +1108,10 @@ mod coverage_tests {
     fn unscanned_majority_fires_only_when_the_excluded_set_is_larger() {
         assert!(!unscanned_majority(0, 0), "an empty repo stays quiet");
         assert!(!unscanned_majority(10, 6), "4 excluded of 10 is routine");
-        assert!(!unscanned_majority(10, 5), "an exact half is not a majority");
+        assert!(
+            !unscanned_majority(10, 5),
+            "an exact half is not a majority"
+        );
         assert!(unscanned_majority(10, 4), "6 excluded of 10 is a majority");
         assert!(
             unscanned_majority(3, 0),

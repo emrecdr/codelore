@@ -2719,7 +2719,7 @@ render today) must re-assert the temp table, or refactoring-targets must
 materialise explicitly.
 
 
-### F332 (Active) — hotspots scores unsupported-language files as perfectly healthy
+### F332 (Fixed — Unreleased) — hotspots scores unsupported-language files as perfectly healthy
 
 `joined` LEFT JOINs complexity and `COALESCE(fc.cognitive, 0)`, so a
 non-Tier-1 file enters the ranking with cognitive 0 → `pr_cx = 0`, score 0,
@@ -2730,6 +2730,34 @@ opposite silent semantics side by side. The `mi_rank` CTE already models the
 care needed ("files without an `mi` MUST NOT skew the distribution"); the
 cognitive rank never got it. Needs a semantics decision
 (exclude-with-disclosure recommended) before code.
+
+**Resolution**: exclude-with-disclosure, as recommended. The ranking INNER
+JOINs complexity, so an unmeasured file is absent rather than scored, which
+makes `hotspots` and `code-health` agree on what a missing measurement
+means. The zero-fill's effect was measured before removal rather than
+inferred: on a mixed fixture the unscanned file scored `cognitive_health`
+100.0 against 60.0 and 86.7 for the two real files.
+
+Validating the fix turned up a second route to the same wrong answer that
+the finding had not named. `complexity_metrics.cognitive` is nullable and
+`MAX` skips NULLs, so a path whose every row is NULL still produces a group,
+satisfies an INNER JOIN, and re-enters carrying a NULL — which reaches
+`cognitive_health` as 100.0 too. `file_complexity` therefore also filters
+`cognitive IS NOT NULL`. A bare join swap would have fixed the finding as
+written and left its twin live.
+
+Two consequences worth recording. Excluding rows changes the surviving
+rows' scores — both `PERCENT_RANK` windows are computed over the survivors,
+so removing the floor of zeros lowers `pr_cx` for scanned files; that is the
+intended semantics, not a side effect. And the corpus-anchored score does
+NOT move, because `PR_REV_SQL` computes its churn term over `changes` with
+no complexity join, so `hotspot_anchored_max` was never at risk.
+
+The disclosure fires on the same majority predicate as `oversize_majority`
+(a repository with docs and lockfiles would otherwise warn on every run),
+shares its CTEs with the ranking query so it cannot describe a population
+nobody ranked, and is invoked from the Parquet writer too, which bypasses
+`run_hotspots`.
 
 
 ### F333 (Fixed — Unreleased) — files past the AST byte cap are invisible everywhere

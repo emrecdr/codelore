@@ -51,7 +51,7 @@ CodeLore ships **dozens of behavioral analyses** across four tiers (the registry
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
-| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − cognitive_health) / 4` — `cognitive_health` here is the inline cognitive-only proxy `100 × (1 − 0.40 · normalize(cognitive))` ∈ [60, 100], so the unscaled product caps at 40; dividing by 4 maps output to [0, 10] ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
+| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − cognitive_health) / 4` — `cognitive_health` here is the inline cognitive-only proxy `100 × (1 − 0.40 · normalize(cognitive))` ∈ [60, 100], so the unscaled product caps at 40; dividing by 4 maps output to [0, 10] ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities. Files with no complexity measurement are excluded, not scored — see *Scan coverage and the AST size cap* |
 | `code-health` ★ | "How healthy is each file's structure?" | Biomarker composite: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` = weighted sum of eight biomarkers — Complex Method (0.22), God Class (0.18), Large Method (0.12), DRY (0.12), Shotgun Surgery (0.12), Deep Nesting (0.10), Many Args (0.07), Complex Conditional (0.07); each intensity is a per-language `PERCENT_RANK`; score ∈ [0, 100] (higher = healthier); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of `structural_risk` | Multi-dimensional file-quality score with explicit biomarker breakdown; used as the composite gate in `codelore check code_health_min` |
 | `clones` ★ | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
 | `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
@@ -1329,6 +1329,17 @@ both at the default log level:
   outnumber the scanned ones, the pass warns: the fact table describes a
   minority of what looks like source. Exclude bundle directories via
   `.codeloreignore` so the census reflects the code you maintain.
+- **Unranked files** — `hotspots` ranks only files the scan could actually
+  measure. A file with no complexity data — a language with no tree-sitter
+  grammar, an unreadable blob, one past the cap above — is absent from the
+  ranking rather than scored, because the only way to score it was to score
+  it at zero, and zero normalises to the *healthiest* value on the scale: a
+  coverage gap published as a verdict of perfect health. `code-health` has
+  always excluded the same files. Both of the ranking's percentile ranks are
+  therefore taken among measurable files, which means a polyglot repository's
+  scores are relative to the code CodeLore can parse, not to every path that
+  changed. When the excluded files outnumber the ranked ones, the run says
+  so.
 
 ## 11. CI/CD integration patterns
 
