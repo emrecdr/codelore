@@ -133,7 +133,8 @@ fn require_tracked_path(repo: &GixRepo, path: &str) -> std::result::Result<(), E
         None => Err(ErrorData::invalid_params(
             format!(
                 "path not found among files tracked at HEAD: {path:?} — paths are \
-                 repo-relative; try repo_overview or hotspots to list analyzed files"
+                 repo-relative; `hotspots` returns analysed file paths (ranked, and \
+                 limited to files the complexity scan could measure)"
             ),
             None,
         )),
@@ -668,8 +669,11 @@ fn structural_skip_reason(gate: &str) -> &'static str {
         // real (see `EVALUATED_HERE` above); its own runtime skip (no
         // calibration artifact active) is reported directly from `check_gates`.
         "hotspot_anchored_max" => {
-            "depends on the calibration-corpus lens, which this tool does not carry \
-             (it uses the plain, unanchored hotspot scan); `codelore check` is authoritative"
+            "needs the corpus-anchored hotspot scan; this tool runs the plain, \
+             unanchored variant, which never populates the anchored score the gate \
+             compares against. The corpus lens itself IS available here — it is what \
+             `corpus_percentile_max` above is evaluated with. `codelore check` is \
+             authoritative for this gate"
         }
         "fail_on_degraded" => "degraded-gate handling is `codelore check`-only",
         "fail_on_skipped" => "skipped-gate handling is `codelore check` / `gate` / `diff`-only",
@@ -732,7 +736,9 @@ impl CodeLoreServer {
     #[tool(
         name = "hotspots",
         annotations(read_only_hint = true, open_world_hint = false),
-        description = "Return the top hotspot files ranked by revision count as JSON. \
+        description = "Return the top hotspot files as JSON, ranked by the composite \
+            `hotspot_score` (revisions × cognitive complexity × poor health) — NOT by \
+            revision count alone, though `revisions` is one of the columns returned. \
             Pass `limit` to cap rows (default 50, max 500). \
             First call on a cold cache triggers history ingest."
     )]
