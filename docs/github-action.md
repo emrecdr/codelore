@@ -1,6 +1,6 @@
 # CodeLore GitHub Action
 
-The reusable GitHub Action `emrecdr/codelore@v1` brings codelore's behavioural code analysis to any GitHub Actions workflow. Composite action — no Docker pull, no Node bootstrap, ~3 seconds startup.
+The reusable GitHub Action `emrecdr/codelore@v1` brings codelore's behavioural code analysis to any GitHub Actions workflow. Composite action — no Docker pull, no Node bootstrap; startup is essentially the binary download (see Performance below).
 
 ## Quick start — hotspots SARIF on every PR
 
@@ -40,7 +40,7 @@ The findings appear in the PR's **Security** tab and the **Files changed** view,
 |---|---|---|
 | `command` | `analyze` | Which subcommand to run: `analyze` \| `check` \| `gate` \| `diff`. `analysis`/`format`/`output` apply to `analyze` only; for `check`/`gate`/`diff` pass command-specific flags (and diff's `<base>..<head>` range) via `args` |
 | `analysis` | `hotspots` | Any codelore analysis name (see `codelore analyze --help` or `docs/research-foundations.md`). Applies to `command: analyze` only |
-| `format` | `sarif` | `csv \| json \| sarif \| markdown \| parquet \| sqlite \| html`. Applies to `command: analyze` only |
+| `format` | `sarif` | `csv \| json \| ndjson \| sarif \| markdown \| gha \| html \| parquet \| sqlite \| spa \| step-summary`. Applies to `command: analyze` only |
 | `output` | `codelore-result` | Output file path relative to `GITHUB_WORKSPACE`. Empty string = stdout. Applies to `command: analyze` only |
 | `repo` | `.` | Path to repository to analyse (defaults to the checked-out workspace) |
 | `args` | (empty) | Extra CLI flags appended verbatim. For `analyze`: `--rows`, `--min-revs`, `--departed-threshold-days`, etc. For `check`/`gate`/`diff`: the command-specific flags (`--thresholds-file`, `--ratchet`, `--fail-on`, and diff's `<base>..<head>` range) |
