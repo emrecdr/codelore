@@ -100,6 +100,5 @@ required-features = []
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
-tempfile = "3"
 walkdir = "2"
 codelore-lib = { path = "../codelore-lib", version = "0.29.1", features = ["test-support"] }
