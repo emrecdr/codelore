@@ -573,3 +573,54 @@ fn head_only_ingest_matches_full_ingest_complexity_and_leaves_history_empty() {
         "commits must stay empty for head-only ingest"
     );
 }
+
+/// A real ingest must leave the HEAD scan's coverage behind it.
+///
+/// The unit tests around `head_scan_coverage_verdict` seed `provenance`
+/// themselves, so they verify the predicate but never that anything writes it.
+/// Deleting both `set_provenance` calls from the scan leaves every one of them
+/// green while the gate reads `Unknown` forever and the enforcement is inert.
+/// This test closes that gap by running the scan for real and asserting the
+/// counts arrive, so the write and the read are pinned by different tests.
+#[test]
+fn a_real_ingest_records_the_head_scan_coverage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "dev@example.com"]);
+    run_git(path, &["config", "user.name", "Dev"]);
+
+    // Two Tier-1 source files, so `eligible` is unambiguously non-zero and the
+    // assertion cannot pass on the vacuous docs-only path.
+    write_file(path, "src/a.rs", "pub fn a() -> u32 { 1 }\n");
+    write_file(path, "src/b.rs", "pub fn b() -> u32 { 2 }\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "add source", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options::default();
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let (scored, eligible) = db
+        .head_scan_coverage()
+        .expect("coverage read")
+        .expect("the HEAD complexity scan must record its coverage; absent means nothing persists it and the gate can never enforce the floor");
+
+    assert!(
+        eligible >= 2,
+        "expected both Tier-1 files eligible, got eligible={eligible}"
+    );
+    assert_eq!(
+        scored, eligible,
+        "a clean fixture loses nothing, so every eligible file should be scored"
+    );
+
+    // And the verdict derived from them must be the healthy one, not the
+    // `Unknown` that an absent write would produce.
+    assert_eq!(
+        db.head_scan_coverage_verdict().expect("verdict"),
+        codelore_lib::facts::ScanCoverageVerdict::Met { scored, eligible }
+    );
+}
