@@ -3729,5 +3729,72 @@ the parser-broke case directly instead of through its consequence.
 
 Noted during a clean-state sweep, not while touching this file.
 
+### F374 (Active) — a failed release publish cannot be re-run under its own fix
 
-The next sweep re-opens at **F374**.
+`container.yml` declares `workflow_dispatch:` with no inputs, and every
+job in it is gated on `github.ref_type == 'tag'`. A dispatched run uses
+the workflow file **at the dispatched ref**, so when a tagged publish
+fails for a reason fixed on `main` afterwards, neither target recovers
+it: dispatching from the tag re-runs the file as it stood at that tag —
+the revision that just failed — and dispatching from a branch skips
+every job. Local reusable workflows (`uses:
+./.github/workflows/attest-digest.yml`) resolve at the caller's SHA, so
+the same trap sits one level down.
+
+**This qualifies F302.** Its resolution and the §13 decision both record
+that "dispatching from a tag still publishes — the retry path for a
+publish that failed after the tag was pushed", and `container.yml`'s
+`workflow_dispatch` comment repeats it as operator instruction. That
+holds only while the failure's fix is not itself in the workflow file.
+The comment is the copy an operator actually reads mid-incident, so it
+is the copy that most needs the caveat.
+
+The observed instance: the per-arch `build` matrix job's timeout was
+raised after a publish exceeded it, fixing every future release but not
+the tag that had already failed. The margins, and the fact that a
+job-level breach reports as `cancelled` rather than `failure`, are
+recorded in that setting's own comment and are deliberately not restated
+here.
+
+Moving the tag is not an exit either — though not for the reason usually
+given. Attestations bind to content digests, not refs (`subject-path`,
+`subject-digest`), so the published ones survive a tag move and still
+verify; `release.yml` says as much where it calls the dry run's
+attestations "digest-bound and harmless". What actually breaks is that a
+re-run regenerates the Release assets, `SHA256SUMS`, and the Homebrew
+formula SHAs under a version consumers have already downloaded, while
+the surviving attestations record a commit the tag no longer names.
+
+**The fix is not a one-line input.** Tag derivation is
+`docker/metadata-action` in the `merge` job, which has no checkout step
+at all, and its `type=ref,event=tag` and `type=semver` rules read the
+event context rather than any checked-out tree. A branch dispatch
+carrying a ref input would therefore tag the image `sha-<caller>` and,
+because `type=raw,value=latest` is itself gated on `github.ref_type`,
+would leave `latest` on the previous release — the silent-wrong-publish
+shape F302 was filed to close, reintroduced by the change meant to
+complete it. `container.yml` has four `ref_type` sites, not three: the
+three job gates plus that `enable=`. A working version drives the tag
+rules from the resolved input and re-gates on it; F302 already
+considered and rejected the pipeline restructure that implies, so this
+wants a decision, not a patch.
+
+`release.yml` carries the same dispatch shape with two differences that
+constrain any fix. Its **three** publishing jobs are gated per job
+(F288), and `crates-publish` is deliberately guarded twice — a job gate
+plus a step gate that also covers the unconfigured-token case — so it
+needs two edits where the others need one. Its branch dispatch is a
+designed dry run (F288) that already writes real attestations for
+throwaway archives, so a ref input must not convert dry runs into
+publishes. `release_publish_gate_test` pins the gate's literal text,
+which means the guard has to move with any rewording of it.
+
+Recorded, not fixed — release plumbing gets `docs/RELEASING.md`-level
+scrutiny. Worth noting for whoever takes it: no Rust guard reads
+`container.yml` at all, so the half of this finding it leads with is the
+half nothing will catch drifting.
+
+Noted while recovering a publish that had already failed.
+
+
+The next sweep re-opens at **F375**.
