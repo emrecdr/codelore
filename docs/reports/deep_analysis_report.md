@@ -3631,4 +3631,38 @@ fails the test. The first attempt at that probe was itself vacuous —
 changed and the test passed — caught by checking the diff rather than
 the exit status.
 
-The next sweep re-opens at **F372**.
+### F372 (Active) — the `hotspots` MCP tool names the wrong ranking key
+
+The tool description in `mcp.rs` reads "Return the top hotspot files
+ranked by revision count as JSON." The rows come back from
+`run_hotspots` unmodified — no re-sort, no reordering, nothing but the
+shared row cap — and that query ends `ORDER BY score DESC, path ASC`.
+The ranking key is the composite `hotspot_score`, not `revisions`.
+
+This is not an ordinary stale comment, because of who reads it. MCP tool
+descriptions are consumed by an LLM client deciding how to call a tool
+and how to characterise what it returns. An agent following this one
+reports "the most-changed file is X" when X is the highest
+composite-risk file — which may rank first precisely because it is
+complex and unhealthy rather than because it changed most. The claim
+then reaches a user carrying the agent's confidence, and nothing in the
+payload contradicts it: `revisions` is a serialized column, so the
+sentence looks corroborated by the data beside it.
+
+Checked for a class rather than assuming one. The neighbouring
+descriptions that make ordering claims hold up: `refactoring-targets`
+says "ranked by risk÷LOC" against a real `priority DESC` over
+`(structural_risk × hotspot_score) / max(loc, floor)` — loose shorthand,
+correct variable. This one names the wrong variable, and it is the only
+one that does.
+
+The fix is a sentence, but it belongs to a description audit rather than
+to whichever change happens to pass nearby: the same file's
+`hotspot_anchored_max` gate note and its `path not found` hint both make
+claims about what *other* tools return, and those deserve reading in the
+same pass. Noted while F332 was being validated; deliberately not fixed
+inline, so the ranking change and the description audit stay separable
+in the history.
+
+
+The next sweep re-opens at **F373**.
