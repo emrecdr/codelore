@@ -52,7 +52,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{Options, Result};
+use crate::{CodeLoreError, Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HotspotRow {
@@ -122,6 +122,8 @@ pub struct HotspotRow {
 // Aggregate per-path:
 //   revisions:   count of distinct commits in changes
 //   cognitive:   MAX of cognitive across all entities in the path's file
+//   NOTE: a path with no measured cognitive value is EXCLUDED from every
+//   line below rather than scored at zero -- see the `joined` CTE.
 //   cognitive_health: 100 * (1 − 0.40 * normalize(cognitive))   ∈ [60, 100]
 //   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − cognitive_health) / 4
 //                  ∈ [0, 10] — see module-level docstring for why the divisor
@@ -159,10 +161,84 @@ pub fn build_sql(opts: &Options, cm_src: &str) -> String {
     } else {
         "changes"
     };
+    // The CTE placeholders resolve FIRST: `{cm_src}` lives inside
+    // `FILE_COMPLEXITY_CTE`, so substituting it before the CTE is spliced in
+    // would leave the placeholder intact in the assembled SQL.
     let sql = SQL
+        .replace("{file_revs_cte}", FILE_REVS_CTE)
+        .replace("{file_complexity_cte}", FILE_COMPLEXITY_CTE)
         .replace("{cm_src}", cm_src)
         .replace("{file_mi_cte}", file_mi_cte);
     crate::analyses::lineage::rewrite(&sql, opts).replace("{ai_src}", ai_src)
+}
+
+/// Assemble the coverage probe, resolving the same CTEs and the same lineage
+/// rewrite as [`build_sql`] so the probe counts the population the ranking
+/// ranks. Takes `min_revs` as its single bind parameter.
+fn build_coverage_sql(opts: &Options, cm_src: &str) -> String {
+    let sql = COVERAGE_SQL
+        .replace("{file_revs_cte}", FILE_REVS_CTE)
+        .replace("{file_complexity_cte}", FILE_COMPLEXITY_CTE)
+        .replace("{cm_src}", cm_src);
+    crate::analyses::lineage::rewrite(&sql, opts)
+}
+
+/// True when the ranking excludes more eligible files than it ranks.
+///
+/// Every repository changes files that are not scannable source — docs,
+/// lockfiles, CI config — so an unconditional disclosure would fire on every
+/// run and be tuned out. Firing only on a majority keeps the routine
+/// repository quiet while still catching the case that actually misleads: a
+/// codebase whose primary language has no grammar, where the ranking
+/// describes a fraction of the work and says so nowhere. Same shape as the
+/// ingest scan's `oversize_majority`, and [`warn_on_unscanned_files`] calls
+/// this rather than restating the comparison, so the warning and the tests
+/// that pin it cannot drift apart.
+#[must_use]
+fn unscanned_majority(eligible: u64, scanned: u64) -> bool {
+    eligible.saturating_sub(scanned) > scanned
+}
+
+/// Disclose how much of the eligible population the hotspot ranking cannot see.
+///
+/// The ranking INNER JOINs complexity, so a file with no measured cognitive
+/// value is absent from the output rather than scored at zero. Absence is the
+/// correct semantics — a file the scan cannot see has earned no health
+/// verdict — but an *undisclosed* absence is the same reads-as-a-verdict
+/// failure one step to the left, which is why the exclusion ships with a
+/// count attached.
+///
+/// Deliberately `warn!`: the default `EnvFilter` is `warn`, so this is the one
+/// level that reaches a user who did not opt into logging.
+pub(crate) fn warn_on_unscanned_files(db: &FactsDb, opts: &Options, cm_src: &str) -> Result<()> {
+    let sql = build_coverage_sql(opts, cm_src);
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare hotspots coverage probe: {e}")))?;
+    let mut rows = stmt
+        .query(params![opts.min_revs])
+        .map_err(|e| CodeLoreError::Analysis(format!("query hotspots coverage probe: {e}")))?;
+    let row = rows
+        .next()
+        .map_err(|e| CodeLoreError::Analysis(format!("fetch hotspots coverage row: {e}")))?
+        .ok_or_else(|| {
+            CodeLoreError::Analysis("hotspots coverage probe returned no rows".to_string())
+        })?;
+    let eligible: u64 = row
+        .get(0)
+        .map_err(|e| CodeLoreError::Analysis(format!("get eligible: {e}")))?;
+    let scanned: u64 = row
+        .get(1)
+        .map_err(|e| CodeLoreError::Analysis(format!("get scanned: {e}")))?;
+    if !unscanned_majority(eligible, scanned) {
+        return Ok(());
+    }
+    let excluded = eligible.saturating_sub(scanned);
+    tracing::warn!(
+        "hotspots ranked {scanned} of {eligible} file(s) with enough history —          {excluded} have no complexity measurement (language without a grammar,          unreadable blob, or past the AST size cap) and are absent from the          ranking rather than scored at zero. At this share the ranking          describes a minority of what changed here; a file it omits has no          health verdict, not a good one."
+    );
+    Ok(())
 }
 
 /// Returns the SAME hotspots SQL with `?` placeholders substituted for
@@ -214,20 +290,57 @@ const FILE_MI_GROUPED: &str = "file_mi AS (
         WHERE mi IS NOT NULL
     )";
 
-pub const SQL: &str = "
-    WITH file_revs AS (
+/// The eligible-file population: every path clearing `min_revs`.
+///
+/// Shared verbatim with the coverage probe rather than restated there. A
+/// probe that counted a different population than the query it describes
+/// would publish a coverage figure for a set nobody ranked — the same
+/// silent-drift risk [`build_inlined_sql`] avoids by sharing the formula
+/// with [`build_sql`].
+const FILE_REVS_CTE: &str = "file_revs AS (
         -- (rev, path) is the changes PK, so COUNT(rev) == COUNT(DISTINCT rev)
         -- per path. Plain COUNT avoids DuckDB's distinct-tracking overhead.
         SELECT path, COUNT(rev) AS revs
         FROM changes
         GROUP BY path
         HAVING revs >= ?
-    ),
-    file_complexity AS (
+    )";
+
+/// The scanned-file population: every path with at least one MEASURED
+/// cognitive value. Shared with the coverage probe for the reason given on
+/// [`FILE_REVS_CTE`] — the probe's whole job is to report the size of the
+/// gap between these two sets.
+const FILE_COMPLEXITY_CTE: &str = "file_complexity AS (
+        -- A file whose language has no tree-sitter grammar, whose blob could
+        -- not be read, or that exceeded the AST byte cap has no row here, and
+        -- the `joined` INNER JOIN drops it from the ranking rather than
+        -- scoring it at zero -- the same care `file_mi` takes with a missing
+        -- `mi`. `MAX` skips NULLs, so the explicit filter is what keeps a
+        -- missing measurement distinct from a measured zero: without it a group
+        -- whose every `cognitive` is NULL still produces a row, satisfies the
+        -- INNER JOIN, and re-enters the ranking carrying a NULL the score
+        -- formula cannot represent as absent.
         SELECT path, MAX(cognitive) AS cognitive
         FROM {cm_src}
+        WHERE cognitive IS NOT NULL
         GROUP BY path
-    ),
+    )";
+
+/// Coverage probe: how many eligible files the ranking can actually score.
+/// Same two CTEs as [`SQL`], a LEFT JOIN instead of the ranking's INNER JOIN
+/// so the excluded files are counted rather than dropped. Takes the same
+/// single `min_revs` bind parameter as [`SQL`]'s first placeholder.
+const COVERAGE_SQL: &str = "
+    WITH {file_revs_cte},
+    {file_complexity_cte}
+    SELECT COUNT(*) AS eligible, COUNT(fc.path) AS scanned
+    FROM file_revs fr
+    LEFT JOIN file_complexity fc ON fc.path = fr.path
+";
+
+pub const SQL: &str = "
+    WITH {file_revs_cte},
+    {file_complexity_cte},
     -- File-level MI body is swapped at build time depending on whether
     -- grouping is active — see `FILE_MI_RAW` / `FILE_MI_GROUPED`. The
     -- raw form joins `entities` to filter `kind='unit'`; the grouped
@@ -262,16 +375,28 @@ pub const SQL: &str = "
             PERCENT_RANK() OVER (ORDER BY mi) AS mi_rank
         FROM file_mi
     ),
+    -- INNER JOIN on complexity: an unscanned file is ABSENT from the
+    -- ranking, not scored at zero. Zero-filling gave it `norm_cx = 0` and so
+    -- `cognitive_health = 100`, publishing a coverage gap as a verdict of
+    -- perfect health, and it also put the file in both PERCENT_RANK windows
+    -- below, where a floor of zeros inflated every scanned file's `pr_cx`.
+    -- Excluding it makes both ranks percentiles among the files the scan can
+    -- actually see, which is what `file_mi_ranked` already documents for
+    -- `mi`, and matches `code_health`, which INNER JOINs the same table.
+    -- `run_hotspots` discloses how many files this drops; silently ranking a
+    -- subset is the failure mode being fixed, so the count is not optional.
+    -- The other two joins stay LEFT on purpose: `mi` and `ai_pct` are
+    -- nullable columns on a qualifying row, not qualification criteria.
     joined AS (
         SELECT
             fr.path,
             fr.revs,
-            COALESCE(fc.cognitive, 0) AS cognitive,
+            fc.cognitive AS cognitive,
             fmr.mi AS mi,
             fmr.mi_rank AS mi_rank,
             fa.ai_pct AS ai_pct
         FROM file_revs fr
-        LEFT JOIN file_complexity fc ON fc.path = fr.path
+        INNER JOIN file_complexity fc ON fc.path = fr.path
         LEFT JOIN file_mi_ranked fmr ON fmr.path = fr.path
         LEFT JOIN file_ai fa ON fa.path = fr.path
     ),
@@ -314,6 +439,9 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     // lineage-resolved view).
     crate::analyses::lineage::materialize_source(db, opts)?;
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    // The ranking excludes unscanned files; disclose the size of what it
+    // cannot see before emitting a ranking that looks complete.
+    warn_on_unscanned_files(db, opts, cm_src)?;
     let sql = build_sql(opts, cm_src);
     crate::analyses::query::explain_if_requested(
         db,
@@ -860,6 +988,134 @@ mod anchor_tests {
         assert!(
             plain.iter().all(|r| r.hotspot_score_anchored.is_none()),
             "run_hotspots must leave the anchor absent"
+        );
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+    use crate::facts::FactsDb;
+
+    /// Four changed paths spanning every qualification outcome: two Rust files
+    /// carrying a measured `cognitive`, one file with no `complexity_metrics`
+    /// row at all (the language-without-a-grammar / unreadable-blob /
+    /// over-the-cap case), and one whose only row carries a NULL `cognitive`
+    /// (the all-NULL group the nullable column permits). The last two are the
+    /// two distinct ways a path can be unscanned, and they fail differently:
+    /// the missing row is dropped by the join, the NULL row by the filter.
+    fn seed_mixed(db: &FactsDb) {
+        for rev in ["c1", "c2"] {
+            db.conn()
+                .execute(
+                    "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+                     canonical_author, date, committer_date, message, is_merge, parent_count) \
+                     VALUES (?, 'a@b.com', 'A', 'a@b.com', 'A', TIMESTAMPTZ '2026-01-01', \
+                     TIMESTAMPTZ '2026-01-01', 'm', false, 1)",
+                    duckdb::params![rev],
+                )
+                .expect("insert commit");
+        }
+        db.conn()
+            .execute(
+                "INSERT INTO changes (rev, path, change_type) VALUES \
+                 ('c1','src/a.rs','modified'),('c2','src/a.rs','modified'), \
+                 ('c1','src/b.rs','modified'), \
+                 ('c1','docs/guide.md','modified'),('c2','docs/guide.md','modified'), \
+                 ('c1','src/null.rs','modified')",
+                [],
+            )
+            .expect("insert changes");
+        // `docs/guide.md` deliberately gets NO row; `src/null.rs` gets one
+        // whose `cognitive` is NULL.
+        db.conn()
+            .execute(
+                "INSERT INTO complexity_metrics (path, name, rev, cognitive) VALUES \
+                 ('src/a.rs','f','c1',30),('src/b.rs','f','c1',10), \
+                 ('src/null.rs','f','c1',NULL)",
+                [],
+            )
+            .expect("insert complexity");
+    }
+
+    fn opts() -> Options {
+        Options {
+            repo_path: std::path::PathBuf::from("."),
+            min_revs: 1,
+            use_canonical_lineage: false,
+            ..Options::default()
+        }
+    }
+
+    /// The finding this fixes: a file the scan could not measure entered the
+    /// ranking at `cognitive = 0`, which normalises to `norm_cx = 0` and so
+    /// publishes `cognitive_health = 100` — the maximum of the scale. A
+    /// coverage gap rendered as a verdict of perfect health.
+    ///
+    /// The two positive assertions are load-bearing: without them this test
+    /// would also pass if the query returned nothing at all, which is the
+    /// shape of vacuous pass this suite has been bitten by before.
+    #[test]
+    fn an_unscanned_file_is_absent_from_the_ranking_not_scored_as_healthy() {
+        let db = FactsDb::new_in_memory().expect("db");
+        seed_mixed(&db);
+        let rows = run_hotspots(&db, &opts()).expect("run");
+
+        let paths: Vec<&str> = rows.iter().map(|r| r.path.as_str()).collect();
+        assert!(
+            paths.contains(&"src/a.rs") && paths.contains(&"src/b.rs"),
+            "the scanned files must still rank — otherwise this test proves \
+             nothing about exclusion (got {paths:?})"
+        );
+        assert!(
+            !paths.contains(&"docs/guide.md"),
+            "a file with no complexity row must be absent, not ranked (got {paths:?})"
+        );
+        assert!(
+            rows.iter().all(|r| r.cognitive_health < 100.0),
+            "no surviving row may carry the perfect-health value that the \
+             zero-fill used to manufacture"
+        );
+    }
+
+    /// The nullable-column half. `MAX` skips NULLs, so an all-NULL group would
+    /// otherwise survive `GROUP BY` and satisfy an INNER JOIN while carrying a
+    /// value the score formula cannot represent as absent — the same
+    /// reads-as-healthy outcome by a different route.
+    #[test]
+    fn a_path_whose_only_cognitive_value_is_null_is_excluded() {
+        let db = FactsDb::new_in_memory().expect("db");
+        seed_mixed(&db);
+        let rows = run_hotspots(&db, &opts()).expect("run");
+
+        let paths: Vec<&str> = rows.iter().map(|r| r.path.as_str()).collect();
+        assert!(
+            paths.contains(&"src/a.rs"),
+            "control: a measured file still ranks (got {paths:?})"
+        );
+        assert!(
+            !paths.contains(&"src/null.rs"),
+            "a path whose only cognitive value is NULL is unmeasured, not \
+             measured-at-zero (got {paths:?})"
+        );
+    }
+
+    /// The disclosure predicate, called directly so the warning and its test
+    /// cannot drift — the same reason `oversize_majority` is its own function.
+    /// The equality case is the boundary that matters: half excluded is not a
+    /// majority, and a repository with nothing to rank must not be silent.
+    #[test]
+    fn unscanned_majority_fires_only_when_the_excluded_set_is_larger() {
+        assert!(!unscanned_majority(0, 0), "an empty repo stays quiet");
+        assert!(!unscanned_majority(10, 6), "4 excluded of 10 is routine");
+        assert!(
+            !unscanned_majority(10, 5),
+            "an exact half is not a majority"
+        );
+        assert!(unscanned_majority(10, 4), "6 excluded of 10 is a majority");
+        assert!(
+            unscanned_majority(3, 0),
+            "ranking nothing at all must always disclose"
         );
     }
 }
