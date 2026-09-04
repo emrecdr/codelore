@@ -59,7 +59,16 @@ jobs:
     # dependency-graph semantics is one `needs:` edit away from silently
     # re-opening.
     if: github.ref_type == 'tag'
-    timeout-minutes: 25
+    # 25 was never comfortable: the amd64 leg finished 43s under it on one
+    # release and 1m55s under it on the next, so two of the last three
+    # publishes passed on margin thinner than normal runner variance, and the
+    # third exceeded it on both architectures and both attempts. A job-level
+    # timeout breach is reported as `cancelled`, not `failure`, which is why
+    # the symptom read as an infrastructure cancellation rather than the
+    # deterministic wall it actually is. This value is a hang guard, not a
+    # performance budget — it wants enough headroom that only a genuinely
+    # stuck build reaches it.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

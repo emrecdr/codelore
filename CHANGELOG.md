@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The container publish no longer runs against a timeout thinner than normal runner variance.** The multi-arch image build carried `timeout-minutes: 25` while the amd64 leg had been finishing at 24m17s on one release and 23m05s on the next — margins of 43 seconds and under two minutes. Two publishes passed on luck; the next exceeded the limit on both architectures across two attempts, so no image was published for that tag. The symptom is worth knowing because it misleads: GitHub reports a job-level timeout breach as `cancelled`, not `failure`, and two independent jobs stopping within seconds of each other reads like an external cancellation rather than each independently hitting the same wall clock. Re-running was therefore never going to help, and the second attempt timed out three seconds later than the first. The limit is now 45 minutes and the rationale sits on the line: this value is a hang guard, not a performance budget, so it wants enough headroom that only a genuinely stuck build reaches it.
+
 ## [0.29.0] - 2026-09-04
 
 ### Added
