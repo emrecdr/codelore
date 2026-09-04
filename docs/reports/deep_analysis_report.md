@@ -1970,7 +1970,7 @@ the one file no convention guard reads.
 Recorded rather than fixed inline, per the standing rule that latent findings
 spotted during unrelated work land as findings.
 
-### F309 (Fixed — Unreleased) — the vendored fork's public surface still describes languages it no longer parses
+### F309 (Fixed — v0.29.0) — the vendored fork's public surface still describes languages it no longer parses
 
 Found in the same validation pass as F308. Originally deferred whole; cycle 20
 established that its two halves do not share a cost, and the cheap half has
@@ -2094,7 +2094,7 @@ four agree today and nothing checks that they continue to.
     label. That is a public-API addition and a user-visible output change, not a
     cleanup, which is why it is recorded here rather than done in passing.
 
-### F311 (Fixed — Unreleased) — three extension tables claim to mirror each other and do not
+### F311 (Fixed — v0.29.0) — three extension tables claim to mirror each other and do not
 
 Found while assessing [F310]. `Tier1Language`, `CloneLanguage` and
 `ImportLanguage` each map a file extension to a language, and the latter two
@@ -2170,7 +2170,7 @@ it dropped `dirs`.
     Applying a weaker one, in a review of the range that set it, would be the
     wrong trade. Pre-existing; not introduced by the work that found it.
 
-### F314 (Fixed — Unreleased) — `unsafe_code = "forbid"` does not cover the crate the docs say it covers
+### F314 (Fixed — v0.29.0) — `unsafe_code = "forbid"` does not cover the crate the docs say it covers
 
 `CLAUDE.md` states the invariant as **`workspace.lints.rust: unsafe_code =
 "forbid"`** — "zero `unsafe` blocks; CI rejects additions." The first clause is
@@ -2242,7 +2242,7 @@ minority of the repository is not empty, so the gate still reports `passed`.
     just an empty one. A test that only pins the empty case would pass against the
     current code and prove nothing about the change.
 
-### F316 (Fixed — Unreleased) — the clones and imports HEAD passes share the silent-skip shape
+### F316 (Fixed — v0.29.0) — the clones and imports HEAD passes share the silent-skip shape
 
 `ingest_complexity_at_head` now classifies its skips; the sibling passes do not.
 `clones_head.rs` and `imports_head.rs` both `warn!` per file and return `None`,
@@ -2347,7 +2347,7 @@ accurate: it says the size cap "gates extraction" and that a per-file
 *extraction error* is logged — both true. Adding a `debug!` for the size-cap
 skip was considered and rejected as improving adjacent code to no end.
 
-### F318 (Fixed — Unreleased) — a schema-wrong SARIF document silently deletes an engine's findings
+### F318 (Fixed — v0.29.0) — a schema-wrong SARIF document silently deletes an engine's findings
 
 `sarif_parse.rs` errors correctly on a missing `version`/`runs` and on a non-array
 `runs`. But a run whose `results` key is missing or not an array hits a bare
@@ -2375,7 +2375,7 @@ type it found. Two of the three tests exist as anti-vacuity controls, because a
 parser that simply rejected every zero-finding run would satisfy the
 malformed-input test while silently breaking clean re-scans.
 
-### F319 (Fixed — Unreleased) — 21 analysis-only options key the ingest cache, forcing a full re-ingest to change a threshold
+### F319 (Fixed — v0.29.0) — 21 analysis-only options key the ingest cache, forcing a full re-ingest to change a threshold
 
 `cache.rs` folds `Options::canonical_json()` into the cache key, and
 `canonical_json` deliberately admits every field not on its drop-list. Most of
@@ -2437,7 +2437,7 @@ Everything else — `min_revs`, `min_shared_revs`, `min_coupling_pct`,
     output only — it must never split the ingest cache." Path-independence is
     tested; content-independence is not.
 
-### F320 (Fixed — Unreleased) — `code-health` walks the working tree on every run, and on a dirty tree that contradicts what `check` documents
+### F320 (Fixed — v0.29.0) — `code-health` walks the working tree on every run, and on a dirty tree that contradicts what `check` documents
 
 `run_code_health` — the entry point behind `codelore check`, the SPA,
 `factors`, `delta-health` and `refactoring-targets` — builds its context from
@@ -2528,7 +2528,7 @@ pins the default, because the first compares two explicit contexts and would
 keep passing if the default silently reverted.
 
 
-### F321 (Fixed — Unreleased) — an uppercase source extension gets complexity but no imports
+### F321 (Fixed — v0.29.0) — an uppercase source extension gets complexity but no imports
 
 `Tier1Language::from_path` lowercases before matching
 (`ext.to_ascii_lowercase()`); `ImportLanguage::from_path` matches the raw
@@ -2571,7 +2571,7 @@ do not.
     hold correct-but-incomplete `clones`/`imports` tables for repositories
     carrying such files.
 
-### F322 (Fixed — Unreleased) — three MCP tools scored with default smell weights regardless of the server's `--defect-calibration`
+### F322 (Fixed — v0.29.0) — three MCP tools scored with default smell weights regardless of the server's `--defect-calibration`
 
 `codelore mcp` resolves the defect-calibration artifact once at startup and
 stores it on `CodeLoreServer`, and the tools whose contracts promise
@@ -2605,7 +2605,7 @@ Found by an MCP options audit, which also surfaced the sibling gap recorded
 as F323.
 
 
-### F323 (Fixed — Unreleased) — MCP has no corpus-lens calibration surface at all
+### F323 (Fixed — v0.29.0) — MCP has no corpus-lens calibration surface at all
 
 `CodeLoreServer` carries `defect_calibration` but no `calibration` field, and
 no MCP flag exists to supply one: every MCP tool result that consults corpus
@@ -2625,7 +2625,7 @@ divergence on every percentile-annotated surface.
     two-server lens-divergence test and a malformed-artifact startup
     rejection test.
 
-### F324 (Fixed — Unreleased) — two at-rev scans still paid the cold per-blob path
+### F324 (Fixed — v0.29.0) — two at-rev scans still paid the cold per-blob path
 
 `ingest_complexity_at_rev` kept `map_init(|| ())` + per-file `read_blob_at`
 (per-call rev resolution + root-tree decode, cold cache) while its sibling
@@ -2638,7 +2638,7 @@ in two loops. All three sites now hoist a warm reader; byte-identical by the
 reader's own equivalence test.
 
 
-### F325 (Fixed — Unreleased) — delivery-friction aggregated raw paths
+### F325 (Fixed — v0.29.0) — delivery-friction aggregated raw paths
 
 The one path-aggregating analysis in its cohort with no lineage opt-in: its
 complexity axis routed through `grouped_complexity::source_table`, its churn
@@ -2648,7 +2648,7 @@ WIP history at the rename point. Now `materialize_if_needed` +
 files carry renames.
 
 
-### F326 (Fixed — Unreleased) — the two backends disagreed on `is_shallow`
+### F326 (Fixed — v0.29.0) — the two backends disagreed on `is_shallow`
 
 `GixRepo` reads the grafts file; `GitCliRepo` silently inherited the trait's
 `false` default despite having a cheap check available
@@ -2659,7 +2659,7 @@ probe (via `file://`, since git ignores `--depth` on plain local paths) that
 is self-proving — the old default answers `false` and fails the equality.
 
 
-### F327 (Fixed — Unreleased) — twelve `tempfile` test modules broke the bare test invocation
+### F327 (Fixed — v0.29.0) — twelve `tempfile` test modules broke the bare test invocation
 
 `tempfile` is optional behind `test-support`, yet twelve unit-test modules
 used it under bare `#[cfg(test)]` — so `cargo test -p codelore-lib` failed to
@@ -2719,7 +2719,7 @@ render today) must re-assert the temp table, or refactoring-targets must
 materialise explicitly.
 
 
-### F332 (Fixed — Unreleased) — hotspots scores unsupported-language files as perfectly healthy
+### F332 (Fixed — v0.29.0) — hotspots scores unsupported-language files as perfectly healthy
 
 `joined` LEFT JOINs complexity and `COALESCE(fc.cognitive, 0)`, so a
 non-Tier-1 file enters the ranking with cognitive 0 → `pr_cx = 0`, score 0,
@@ -2760,7 +2760,7 @@ nobody ranked, and is invoked from the Parquet writer too, which bypasses
 `run_hotspots`.
 
 
-### F333 (Fixed — Unreleased) — files past the AST byte cap are invisible everywhere
+### F333 (Fixed — v0.29.0) — files past the AST byte cap are invisible everywhere
 
 Over-cap skips return `ScanOutcome::NotCounted` (excluded from the coverage
 denominator by design), log at `debug!` under a default `warn` filter, and
@@ -2833,7 +2833,7 @@ that cannot do the dangerous thing at all. Narrowing is untestable until
 the next Dependabot PR fires (labeling runs only under the live token),
 which is why this is recorded rather than fixed inline.
 
-### F337 (Fixed — Unreleased) — the lineage rename map was applied by name, with no time bound
+### F337 (Fixed — v0.29.0) — the lineage rename map was applied by name, with no time bound
 
 `materialize_path_lineage` date-guards chain construction against recycled
 filenames, but `materialize_changes_lineage` applied the finished map with
@@ -2850,7 +2850,7 @@ retirements, and excludes `copied` rows from seeding or extending chains.
 `CACHE_EPOCH` → `schema_v21`. The recycled-name regression test fails on
 the unfixed join; see `docs/reports/2026-09-02-deep-analysis-second-wave.md`.
 
-### F338 (Fixed — Unreleased) — the `--time-bucket` gate covered the named analysis but not the composite fan-out
+### F338 (Fixed — v0.29.0) — the `--time-bucket` gate covered the named analysis but not the composite fan-out
 
 `supports_time_bucket()` is enforced against `--analysis` only; `--format
 spa` / `step-summary` then run ~30 further analyses with the same
@@ -2865,7 +2865,7 @@ regression. Remaining bucketed-table hygiene (no build-once guard;
 lexicographic `MAX(change_type)` beside chronological `arg_max`) is
 recorded in the second-wave report and lands separately.
 
-### F339 (Fixed — Unreleased) — three analyses summed overlapping complexity rows into per-file SLOC
+### F339 (Fixed — v0.29.0) — three analyses summed overlapping complexity rows into per-file SLOC
 
 `complexity_metrics` rows overlap by construction (`collect_entities`
 pushes the root unit space, then recurses into every child).
@@ -2879,7 +2879,7 @@ seeded regression test fails with the exact doubled value on the summing
 form, and the intended output shift was measured before/after on this
 repository (delta recorded in the fix PR).
 
-### F340 (Fixed — Unreleased) — the gix diff cap sat ~512x below the git default it claimed to match
+### F340 (Fixed — v0.29.0) — the gix diff cap sat ~512x below the git default it claimed to match
 
 `MAX_DIFF_BLOB_BYTES` was 1 MiB under a comment claiming parity with
 git's `core.bigFileThreshold` default (512 MiB), so every text file past
@@ -2894,7 +2894,7 @@ an object-header size probe before their bytes load, and a differential
 test generates a multi-megabyte text file at test time pinning both
 backends to identical, nonzero per-file counts.
 
-### F341 (Fixed — Unreleased) — six chronology tiebreaks violated or ignored the rowid convention
+### F341 (Fixed — v0.29.0) — six chronology tiebreaks violated or ignored the rowid convention
 
 The ingest documents that gix walks reverse-chronologically (smaller
 `rowid` = newer commit) and defines the tiebreak idiom; six query sites
@@ -2911,7 +2911,7 @@ longer chronologically wrong at ties. The seeded regression uses two
 same-second commits whose SHAs sort AGAINST chronology, so the old
 tiebreaks fail it by construction.
 
-### F342 (Fixed — Unreleased) — knowledge signals counted dead and renamed-away paths as live
+### F342 (Fixed — v0.29.0) — knowledge signals counted dead and renamed-away paths as live
 
 Two liveness holes in the knowledge family. `knowledge_shares` excluded
 deletion *events* (`change_type != 'deleted'`) but never deleted *paths*,
@@ -2932,7 +2932,7 @@ population. The ingest-side `query_live_paths` shares the renamed-away
 shape but only wastes blob lookups (correctly bucketed `NotCounted`) and
 is deliberately unchanged.
 
-### F343 (Fixed — Unreleased) — `--group-file` silently zeroed the clone- and import-joining analyses
+### F343 (Fixed — v0.29.0) — `--group-file` silently zeroed the clone- and import-joining analyses
 
 Grouping rewrites `changes.path` and builds a grouped complexity rollup
 (whose own documentation explains why the rollup is necessary), but
@@ -2946,7 +2946,7 @@ test drives both analyses and fails with the gate stashed. A grouped
 `imports` rollup (group→group edges) remains a defensible future
 alternative; a grouped `clones` rollup is not meaningful.
 
-### F344 (Fixed — Unreleased) — historical liveness carried renamed-away paths as phantom nodes
+### F344 (Fixed — v0.29.0) — historical liveness carried renamed-away paths as phantom nodes
 
 `live_paths_at`'s date-anchored rule treated a renamed-away source as
 live forever (a rename writes no deletion row for its source), so every
@@ -2976,7 +2976,7 @@ epoch-bounded `path_lineage` now carries enough information to build
 one). Designed fix, not a two-line patch — recorded rather than
 half-fixed.
 
-### F346 (Fixed — Unreleased) — `changes_bucketed` rebuilt on every call and collapsed `change_type` lexicographically
+### F346 (Fixed — v0.29.0) — `changes_bucketed` rebuilt on every call and collapsed `change_type` lexicographically
 
 The bucketed table had no build-once guard (its sibling `changes_lineage`
 gained one under F184 for exactly this cost), so every bucket-aware
@@ -2993,7 +2993,7 @@ chronological order exists. Seeded tests pin the modify-then-delete
 collapse and the guard's same-key/different-key behavior via a sentinel
 row; both fail on the unfixed shapes.
 
-### F347 (Fixed — Unreleased) — the SARIF error band was unreachable, and the rule metadata undersold the findings
+### F347 (Fixed — v0.29.0) — the SARIF error band was unreachable, and the rule metadata undersold the findings
 
 The hotspot `security-severity` proxy divided by 10 a health value the
 hotspots analysis bounds to [60, 100], capping severity at 4.0: the
@@ -3010,7 +3010,7 @@ severity channel for non-security rules). Remaining from the same
 research, deliberately not in this change: self-truncation above the
 5,000-results display cap with disclosure.
 
-### F348 (Fixed — Unreleased) — attestations never reached release assets, and the Action's checksum check failed open
+### F348 (Fixed — v0.29.0) — attestations never reached release assets, and the Action's checksum check failed open
 
 The signing pipeline was complete and correct — matrix-attested archives,
 enforced L3 permission split — but bundles went only to the GitHub
@@ -3029,7 +3029,7 @@ status — 404 (pre-manifest release) warns, everything else and a
 manifest lacking the archive's entry refuses to run an unverified
 binary. Runtime proof of the bundle wiring lands with the next `v*` tag.
 
-### F349 (Fixed — Unreleased) — an ambient key silently redirected the advisory layer, and repository text reached the prompt unfenced
+### F349 (Fixed — v0.29.0) — an ambient key silently redirected the advisory layer, and repository text reached the prompt unfenced
 
 `resolve()` selected the hosted Anthropic dialect whenever
 `ANTHROPIC_API_KEY` was present with no explicit provider — a credential
@@ -3051,7 +3051,7 @@ stamp was never forgeable — numeric ground truth is collected from typed
 values before rendering — and that property is now pinned by a contract
 test rather than being an unstated implementation accident.
 
-### F350 (Fixed — Unreleased) — a drifted direct arrow dependency made every provenance stamp name the wrong generation
+### F350 (Fixed — v0.29.0) — a drifted direct arrow dependency made every provenance stamp name the wrong generation
 
 A direct `arrow` dependency sat a major ahead of the one `duckdb` pins,
 putting two arrow generations in the build graph (~330 lockfile lines of
@@ -3070,7 +3070,7 @@ naming the versions, with a `should_panic` matcher self-test — probed on
 a synthetic string, because cargo regenerates the real lockfile before
 tests read it and silently scrubs an appended fake entry.
 
-### F351 (Fixed — Unreleased) — `--output -` created a literal file named `-`, and diff's report write was not atomic
+### F351 (Fixed — v0.29.0) — `--output -` created a literal file named `-`, and diff's report write was not atomic
 
 No `-`-as-stdout handling existed anywhere in the CLI, while the
 README's flagship CI recipe piped `codelore diff … --output - >>
@@ -3085,7 +3085,7 @@ front. Routing `diff` through the shared output helper also replaced
 its raw truncate-on-create with atomic publication, so a failing run no
 longer destroys the previous good report.
 
-### F352 (Fixed — Unreleased) — exit codes drifted from the documented contract on three surfaces
+### F352 (Fixed — v0.29.0) — exit codes drifted from the documented contract on three surfaces
 
 Every `codelore diff` failure exited 1 — a typo'd rev range, a missing
 git binary, and a real gate violation were indistinguishable to CI,
@@ -3104,7 +3104,7 @@ Three contract tests pin the table, probed one filter at a time —
 `cargo test` silently errors on multiple positional filters, which made
 an earlier probe read as vacuously green.
 
-### F353 (Fixed — Unreleased) — text-mode verdicts split across stdout and stderr, against the documented contract
+### F353 (Fixed — v0.29.0) — text-mode verdicts split across stdout and stderr, against the documented contract
 
 `check`/`gate` printed PASS and WARNING lines (and the shallow-checkout
 notice) to stdout in text mode while FAIL went to stderr — `codelore
@@ -3117,7 +3117,7 @@ and SARIF (using a trivially-passing `max_dependency_cycles` gate —
 `code_health_min` degrades to FAIL on a rowless scratch repo, a fixture
 behavior worth knowing).
 
-### F354 (Fixed — Unreleased) — the MCP server half-validated its startup and hard-coded its cache root
+### F354 (Fixed — v0.29.0) — the MCP server half-validated its startup and hard-coded its cache root
 
 A typo'd repo path in a client config produced a healthy-looking server
 that failed on every tool call — while both calibration artifacts were
@@ -3134,7 +3134,7 @@ invalidate the memo of a tool that does not read them. Startup refusal
 and cache-dir placement are both test-pinned; the startup probe removed
 the validation block and watched the test fail.
 
-### F355 (Fixed — Unreleased) — `--calibration` missing on `gate` and `explain` while their MCP twins carried it
+### F355 (Fixed — v0.29.0) — `--calibration` missing on `gate` and `explain` while their MCP twins carried it
 
 F323 fixed the MCP-missing direction of the calibration asymmetry and
 left the CLI-missing one open: `gate_changes` and `explain_file` thread
@@ -3151,7 +3151,7 @@ identical outputs — F323's exact silent-ignore shape. `diff` is
 deliberately untouched: it has no calibration-consuming MCP twin
 (`delta_health` is artifact-blind by design).
 
-### F356 (Fixed — Unreleased) — dashboard: unreadable circle-pack lenses, boot-loop blank page, and an unclosable drawer
+### F356 (Fixed — v0.29.0) — dashboard: unreadable circle-pack lenses, boot-loop blank page, and an unclosable drawer
 
 Four SPA defects in one batch, each verified in a real browser. The
 circle-pack's metric literal omitted `ai_pct`, `mi`, and `mi_rank`, so
@@ -3202,7 +3202,7 @@ the analyze/check emitters until the two share one severity mapping.
 Surfaced by the 2026-09-02 docs-currency audit.
 
 **Fixed as F364.** Recorded separately because the fix was written before this entry was re-read; the status here was left stale, which is the drift a ledger exists to prevent — the severity proxy and its band ladder are now shared with the non-diff emitter.
-### F359 (Fixed — Unreleased) — three silent-pass holes closed, and the new cross-backend gate caught a real oracle divergence
+### F359 (Fixed — v0.29.0) — three silent-pass holes closed, and the new cross-backend gate caught a real oracle divergence
 
 Three guard classes, one immediate payoff. (1) The spa-browser CI job
 now exports `CODELORE_REQUIRE_BROWSER` and every Chrome-skip site
@@ -3226,7 +3226,7 @@ message (`trim_end_matches` on the `%B` field) while `GixRepo`'s
 now keeps `%B` byte-exact, and the probe is the trim itself restored.
 Production walker untouched; no cache impact.
 
-### F360 (Fixed — Unreleased) — assorted hardening: two reachable panics, a self-defeating pruner, and a silent no-op lens
+### F360 (Fixed — v0.29.0) — assorted hardening: two reachable panics, a self-defeating pruner, and a silent no-op lens
 
 Four fixes from the verified-hardening list. (1) `format_history`
 byte-sliced the hand-editable ledger's `head_sha` at 12 bytes —
@@ -3254,7 +3254,7 @@ carry the language entry their real-world counterparts have. Probe:
 with the check removed, the rejection test's `expect_err` fails on
 `Ok`; the same test pins the pools-only acceptance each run.
 
-### F361 (Fixed — Unreleased) — the MCP startup guard's repo errors never reached the exit-code mapping
+### F361 (Fixed — v0.29.0) — the MCP startup guard's repo errors never reached the exit-code mapping
 
 The `codelore mcp` startup fail-fast raised both failures (repository
 open, HEAD resolution) through `anyhow::anyhow!("... {e} ...")`.
@@ -3283,7 +3283,7 @@ A sweep of every `anyhow!` interpolation in the CLI found only these two
 sites. The two remaining ones wrap `rmcp` transport failures, which carry
 no `CodeLoreError` to preserve, so their fallback to 1 is correct.
 
-### F362 (Fixed — Unreleased) — `--format step-summary --output -` wrote a file named `-`
+### F362 (Fixed — v0.29.0) — `--format step-summary --output -` wrote a file named `-`
 
 The dash gate in `analyze.rs` rejects `-` for `parquet | sqlite | spa`,
 formats that cannot stream at all. `step-summary` streams to stdout by
@@ -3308,7 +3308,7 @@ left in the working directory. No test previously exercised step-summary's
 output routing at all — the format's only prior appearance in the CLI suite
 was the time-bucket rejection.
 
-### F363 (Fixed — Unreleased) — the advisory layer's request timeout is a hardcoded constant with no operator override
+### F363 (Fixed — v0.29.0) — the advisory layer's request timeout is a hardcoded constant with no operator override
 
 `enrichment/client.rs::build_agent` gives the shared `ureq` agent a single
 `timeout_global` of `REQUEST_TIMEOUT_SECS`, a `pub const` fixed at 120,
@@ -3360,7 +3360,7 @@ Zero is refused rather than read as "no limit", which would abort every
 request instantly. Probe: making the parser ignore its argument fails the
 test with `left: 120, right: 600`.
 
-### F364 (Fixed — Unreleased) — PR-mode SARIF kept the pre-correction severity scale
+### F364 (Fixed — v0.29.0) — PR-mode SARIF kept the pre-correction severity scale
 
 `diff_output.rs` computed `((100 - cognitive_health) / 10).clamp(0, 10)`
 with a hardcoded `"level": "warning"`, while `output/sarif.rs` had moved to
@@ -3390,7 +3390,7 @@ itself under the broken divisor, which is how the drift survived. A stale
 comment in the SARIF test file still documenting the `/ 10` formula was
 corrected with it.
 
-### F365 (Fixed — Unreleased) — `--output -` reached the provenance sidecar as a path
+### F365 (Fixed — v0.29.0) — `--output -` reached the provenance sidecar as a path
 
 `analyze` filtered `-` at each output site: `emit_to_output_or_stdout`
 and, after F362, `run_step_summary_dispatch`. The provenance sidecar is
@@ -3420,7 +3420,7 @@ share the edges they must agree on (the doc already claimed they did);
 lists gained `CODELORE_LLM_TIMEOUT_SECS`, without which an ambient
 developer setting would have reached every spawned CLI in the LLM suites.
 
-### F366 (Fixed — Unreleased) — loop assertions that never ran, and the guard that could be walked around
+### F366 (Fixed — v0.29.0) — loop assertions that never ran, and the guard that could be walked around
 
 A `for row in &rows { assert!(...) }` is vacuous on an empty result: the
 test reports success without executing the check it exists to make.
@@ -3456,7 +3456,7 @@ prose that mentions the layer cannot trip it, and a self-test proves
 the matcher flags every import form while staying quiet on every prose
 form present in the tree.
 
-### F367 (Fixed — Unreleased) — `gate` and `check` exited 0 for a repository that does not exist
+### F367 (Fixed — v0.29.0) — `gate` and `check` exited 0 for a repository that does not exist
 
 The two commands a CI pipeline branches on reported PASS for a missing
 repository. `Thresholds::discover` (`quality_gates/config.rs`) resolves
@@ -3490,7 +3490,7 @@ and the first measurement was wrong (a shell redirect ordering bug
 reported 2 everywhere), caught only because the error text said
 "repository error" while the number said 2 and both could not be true.
 
-### F368 (Fixed — Unreleased) — the working-tree clone scan had no coverage accounting
+### F368 (Fixed — v0.29.0) — the working-tree clone scan had no coverage accounting
 
 `facts/ingest/coverage.rs` provides `ScanOutcome` / `ScanCoverage` and the
 HEAD-time clone pass (`clones_head.rs`) has used them since it was
@@ -3527,7 +3527,7 @@ list rather than from successful reads, so failed reads keep the
 denominator while losing edges, and a rev that scanned nothing renders as
 an improvement on the trend chart.
 
-### F369 (Fixed — Unreleased) — the at-rev scans behind the trend charts had no coverage accounting
+### F369 (Fixed — v0.29.0) — the at-rev scans behind the trend charts had no coverage accounting
 
 The follow-up F368 scoped. `resolve_imports_at_rev` had three bare
 `return out` paths — blob-read failure, over-cap, parse failure — with no
@@ -3561,7 +3561,7 @@ is reachable without a `Repo` test double, and the classification is
 asserted directly. Probe: reverting the failed-read arm fails the test
 with the message naming the improving-health consequence.
 
-### F370 (Fixed — Unreleased) — F367's guard left the unborn-HEAD case, and two ledger statuses were stale
+### F370 (Fixed — v0.29.0) — F367's guard left the unborn-HEAD case, and two ledger statuses were stale
 
 Two corrections, both found by the parallel session reviewing work I had
 already called done.
@@ -3599,7 +3599,7 @@ duplicate numbers — which is what had been run, and passed — cannot see a
 status that disagrees with the code. The remaining `Active` entries were
 audited against source in the same pass rather than assumed correct.
 
-### F371 (Fixed — Unreleased) — ten failing-command tests accepted any nonzero exit
+### F371 (Fixed — v0.29.0) — ten failing-command tests accepted any nonzero exit
 
 A bare `.assert().failure()` passes on ANY nonzero status. Under this
 workspace's `panic = "unwind"` a panic escaping `main` exits 101, and a
@@ -3631,7 +3631,7 @@ fails the test. The first attempt at that probe was itself vacuous —
 changed and the test passed — caught by checking the diff rather than
 the exit status.
 
-### F372 (Fixed — Unreleased) — the `hotspots` MCP tool names the wrong ranking key
+### F372 (Fixed — v0.29.0) — the `hotspots` MCP tool names the wrong ranking key
 
 The tool description in `mcp.rs` reads "Return the top hotspot files
 ranked by revision count as JSON." The rows come back from

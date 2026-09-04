@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-09-04
+
 ### Added
 
 - **`codelore mcp` accepts `--calibration`, so the corpus-percentile lens finally has an MCP surface.** Every MCP result that consults corpus percentiles read the embedded world artifact only, while the CLI accepted `--calibration` everywhere — a team with a custom corpus artifact got CLI/MCP divergence on every percentile-annotated surface. The new startup flag mirrors `--defect-calibration` end to end: fail-fast validation at server start (a malformed artifact is exit 4 before stdin is read; no repo-identity guard, since a corpus artifact is repo-agnostic by construction), threading into every lens-consuming tool, and the artifact's content identity folded into the memoized tools' keys so a regenerated corpus cannot serve stale annotations without moving HEAD. The tools whose analyses never consult the lens are deliberately untouched, matching the defect-calibration precedent. Two regression tests pin it: a ramp-to-a-million corpus must move `corpus_percentile` between two servers over the same repository, and a malformed artifact must be rejected at startup.
