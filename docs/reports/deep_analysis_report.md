@@ -2154,7 +2154,7 @@ no call site outside the crate, so those impls are dead as produced values.
     dispatch layer both of those sit inside. If the fork's divergence budget is
     opened for one, it should be opened for both in the same cut.
 
-### F313 (Active) — `tempfile` is declared twice in `codelore-cli`
+### F313 (Fixed — Unreleased) — `tempfile` is declared twice in `codelore-cli`
 
 `codelore-cli` declares `tempfile = "3"` in `[dependencies]` and again in
 `[dev-dependencies]`. Normal dependencies are already available to test and bench
@@ -2169,6 +2169,14 @@ it dropped `dirs`.
     was at 98% disk on a shared cargo target and could not meet that standard.
     Applying a weaker one, in a review of the range that set it, would be the
     wrong trade. Pre-existing; not introduced by the work that found it.
+
+*   **Resolution**: the `[dev-dependencies]` copy is removed. `tempfile` is a
+    genuine runtime dependency of this crate — four `src/` modules use it for
+    the throwaway worktree and corpus checkouts — and a `[dependencies]` entry
+    is already in scope for test targets, so the second declaration bought
+    nothing. Verified by building the crate's test targets explicitly rather
+    than by reasoning about Cargo's resolution rules: all three executables
+    link, and `Cargo.lock` is unchanged because the package was never dropped.
 
 ### F314 (Fixed — v0.29.0) — `unsafe_code = "forbid"` does not cover the crate the docs say it covers
 
@@ -3696,7 +3704,7 @@ statement examined was false. A check can be carried out correctly and
 still answer a question other than the one that mattered.
 
 
-### F373 (Active) — the code-maat parity test can pass with neither value read
+### F373 (Fixed — Unreleased) — the code-maat parity test can pass with neither value read
 
 `code_maat_parity_test`'s summary comparison reads both sides through
 `unwrap_or(-1)`, then compares the results:
@@ -3728,6 +3736,18 @@ cardinality floor (assert the parsed maps are non-empty) that catches
 the parser-broke case directly instead of through its consequence.
 
 Noted during a clean-state sweep, not while touching this file.
+
+*   **Resolution**: both halves of the finding are applied. A cardinality floor
+    asserts each parsed map is non-empty before anything derived from it is
+    trusted, which catches the shared-parser break directly rather than through
+    its consequence; and each lookup now panics naming the missing key instead
+    of defaulting to a shared sentinel, so an absent row can no longer match its
+    opposite number's absence. **Not runtime-probed**: the test is gated behind
+    both `#[ignore]` and a `CODE_MAAT_PATH` early return, so the assertions
+    cannot be exercised without a code-maat checkout. The guard reads the same
+    two maps the comparison reads, with no matcher indirection between them, so
+    the detachment failure mode recorded elsewhere in this ledger does not
+    apply — but the probe is owed the next time code-maat is available.
 
 ### F374 (Active) — a failed release publish cannot be re-run under its own fix
 

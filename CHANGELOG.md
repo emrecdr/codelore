@@ -4,6 +4,12 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The code-maat parity test could report parity while comparing nothing.** Its summary check read both sides through `unwrap_or(-1)` and compared the results, which is safe against a one-sided change but not against a shared one — and both sides are parsed by the same `parse_summary_csv`. If that parser stopped matching either tool's CSV shape (a header row its `skip(1)` no longer lines up with, an added column, a delimiter change), both maps would come back empty, both lookups would fall to the same sentinel, and `assert_eq!(-1, -1)` would pass. The test is gated behind `#[ignore]` and an env var, so it runs only when someone deliberately asks "are we still at parity?" — which is precisely when a false yes costs most. Each lookup now panics naming the key it could not find, so an absent row can no longer match its opposite number's absence, and a cardinality floor asserts both parsed maps are non-empty, catching a parser break directly rather than through its consequence.
+
+- **`codelore-cli` declared `tempfile` twice.** It is a genuine runtime dependency — four `src/` modules use it for the throwaway worktree and corpus checkouts — and a `[dependencies]` entry is already in scope for test targets, so the duplicate `[dev-dependencies]` line bought nothing and offered a second version constraint to drift out of step with the first. Removed; `Cargo.lock` is unchanged, since the package itself was never dropped.
+
 ## [0.29.1] - 2026-09-04
 
 ### Added

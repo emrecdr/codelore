@@ -154,6 +154,19 @@ fn summary_matches_code_maat_on_tiny_repo() {
     let cmaat_map = parse_summary_csv(&cmaat_csv);
     let codelore_map = parse_summary_csv(&codelore_csv);
 
+    // Both sides go through `parse_summary_csv`, so a parser break is a SHARED
+    // failure: every lookup below would miss, both sides would fall to the same
+    // sentinel, and the comparison would report parity having compared nothing.
+    // Assert the parse produced rows before trusting anything derived from it.
+    assert!(
+        !cmaat_map.is_empty() && !codelore_map.is_empty(),
+        "parse_summary_csv produced an empty map (code-maat {}, codelore {}) — \
+         the parser stopped matching one of the two CSV shapes, which would \
+         otherwise make every comparison below vacuously true",
+        cmaat_map.len(),
+        codelore_map.len()
+    );
+
     // Compare commit count + author count. The entity count deliberately
     // diverges: code-maat is file-level (2 entities for tiny_repo); codelore
     // is function-level (function-scope extraction, so tiny_repo
@@ -164,8 +177,15 @@ fn summary_matches_code_maat_on_tiny_repo() {
         ("number-of-authors", "authors"),
     ];
     for (cmaat_key, codelore_key) in pairs {
-        let cmaat_val = cmaat_map.get(cmaat_key).copied().unwrap_or(-1);
-        let codelore_val = codelore_map.get(codelore_key).copied().unwrap_or(-1);
+        // A missing key must fail as a missing key. Defaulting both sides to a
+        // shared sentinel lets an absent row match its opposite number's
+        // absence and pass.
+        let cmaat_val = cmaat_map.get(cmaat_key).copied().unwrap_or_else(|| {
+            panic!("code-maat summary has no `{cmaat_key}` row; parsed keys: {cmaat_map:?}")
+        });
+        let codelore_val = codelore_map.get(codelore_key).copied().unwrap_or_else(|| {
+            panic!("codelore summary has no `{codelore_key}` row; parsed keys: {codelore_map:?}")
+        });
         assert_eq!(
             codelore_val, cmaat_val,
             "summary value mismatch for {cmaat_key} / {codelore_key}: code-maat={cmaat_val} codelore={codelore_val}"
