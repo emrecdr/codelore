@@ -3631,7 +3631,7 @@ fails the test. The first attempt at that probe was itself vacuous —
 changed and the test passed — caught by checking the diff rather than
 the exit status.
 
-### F372 (Active) — the `hotspots` MCP tool names the wrong ranking key
+### F372 (Fixed — Unreleased) — the `hotspots` MCP tool names the wrong ranking key
 
 The tool description in `mcp.rs` reads "Return the top hotspot files
 ranked by revision count as JSON." The rows come back from
@@ -3663,6 +3663,37 @@ claims about what *other* tools return, and those deserve reading in the
 same pass. Noted while F332 was being validated; deliberately not fixed
 inline, so the ranking change and the description audit stay separable
 in the history.
+
+**Resolution**: the audit ran, and both adjacent claims this entry
+flagged turned out to be wrong as well — three false statements in one
+file, none pinned by a test, which is why all three drifted.
+
+- The ranking key is now named. `revisions` is called out as merely one
+  of the returned columns, because its presence in the payload is what
+  made the old sentence read as corroborated.
+- The `hotspot_anchored_max` skip claimed the gate "depends on the
+  calibration-corpus lens, which this tool does not carry". The tool
+  carries it: the server holds a calibration artifact for the
+  percentile lens, and `corpus_percentile_max` is evaluated here *with*
+  that lens. The true reason sat in the message's own parenthetical and
+  in the skip test's comment — this tool runs the plain, unanchored
+  hotspot scan, so the anchored score the gate compares against is
+  never populated. The message now says that, and says the lens is
+  available. The false clause was made stale by the change that gave
+  the server a calibration flag, and nothing failed when it went stale.
+- The `path not found` hint offered `repo_overview` "to list analyzed
+  files". That tool returns `{metric, value}` rows — `files` is a
+  count, not a listing — so a caller who already had a bad path was
+  sent toward a number. The hint now names only `hotspots`, with the
+  two limits that make it a partial list.
+
+A scope correction worth recording, because the first pass got it
+wrong. This entry originally concluded "isolated defect, not a class",
+on the strength of checking that the sibling *ordering* claims held —
+which they do. That was the wrong axis. The class is **cross-tool
+claims about what another tool returns**, and on that axis every
+statement examined was false. A check can be carried out correctly and
+still answer a question other than the one that mattered.
 
 
 The next sweep re-opens at **F373**.
