@@ -105,6 +105,29 @@ The benign/collision split inside the fallback column — 3 benign unit conversi
 
 **Limits of this leg.** One model, one repository, and a grounded rate that conflates model faithfulness with checker over-flagging (the 18-of-38 figure above traces tokens to sheet text; a full per-stamp separation requires the labelling pass the growth plan describes). The paired frontier-model leg is pending an endpoint; to preserve the paired design it must reuse the same subject commit and file list, both recorded in the data file's `run` block and `items`. This paragraph is the canonical statement of that requirement.
 
+**The prompt has changed since this leg ran.** The `run` block pins
+`prompt_version`, and the value it records is no longer the one the tool ships:
+the prompt has since been hardened to fence the fact sheet in explicit markers
+and to escape control characters in rendered values. The rates above therefore
+characterise the prompt as it stood at the subject commit, not the current one.
+The distinction is not hypothetical — prompt wording is exactly the kind of
+change that can move how a model emits numbers, which is why `PROMPT_VERSION`
+participates in the narrative cache key at all. Reproducing *this* leg is
+unaffected, because checking out the subject commit restores its prompt along
+with everything else; what this document does not have is a current-prompt
+rate, and no figure above should be read as one.
+
+**A current-prompt rate needs a new leg, not a re-run.** The record stores
+verdicts, not fact sheets, so replaying against today's build would regenerate
+the sheets from whatever the analyses now produce — and those have moved
+independently of the prompt, the hotspots section's ranks and scores among
+them. Prompt version and sheet content would advance together, confounding the
+one comparison such a leg exists to make. The design that isolates it is to
+apply the prompt change alone to the pinned subject tree, leaving the fact
+sheets byte-identical so `PROMPT_VERSION` is the only variable that moves. The
+local model makes that leg free of API cost, and every pin it needs is already
+recorded here.
+
 ## Relation to established practice
 
 The design choices above are the current (2026) consensus for evaluating groundedness checkers, not inventions:
