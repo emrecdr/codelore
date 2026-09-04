@@ -3729,5 +3729,58 @@ the parser-broke case directly instead of through its consequence.
 
 Noted during a clean-state sweep, not while touching this file.
 
+### F374 (Active) — a failed release publish cannot be re-run under its own fix
 
-The next sweep re-opens at **F374**.
+`container.yml` declares `workflow_dispatch:` with no inputs, and every
+job in it is gated on `github.ref_type == 'tag'`. Those two facts
+combine into a recoverability gap that only appears after a publish has
+already failed.
+
+A `workflow_dispatch` run uses the workflow file **at the dispatched
+ref**. So when a tagged publish fails for a reason that is fixed on
+`main` afterwards, neither dispatch target works:
+
+- from the **tag** — the jobs run, but under the workflow file as it
+  stood at that tag, which is the version that just failed. The fix on
+  `main` is invisible to it.
+- from a **branch** — `ref_type` is `branch`, so every job is skipped
+  and nothing publishes. Worse historically: before that gate existed a
+  branch dispatch *did* publish, because `type=sha` is the only tag rule
+  matching a non-tag ref, producing a real, pullable, attested image
+  from unreleased code. The gate is correct and must stay.
+
+The observed instance: the multi-arch build carried
+`timeout-minutes: 25` while finishing at ~24-25 minutes, and one
+release exceeded it on both architectures across two attempts, so that
+tag published no image. Raising the limit fixed every *future* release
+but could not fix that one — the tag permanently carries the old value.
+The only ways out are a coin-flip re-run against the stale limit, moving
+a released tag (which would invalidate the published sigstore
+attestations and `SHA256SUMS`), or cutting a new version whose sole
+purpose is to re-run the publish.
+
+The shape of a fix is a `ref` input consumed by the checkout and the
+tag-derivation steps, with the `ref_type` gate replaced by a check that
+the resolved ref *is* a release tag — so a dispatch names which tag to
+publish while the workflow file executing it stays current. That keeps
+the property the gate exists for (never publish from a non-tag ref)
+while removing the assumption that the workflow file and the ref must
+be the same version.
+
+This is release plumbing, so it wants the scrutiny `docs/RELEASING.md`
+changes get rather than an inline edit.
+
+`release.yml` was checked and carries the same gap: `workflow_dispatch:`
+with no inputs, and four publishing jobs gated on `github.ref_type ==
+'tag'`. One difference matters for the fix — there the branch dispatch
+is a *designed* dry run (build and attest, publish nothing), documented
+as such, so the gate is load-bearing in a way it is not in
+`container.yml`. A `ref` input must therefore not turn that dry run into
+a publish: the tag-ness check has to key off the resolved input, leaving
+an input-less dispatch a dry run exactly as today.
+
+Noted while recovering a publish that had already failed, not while
+touching this file.
+
+
+The next sweep re-opens at **F375**.
