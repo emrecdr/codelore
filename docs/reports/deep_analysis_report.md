@@ -3696,4 +3696,38 @@ statement examined was false. A check can be carried out correctly and
 still answer a question other than the one that mattered.
 
 
-The next sweep re-opens at **F373**.
+### F373 (Active) — the code-maat parity test can pass with neither value read
+
+`code_maat_parity_test`'s summary comparison reads both sides through
+`unwrap_or(-1)`, then compares the results:
+
+```rust
+let cmaat_val = cmaat_map.get(cmaat_key).copied().unwrap_or(-1);
+let codelore_val = codelore_map.get(codelore_key).copied().unwrap_or(-1);
+assert_eq!(codelore_val, cmaat_val, ...);
+```
+
+A one-sided change still fails correctly: rename CodeLore's `commits`
+metric and its side reads `-1` against a real code-maat number. The
+dangerous case is a *shared* failure, and there is a shared component —
+`parse_summary_csv` parses both inputs. If it stops finding keys (a
+header row that no longer matches its `skip(1)`, an added column, a
+delimiter change on either tool's output), both maps come back empty,
+both lookups fall to the sentinel, and `assert_eq!(-1, -1)` reports
+parity while having compared nothing.
+
+The test is `#[ignore]`d behind `CODE_MAAT_PATH`, so it runs only when
+someone deliberately runs it — which is when a false pass costs most,
+because it is being run precisely to answer "are we still at parity?"
+and it would answer yes.
+
+The fix is the shape this campaign has applied elsewhere: require the
+lookups to have succeeded before comparing, so an absent key fails
+rather than matching its opposite number's sentinel, and add the
+cardinality floor (assert the parsed maps are non-empty) that catches
+the parser-broke case directly instead of through its consequence.
+
+Noted during a clean-state sweep, not while touching this file.
+
+
+The next sweep re-opens at **F374**.
