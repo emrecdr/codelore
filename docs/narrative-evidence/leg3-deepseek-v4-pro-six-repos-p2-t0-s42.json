@@ -1,0 +1,4085 @@
+{
+ "readme": "Per-item record of the third model-study leg published in docs/narrative-evidence-v1.md (Third model study). It re-runs leg 2's corpus — the same six repositories and 204 files, the same model — under PROMPT_VERSION 2 and with temperature and seed transmitted, so leg 2 and this leg form the only genuinely paired comparison in the study: same files, same model, differing only in prompt version and sampling pins. Two variables moved together, which is stated in the doc rather than glossed; the leg's own determinism result is what limits the confound, since pinning is shown not to change run-pair agreement. PROVENANCE IS WEAKER THAN LEG 2's. That leg shipped a raw run log (ds4.ndjson) and every published figure was reconciled against it independently; this leg shipped no equivalent, so its numbers are reconciled only against this file. The record is internally consistent and structurally identical to leg 1's shape, but nothing outside it corroborates that the runs occurred as described. Treat it as contributed point-in-time evidence, not as a measurement this repository can reproduce. run holds the pins: model, endpoint, prompt version, temperature 0, seed 42, and this leg's own per-repo subject commits. items holds one record per file: the verdict of each of the 3 generations, the uncited tokens the run-1 stamp names, and narrative_sha16. Two caveats carry over from leg 2. The stamp previews at most 5 tokens and items with more carry a trailing …+N marker, so token aggregates recover the total as named + N and must not use the stamp-named count alone. And --llm-refresh still rewrites one cache key per generation, so only the third narrative survives on disk: sha16 is present for generation 3 and null elsewhere, which means byte-identity across generations cannot be checked here and any token-level determinism claim is not verifiable from this record. Verdicts are complete for all three generations, so the verdict-level flip and agreement figures are. The doc recomputes all aggregates from items; this file stores no derived statistics.",
+ "run": {
+  "date": "2026-09-05",
+  "subject_commits": {
+   "ripgrep": "3fce3b5",
+   "typer": "99eb220",
+   "bat": "0acf9417",
+   "hono": "e2740d5a",
+   "gson": "b3f4ca20",
+   "express": "023767fe"
+  },
+  "model": "deepseek-v4-pro",
+  "base_model": "guodong/deepseek-v4-pro",
+  "temperature": 0,
+  "seed": 42,
+  "runtime": "codelore 0.29.0 binary at upstream 2067d3f (incl. #349 prompt fencing, PROMPT_VERSION 2; CODELORE_LLM_TIMEOUT_SECS env supported), driven by runners/run-eval.cjs",
+  "host": "Windows 11 / x86_64-pc-windows-msvc",
+  "endpoint": "http://127.0.0.1:20128/v1 — local OmniRoute gateway (OpenAI-compatible); api key rotated per generation to bypass gateway semantic cache",
+  "prompt_version": 2,
+  "files": 204,
+  "generations_per_file": 3
+ },
+ "items": [
+  {
+   "path": "ripgrep/crates/ignore/src/dir.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "548",
+    "685",
+    "340",
+    "467",
+    "192",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2642994749ea281c"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/ignore/src/walk.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1190",
+    "1261",
+    "1452",
+    "1535",
+    "601",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "11304ed6691d565a"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/globset/src/glob.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "692",
+    "763",
+    "962",
+    "1052",
+    "692",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8a4b10cbfa036ccc"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/core/main.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "78",
+    "107",
+    "113",
+    "157",
+    "44",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "42b810586a21df06"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/core/flags/hiargs.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "114",
+    "333",
+    "472",
+    "525",
+    "572",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2cd52d5084615619"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/printer/src/standard.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "grounded"
+   ],
+   "uncited_run1": [
+    "698",
+    "735",
+    "766",
+    "791",
+    "515",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "d86aae5ad97bb480"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/searcher/src/searcher/core.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "430",
+    "473",
+    "40",
+    "73",
+    "430",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "31adf0b1c75ced18"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/ignore/src/gitignore.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "460",
+    "541",
+    "583",
+    "602",
+    "606",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "1cc9aa6bb1c97a6a"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/core/flags/defs.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "2993",
+    "3103",
+    "2994",
+    "3101",
+    "3569",
+    "…+15"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "11d24d67d70bc13b"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/searcher/src/searcher/glue.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "38",
+    "51",
+    "133",
+    "138",
+    "724",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b618cb43f6876438"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/printer/src/hyperlink/mod.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "535",
+    "559",
+    "481",
+    "505",
+    "205",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "6bbe5699fa7d2f71"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/regex/src/config.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "166",
+    "229",
+    "306",
+    "312",
+    "242",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "1317593220cc8de5"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/ignore/src/types.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "263",
+    "302",
+    "324",
+    "366",
+    "227",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "014e7c47e5e692bb"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/regex/src/literal.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "169",
+    "189",
+    "54",
+    "92",
+    "106",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "a55ede359fdbc250"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/globset/src/lib.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "461",
+    "553",
+    "945",
+    "960",
+    "217",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "1e414a1837d00935"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/searcher/src/line_buffer.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "406",
+    "472",
+    "527",
+    "552",
+    "406",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2a89fb51d1775927"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/printer/src/summary.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "592",
+    "602",
+    "604",
+    "609"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "01939097a1e8a7a9"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/cli/src/decompress.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "448",
+    "488",
+    "383",
+    "388",
+    "221",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4776f73c6c4a2340"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/searcher/src/searcher/mod.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "975",
+    "1028",
+    "678",
+    "714",
+    "975",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "78929700e8a7c416"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/regex/src/non_matching.rs",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "35667e6c12959982"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/searcher/src/testutil.rs",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "3f44163620dd199b"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/matcher/src/lib.rs",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "c0bd588a7a6b1e38"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/pcre2/src/matcher.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "45",
+    "85",
+    "422",
+    "432",
+    "37",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "6497e205b474d91b"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/core/search.rs",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "380",
+    "412",
+    "416",
+    "449",
+    "329",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "e8b666323fd1cbab"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/printer/src/util.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "51",
+    "109",
+    "473",
+    "530",
+    "51",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b1d6ab086a87912e"
+   ]
+  },
+  {
+   "path": "ripgrep/build.rs",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [
+    "32",
+    "36",
+    "61",
+    "32",
+    "36",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "81857af13128ed12"
+   ]
+  },
+  {
+   "path": "ripgrep/tests/util.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "73",
+    "87",
+    "282",
+    "289",
+    "167",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "318f5340fbf2125d"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/matcher/src/interpolate.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "97",
+    "134",
+    "195",
+    "199",
+    "97",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8a1ecfce3c79e4f8"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/regex/src/strip.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "55",
+    "119",
+    "39",
+    "49",
+    "128",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9c0dd656b2ccbc66"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/core/flags/config.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "16",
+    "53",
+    "90",
+    "106",
+    "116",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "ef7d1e6c04ed2eff"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/grep/examples/simplegrep.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "32",
+    "69",
+    "19",
+    "21",
+    "30",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "59720d84bb17524c"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/ignore/examples/walk.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "50",
+    "28",
+    "36",
+    "30",
+    "35",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3abb740e2c74e152"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/printer/src/color.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "314",
+    "348",
+    "272",
+    "308",
+    "49",
+    "…+19"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5fad188ffeb80bca"
+   ]
+  },
+  {
+   "path": "ripgrep/crates/searcher/src/lines.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "111",
+    "113",
+    "111",
+    "113"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2c2de3d5f86fe520"
+   ]
+  },
+  {
+   "path": "typer/typer/rich_utils.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "355",
+    "476",
+    "555",
+    "694",
+    "479",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "03b03705febe1eeb"
+   ]
+  },
+  {
+   "path": "typer/typer/main.py",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "135",
+    "547",
+    "549",
+    "751",
+    "915",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2c4dbeca430fe205"
+   ]
+  },
+  {
+   "path": "typer/typer/cli.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "186",
+    "267",
+    "186",
+    "267",
+    "279",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3f741f63d9e2f434"
+   ]
+  },
+  {
+   "path": "typer/scripts/docs.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "124",
+    "181",
+    "39",
+    "310",
+    "195",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "87399b12f9cfbf4c"
+   ]
+  },
+  {
+   "path": "typer/typer/core.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "158",
+    "242",
+    "327",
+    "381",
+    "440",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "794339e3aa0ff2ac"
+   ]
+  },
+  {
+   "path": "typer/typer/utils.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "107",
+    "186",
+    "19",
+    "94",
+    "104",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "0a5ca0bbe1a64ec6"
+   ]
+  },
+  {
+   "path": "typer/typer/models.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "281",
+    "385",
+    "389",
+    "513",
+    "517",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "bcffd056405f08b2"
+   ]
+  },
+  {
+   "path": "typer/typer/testing.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "20",
+    "26",
+    "20",
+    "26"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b79a209c543cefaf"
+   ]
+  },
+  {
+   "path": "typer/typer/_completion_shared.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "204",
+    "238",
+    "161",
+    "201",
+    "80",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "ea5b79c7b7693eac"
+   ]
+  },
+  {
+   "path": "typer/typer/_completion_classes.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "64",
+    "91",
+    "184",
+    "199",
+    "19",
+    "…+17"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "ca18c822edf10bcf"
+   ]
+  },
+  {
+   "path": "typer/typer/completion.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "42",
+    "60",
+    "105",
+    "145",
+    "27",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "289e04387dd79d7c"
+   ]
+  },
+  {
+   "path": "typer/tests/test_rich_utils.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "60",
+    "86",
+    "89",
+    "104",
+    "109",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "d545c6b1ce01bcad"
+   ]
+  },
+  {
+   "path": "typer/tests/test_others.py",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "56ae117b9c4dacd3"
+   ]
+  },
+  {
+   "path": "typer/typer/_typing.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "63",
+    "73",
+    "44",
+    "48",
+    "63",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "50b1b886addc4533"
+   ]
+  },
+  {
+   "path": "typer/tests/test_type_conversion.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "33",
+    "36",
+    "52",
+    "40",
+    "44",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "488e85893ac18c11"
+   ]
+  },
+  {
+   "path": "typer/tests/test_completion/test_completion_install.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "33",
+    "69",
+    "73",
+    "110",
+    "114",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "04b2166d2fcc0763"
+   ]
+  },
+  {
+   "path": "typer/docs_src/options/help/tutorial002_py310.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "25",
+    "25"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "120b3d845712505c"
+   ]
+  },
+  {
+   "path": "typer/tests/test_rich_markup_mode.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "256",
+    "281",
+    "447",
+    "139",
+    "164",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "bf8c8c536c5eaa71"
+   ]
+  },
+  {
+   "path": "typer/docs_src/options_autocompletion/tutorial003_py310.py",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "32910aa78153e517"
+   ]
+  },
+  {
+   "path": "typer/docs_src/options_autocompletion/tutorial004_py310.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "16",
+    "23",
+    "28",
+    "16",
+    "23",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "501e94f906bbac1e"
+   ]
+  },
+  {
+   "path": "typer/docs_src/options_autocompletion/tutorial005_py310.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "13",
+    "20",
+    "25",
+    "13",
+    "20",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "35205d69703e0149"
+   ]
+  },
+  {
+   "path": "typer/docs_src/commands/help/tutorial001_py310.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "15",
+    "31",
+    "35",
+    "50",
+    "15",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b85aafa3d34ecf94"
+   ]
+  },
+  {
+   "path": "typer/docs_src/options/help/tutorial001_py310.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "20",
+    "20",
+    "20"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9e5c52226b1938e5"
+   ]
+  },
+  {
+   "path": "typer/docs_src/commands/options/tutorial001_py310.py",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "ecee88808fc50694"
+   ]
+  },
+  {
+   "path": "typer/tests/test_completion/test_completion.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "53",
+    "53"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "61d75ae0c333dfef"
+   ]
+  },
+  {
+   "path": "typer/typer/params.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "145",
+    "1002",
+    "1117",
+    "1833",
+    "77",
+    "…+13"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "55e5490a2e8b2050"
+   ]
+  },
+  {
+   "path": "typer/tests/test_tutorial/test_parameter_types/test_path/test_tutorial002.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "26",
+    "34",
+    "20",
+    "23",
+    "37",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5a9ed44c60ab447f"
+   ]
+  },
+  {
+   "path": "typer/tests/test_annotated.py",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "9cad3db68e6026b3"
+   ]
+  },
+  {
+   "path": "typer/tests/test_tutorial/test_parameter_types/test_path/test_tutorial001.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "20",
+    "23",
+    "20",
+    "23"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "df1c62678ff2f1cd"
+   ]
+  },
+  {
+   "path": "typer/tests/test_tutorial/test_parameter_types/test_file/test_tutorial004.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "26",
+    "36",
+    "20",
+    "23",
+    "39",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "83973292dddfe102"
+   ]
+  },
+  {
+   "path": "typer/tests/test_tutorial/test_subcommands/test_tutorial003.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "159",
+    "178",
+    "159",
+    "178",
+    "88",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b56575b2445f50f3"
+   ]
+  },
+  {
+   "path": "typer/tests/utils.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "40",
+    "52",
+    "36",
+    "37"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4f0e0ed29b01eca9"
+   ]
+  },
+  {
+   "path": "typer/docs_src/arguments/optional/tutorial002_py310.py",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "a73de432ff69fb27"
+   ]
+  },
+  {
+   "path": "typer/tests/test_tutorial/test_arguments/test_default/test_tutorial002.py",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "25",
+    "30",
+    "33",
+    "38",
+    "25",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "cfe37ac95861f455"
+   ]
+  },
+  {
+   "path": "bat/src/bin/bat/app.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "312",
+    "581",
+    "69",
+    "171",
+    "241",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "33f9ca53b0925a53"
+   ]
+  },
+  {
+   "path": "bat/src/bin/bat/main.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "100",
+    "196",
+    "202",
+    "263",
+    "100",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9b49c3b7d12902dc"
+   ]
+  },
+  {
+   "path": "bat/src/preprocessor.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "59",
+    "137",
+    "43",
+    "176",
+    "222",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "867c4542a8f5a76c"
+   ]
+  },
+  {
+   "path": "bat/src/assets.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "216",
+    "278",
+    "151",
+    "192",
+    "195",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f01f8920e8f08704"
+   ]
+  },
+  {
+   "path": "bat/src/lessopen.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "29845794",
+    "124",
+    "246",
+    "82",
+    "122",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "58d7309a73f6185a"
+   ]
+  },
+  {
+   "path": "bat/src/line_range.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "40",
+    "131",
+    "136",
+    "191",
+    "40",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "a5edeed241b7a058"
+   ]
+  },
+  {
+   "path": "bat/src/input.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "190",
+    "249",
+    "190",
+    "249"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "df482ba12be1eaf1"
+   ]
+  },
+  {
+   "path": "bat/src/diff.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "85",
+    "20",
+    "41",
+    "81",
+    "116",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "88f1ea66b3ee256c"
+   ]
+  },
+  {
+   "path": "bat/src/terminal.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "47",
+    "49",
+    "82",
+    "80",
+    "80",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3be92c7d90ec3b38"
+   ]
+  },
+  {
+   "path": "bat/src/pretty_printer.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "298",
+    "345",
+    "49",
+    "65",
+    "298",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "e57b3dbf88ad3973"
+   ]
+  },
+  {
+   "path": "bat/build/syntax_mapping.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "28627918",
+    "158",
+    "237",
+    "106",
+    "155",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "c9057984634586e5"
+   ]
+  },
+  {
+   "path": "bat/src/bin/bat/config.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "32",
+    "102",
+    "104",
+    "124",
+    "32",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9d777e5a90c906d6"
+   ]
+  },
+  {
+   "path": "bat/src/vscreen.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "521",
+    "569",
+    "449",
+    "518",
+    "161",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8f0faa0cf71a11d5"
+   ]
+  },
+  {
+   "path": "bat/src/pager.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "100",
+    "138",
+    "43",
+    "69",
+    "89",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "91115306d4c34345"
+   ]
+  },
+  {
+   "path": "bat/src/bin/bat/clap_app.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "816",
+    "816"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "cf6ddd35ef846b13"
+   ]
+  },
+  {
+   "path": "bat/src/syntax_mapping.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "28627918",
+    "162",
+    "182",
+    "91",
+    "98",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "1f356aee423c6f5f"
+   ]
+  },
+  {
+   "path": "bat/src/assets/build_assets.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "36",
+    "100",
+    "138",
+    "140",
+    "156",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9fea540ce8b761bc"
+   ]
+  },
+  {
+   "path": "bat/src/style.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "25",
+    "62",
+    "68",
+    "85",
+    "205",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "0f261aa9c61d47f0"
+   ]
+  },
+  {
+   "path": "bat/src/bin/bat/assets.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "44",
+    "46",
+    "57",
+    "16",
+    "44",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "dce5f151330ceb19"
+   ]
+  },
+  {
+   "path": "bat/src/assets/assets_metadata.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "52",
+    "65",
+    "81",
+    "28",
+    "33",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "223edad3af2c3987"
+   ]
+  },
+  {
+   "path": "bat/src/bin/bat/directories.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "15",
+    "39",
+    "15",
+    "39"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "679066045fae860c"
+   ]
+  },
+  {
+   "path": "bat/src/theme.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "287",
+    "304",
+    "110",
+    "120",
+    "87",
+    "…+23"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "37bb8d362287bf0a"
+   ]
+  },
+  {
+   "path": "bat/build/application.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "84",
+    "31",
+    "31",
+    "28627918",
+    "84"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "6485e9aa18992d28"
+   ]
+  },
+  {
+   "path": "bat/src/less.rs",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "23",
+    "31",
+    "21",
+    "21",
+    "23",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "566ae4dcae9399fe"
+   ]
+  },
+  {
+   "path": "bat/src/error.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "56",
+    "80"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3f7223e3d3b7719c"
+   ]
+  },
+  {
+   "path": "bat/src/assets/build_assets/acknowledgements.rs",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "dbbeb09824ccaabd"
+   ]
+  },
+  {
+   "path": "bat/examples/advanced.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "18",
+    "18"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "c9b24c00d7152120"
+   ]
+  },
+  {
+   "path": "bat/examples/cat.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "13",
+    "13"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5d598252838b5df0"
+   ]
+  },
+  {
+   "path": "bat/examples/simple.rs",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "fcce8c9e69536a9c"
+   ]
+  },
+  {
+   "path": "bat/src/syntax_mapping/builtin.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "28627918",
+    "56",
+    "58",
+    "67",
+    "82",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4ddfd28551762610"
+   ]
+  },
+  {
+   "path": "bat/src/lib.rs",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "3a975b31220af870"
+   ]
+  },
+  {
+   "path": "bat/src/wrapping.rs",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "ebde05e7ef01debe"
+   ]
+  },
+  {
+   "path": "bat/tests/integration_tests.rs",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "3a71a22e15303380"
+   ]
+  },
+  {
+   "path": "bat/tests/tester/mod.rs",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "64",
+    "102",
+    "51",
+    "55",
+    "61"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "d8782d8d51392685"
+   ]
+  },
+  {
+   "path": "hono/src/utils/jwt/jwt.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "96",
+    "188",
+    "197",
+    "262",
+    "164",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "7765feef3168b7d0"
+   ]
+  },
+  {
+   "path": "hono/src/context.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "608",
+    "656",
+    "352",
+    "361",
+    "608",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5bc4705616850e01"
+   ]
+  },
+  {
+   "path": "hono/src/helper/ssg/ssg.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "369",
+    "471",
+    "205",
+    "302",
+    "232",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "bac219a538e6a3ae"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/dom/render.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "499",
+    "667",
+    "164",
+    "274",
+    "389",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f60f630526c546ba"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/base.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "209",
+    "281",
+    "135",
+    "160",
+    "285",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "e65116970ee14874"
+   ]
+  },
+  {
+   "path": "hono/src/middleware/jwt/jwt.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "78",
+    "162",
+    "54",
+    "163",
+    "165",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "94c18d65a48d1dd6"
+   ]
+  },
+  {
+   "path": "hono/src/adapter/aws-lambda/handler.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "138",
+    "193",
+    "147",
+    "191",
+    "239",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "26bddf0a1f50bdf4"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/dom/intrinsic-element/components.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "58",
+    "256",
+    "58",
+    "256",
+    "105",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "635ccaa4dcbd1b73"
+   ]
+  },
+  {
+   "path": "hono/src/utils/url.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "51",
+    "78",
+    "184",
+    "219",
+    "106",
+    "…+15"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2a127fc3eb185132"
+   ]
+  },
+  {
+   "path": "hono/src/middleware/jwk/jwk.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "58893646",
+    "176",
+    "196",
+    "78",
+    "173",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5d4207bb3f4fe9d3"
+   ]
+  },
+  {
+   "path": "hono/src/client/client.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "58",
+    "147",
+    "155",
+    "249",
+    "151",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "1c28b6e09155c44b"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/intrinsic-element/components.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "28",
+    "91",
+    "91",
+    "96",
+    "119",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "66d426b6303cbb69"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/components.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "61",
+    "261",
+    "77",
+    "93",
+    "96",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "134079b670636e0e"
+   ]
+  },
+  {
+   "path": "hono/src/helper/html/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "57",
+    "57"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "c5a43861b6c301ad"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/hooks/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "199",
+    "241",
+    "182",
+    "243",
+    "199",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "722aa7555b2b972c"
+   ]
+  },
+  {
+   "path": "hono/src/types.ts",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "10d91645921194c4"
+   ]
+  },
+  {
+   "path": "hono/src/helper/css/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "89",
+    "122",
+    "124",
+    "147",
+    "72",
+    "…+15"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "23bde75be22c73fd"
+   ]
+  },
+  {
+   "path": "hono/src/router/reg-exp-router/router.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "68",
+    "127",
+    "131",
+    "143",
+    "26",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4e8e6c1e48e26da8"
+   ]
+  },
+  {
+   "path": "hono/src/router/trie-router/node.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "86",
+    "216",
+    "64",
+    "84",
+    "86",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9e17e4e8761e54f9"
+   ]
+  },
+  {
+   "path": "hono/src/middleware/bearer-auth/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "104",
+    "221",
+    "156",
+    "220",
+    "104",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4bb36656b9fe8d71"
+   ]
+  },
+  {
+   "path": "hono/build/build.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "45",
+    "70",
+    "47",
+    "69",
+    "94",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "37f6e54f54402dcd"
+   ]
+  },
+  {
+   "path": "hono/src/helper/accepts/accepts.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "21",
+    "34",
+    "46",
+    "62",
+    "36",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "462e300b2ff669f6"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/jsx-runtime.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "16",
+    "49",
+    "27",
+    "31",
+    "51",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5f8724eaa4829dd3"
+   ]
+  },
+  {
+   "path": "hono/src/helper/factory/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "359",
+    "359"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "06a3f61b409ee661"
+   ]
+  },
+  {
+   "path": "hono/src/jsx/dom/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "41",
+    "58",
+    "60",
+    "74",
+    "76",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "0c582ac2eafee330"
+   ]
+  },
+  {
+   "path": "hono/src/middleware/logger/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "28",
+    "46",
+    "50",
+    "63",
+    "23",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "57aa38afaae90cbc"
+   ]
+  },
+  {
+   "path": "hono/src/helper/dev/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "57",
+    "73",
+    "39",
+    "74",
+    "57",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9f633ed07b307a20"
+   ]
+  },
+  {
+   "path": "hono/src/adapter/deno/serve-static.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "41",
+    "27",
+    "34",
+    "27",
+    "34"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3895f534dd09c730"
+   ]
+  },
+  {
+   "path": "hono/perf-measures/type-check/scripts/process-results.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "0818",
+    "49",
+    "14",
+    "19",
+    "49",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "874bd390a276f037"
+   ]
+  },
+  {
+   "path": "hono/src/utils/stream.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "21",
+    "46",
+    "48",
+    "58",
+    "69",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "a1710cf6264d1a05"
+   ]
+  },
+  {
+   "path": "hono/src/adapter/cloudflare-workers/websocket.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "53",
+    "53"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "05f52f900f9ebc0d"
+   ]
+  },
+  {
+   "path": "hono/src/router/smart-router/router.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "21",
+    "61",
+    "13",
+    "19",
+    "63",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "22acca2061b6e58a"
+   ]
+  },
+  {
+   "path": "hono/src/helper/websocket/index.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "140",
+    "114",
+    "139",
+    "131",
+    "137",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "41f2b1e730740752"
+   ]
+  },
+  {
+   "path": "hono/src/adapter/bun/conninfo.ts",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "43",
+    "79000684",
+    "43"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "6bdd4abcef477e15"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/stream/JsonReader.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "589",
+    "755",
+    "814",
+    "924",
+    "757",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "7e3ee73b49a14273"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/Gson.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "123",
+    "340",
+    "399",
+    "247",
+    "278",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "552a274458550b8d"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "94",
+    "133",
+    "94",
+    "133",
+    "735",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "7f234e22ae34d266"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/GsonTypes.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "171",
+    "226",
+    "104",
+    "126",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f2b7d7a3d0582042"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "181",
+    "289",
+    "166",
+    "85",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "54514998a012270f"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/GsonBuilder.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "123",
+    "227",
+    "232",
+    "166",
+    "187",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9a2372cd12630c0f"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/JsonParser.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "123",
+    "107",
+    "120",
+    "136",
+    "150",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "57e77ae67b064eee"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/stream/JsonWriter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "498",
+    "510",
+    "428",
+    "432",
+    "…+16"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "173482b205f5e2a5"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/util/ISO8601Utils.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "147",
+    "309",
+    "1234",
+    "147",
+    "309",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5730edcc0eb7d906"
+   ]
+  },
+  {
+   "path": "gson/proto/src/main/java/com/google/gson/protobuf/ProtoTypeAdapter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "286",
+    "357",
+    "254",
+    "284",
+    "286",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "d71b4f1a54a4f6ea"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/reflect/TypeToken.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "244",
+    "291",
+    "121",
+    "158",
+    "185",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4b2a6d8d63c95cb4"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/JsonArray.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "68",
+    "78",
+    "68",
+    "78",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9e47cfe8ed42f867"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/ConstructorConstructor.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "103",
+    "171",
+    "217",
+    "285",
+    "…+12"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3c816a8cfd105636"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/JsonTreeReader.java",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "263",
+    "285",
+    "287",
+    "309",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "dde3655e6e84809d"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/JsonPrimitive.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "310",
+    "340",
+    "260",
+    "284",
+    "310",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "c1ef3c11cce137c2"
+   ]
+  },
+  {
+   "path": "gson/extras/src/main/java/com/google/gson/typeadapters/UtcDateTypeAdapter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "123",
+    "140",
+    "232",
+    "46",
+    "61",
+    "…+10"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "7d56fc3e5f8b48ae"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/JsonAdapterAnnotationTypeAdapterFactory.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "70",
+    "72",
+    "70",
+    "72",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b1ea3ab03405ac4c"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/JsonObject.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "52",
+    "52"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "2149f3fd2edf3349"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/FieldNamingPolicy.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "grounded"
+   ],
+   "uncited_run1": [
+    "1234",
+    "115",
+    "118",
+    "53",
+    "56",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "30a6bff49964f718"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/JsonTreeWriter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "131",
+    "143",
+    "145",
+    "158"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "d306ae441761a63b"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/TypeAdapterRuntimeTypeWrapper.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "43",
+    "77",
+    "102",
+    "107",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "87e7800818f5c61f"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/ToNumberPolicy.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "84",
+    "96",
+    "70",
+    "82",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "cbb0b1b7bde747c9"
+   ]
+  },
+  {
+   "path": "gson/metrics/src/main/java/com/google/gson/metrics/BagOfPrimitivesDeserializationBenchmark.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "94",
+    "121",
+    "56",
+    "87",
+    "…+10"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "bec9fd839323cf41"
+   ]
+  },
+  {
+   "path": "gson/extras/src/main/java/com/google/gson/typeadapters/PostConstructAdapterFactory.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "32",
+    "46",
+    "57",
+    "73",
+    "75",
+    "…+12"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "55cc35f08d4f5a32"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/Primitives.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "87",
+    "99",
+    "63",
+    "75",
+    "41",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4eecb99fb188e519"
+   ]
+  },
+  {
+   "path": "gson/metrics/src/main/java/com/google/gson/metrics/CollectionsDeserializationBenchmark.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "108",
+    "142",
+    "64",
+    "101",
+    "1234",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "c153ed57c28547fc"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/UnsafeAllocator.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "48",
+    "128",
+    "48",
+    "128",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "73e6cc8647090cf0"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/TypeAdapter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "211",
+    "214",
+    "179",
+    "187"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f7eed543ea156ff0"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/bind/CollectionTypeAdapterFactory.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "41",
+    "74",
+    "89",
+    "91",
+    "103",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8cd31d41688df958"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/JavaVersion.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "79454487",
+    "60",
+    "75",
+    "46",
+    "58",
+    "…+8"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4cd1b99ba9691a71"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/LazilyParsedNumber.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "123",
+    "43",
+    "54",
+    "84",
+    "86",
+    "…+6"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "a823631cc494b196"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/sql/SqlTimeTypeAdapter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "57",
+    "76",
+    "57",
+    "76",
+    "44",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "112a516d13ad8a68"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/sql/SqlDateTypeAdapter.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "56",
+    "75",
+    "56",
+    "75"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f885425ffe15c056"
+   ]
+  },
+  {
+   "path": "gson/gson/src/main/java/com/google/gson/internal/PreJava9DateFormatProvider.java",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1234",
+    "36",
+    "49",
+    "51",
+    "63",
+    "…+4"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "999c675a464f3547"
+   ]
+  },
+  {
+   "path": "express/lib/response.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "126",
+    "220",
+    "435",
+    "484",
+    "373",
+    "…+15"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5588d6efa4c47f19"
+   ]
+  },
+  {
+   "path": "express/lib/application.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "522",
+    "575",
+    "190",
+    "244",
+    "90",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "18cf71e09ef0832f"
+   ]
+  },
+  {
+   "path": "express/lib/request.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "297",
+    "315",
+    "64",
+    "83",
+    "357",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "35fa2caf5a9268b5"
+   ]
+  },
+  {
+   "path": "express/lib/utils.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "89",
+    "120",
+    "130",
+    "152",
+    "89",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "285322dfbd39e7cb"
+   ]
+  },
+  {
+   "path": "express/lib/view.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "52",
+    "95",
+    "52",
+    "95"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f36821d02068299f"
+   ]
+  },
+  {
+   "path": "express/examples/error-pages/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "404"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b43ddedec8a38fd2"
+   ]
+  },
+  {
+   "path": "express/examples/mvc/lib/boot.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "14",
+    "82",
+    "83",
+    "14",
+    "82",
+    "…+1"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "fa123db24ccf555f"
+   ]
+  },
+  {
+   "path": "express/examples/web-service/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "30",
+    "42",
+    "85",
+    "91",
+    "30",
+    "…+3"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3abfd3904c7eb0d9"
+   ]
+  },
+  {
+   "path": "express/examples/auth/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "60",
+    "73",
+    "68",
+    "72",
+    "60",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "aaf1fc8feea1732d"
+   ]
+  },
+  {
+   "path": "express/examples/route-map/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "14",
+    "29",
+    "14",
+    "29"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "3bf432243d0d476e"
+   ]
+  },
+  {
+   "path": "express/examples/mvc/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "53",
+    "73",
+    "53",
+    "73"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8450806ad82636db"
+   ]
+  },
+  {
+   "path": "express/examples/resource/index.js",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "13",
+    "26",
+    "15",
+    "78",
+    "89"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9825364e405ed545"
+   ]
+  },
+  {
+   "path": "express/examples/search/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "52",
+    "60",
+    "56",
+    "59",
+    "55",
+    "…+11"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "7ea3635c9e04e9eb"
+   ]
+  },
+  {
+   "path": "express/examples/cookies/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "24",
+    "32",
+    "34",
+    "37",
+    "39",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "13c9955e6e0bdaed"
+   ]
+  },
+  {
+   "path": "express/examples/route-separation/index.js",
+   "verdicts": [
+    "grounded",
+    "grounded",
+    "grounded"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "74def7aa4f823e8b"
+   ]
+  },
+  {
+   "path": "express/examples/view-locals/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "102",
+    "108",
+    "102",
+    "108"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9cece0fe79ac61c9"
+   ]
+  },
+  {
+   "path": "express/examples/params/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "34",
+    "41",
+    "30",
+    "34",
+    "41",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "f8f560ba7e254aec"
+   ]
+  },
+  {
+   "path": "express/examples/route-separation/user.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "26",
+    "31",
+    "40",
+    "47",
+    "26",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "fa3907fca3b66623"
+   ]
+  },
+  {
+   "path": "express/examples/downloads/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "0.857143"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b98318dcc876b4e9"
+   ]
+  },
+  {
+   "path": "express/examples/markdown/index.js",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "bcab9bd4d2b0e355"
+   ]
+  },
+  {
+   "path": "express/examples/error/index.js",
+   "verdicts": [
+    "uncited",
+    "grounded",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "34",
+    "42"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8fa4d778a9aabc2d"
+   ]
+  },
+  {
+   "path": "express/examples/vhost/index.js",
+   "verdicts": [
+    "grounded",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [],
+   "narrative_sha16": [
+    null,
+    null,
+    "c7af2f8f2b32d256"
+   ]
+  },
+  {
+   "path": "express/examples/view-constructor/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "39",
+    "42",
+    "39",
+    "42"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "54609d58c3251137"
+   ]
+  },
+  {
+   "path": "express/examples/mvc/controllers/user/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "22",
+    "15",
+    "21",
+    "22",
+    "15",
+    "…+2"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "fb4e37bd4a21d568"
+   ]
+  },
+  {
+   "path": "express/examples/session/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "22",
+    "31"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "a44b0f593d4ad9fe"
+   ]
+  },
+  {
+   "path": "express/examples/cookie-sessions/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "16",
+    "19"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "9161ebafca68315a"
+   ]
+  },
+  {
+   "path": "express/examples/mvc/controllers/pet/index.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "22",
+    "24",
+    "22",
+    "24"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "469a68ffb9353b07"
+   ]
+  },
+  {
+   "path": "express/test/app.router.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "1208",
+    "39",
+    "92",
+    "287",
+    "421",
+    "…+9"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "b0ec793123174051"
+   ]
+  },
+  {
+   "path": "express/test/express.urlencoded.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "786",
+    "606",
+    "697",
+    "786"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "4eb66302f8d39c9e"
+   ]
+  },
+  {
+   "path": "express/test/res.sendFile.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "903",
+    "339",
+    "902",
+    "16",
+    "174",
+    "…+13"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "ba611f7b139dbebf"
+   ]
+  },
+  {
+   "path": "express/test/express.json.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "720",
+    "503",
+    "605",
+    "297",
+    "391",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "5ecbd23683d38da5"
+   ]
+  },
+  {
+   "path": "express/test/res.send.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "620",
+    "387",
+    "594",
+    "620",
+    "387",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "87551965b6ad5bee"
+   ]
+  },
+  {
+   "path": "express/test/express.text.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "547",
+    "201",
+    "293",
+    "360",
+    "451",
+    "…+5"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "8ca15836408904f1"
+   ]
+  },
+  {
+   "path": "express/test/express.raw.js",
+   "verdicts": [
+    "uncited",
+    "uncited",
+    "uncited"
+   ],
+   "uncited_run1": [
+    "490",
+    "328",
+    "423",
+    "490",
+    "328",
+    "…+7"
+   ],
+   "narrative_sha16": [
+    null,
+    null,
+    "0c873a09e82cd764"
+   ]
+  }
+ ]
+}
