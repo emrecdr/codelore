@@ -52,14 +52,16 @@ use std::path::{Path, PathBuf};
 const SCANNED: &[&str] = &[
     "crates/codelore-lib/src",
     "crates/codelore-lib/tests",
+    "crates/codelore-lib/benches",
     "crates/codelore-cli/src",
     "crates/codelore-cli/tests",
 ];
 
-/// Individual files scanned alongside [`SCANNED`]. Manifests carry prose
-/// comments of exactly the kind this guard polices, and they sit at crate root
-/// rather than under `src`/`tests`, so no root above reaches them — neither by
-/// path nor by extension.
+/// Individual files scanned alongside [`SCANNED`]. Every entry sits at crate
+/// root rather than under a scanned directory, so no root above reaches it.
+/// The manifests are missed by extension as well as by path, and carry prose
+/// comments of exactly the kind this guard polices; `build.rs` is ordinary
+/// first-class source that simply lives one directory too high.
 ///
 /// `crates/codelore-rca/UPSTREAM.md` is here because that crate's manifest
 /// sets `readme = "UPSTREAM.md"`: it is the text crates.io publishes, and the
@@ -77,6 +79,7 @@ const SCANNED_FILES: &[&str] = &[
     "Cargo.toml",
     "crates/codelore-lib/Cargo.toml",
     "crates/codelore-cli/Cargo.toml",
+    "crates/codelore-lib/build.rs",
     "crates/codelore-rca/Cargo.toml",
     "crates/codelore-rca/UPSTREAM.md",
 ];
@@ -95,7 +98,7 @@ fn workspace_root() -> PathBuf {
 /// fact-store schema is code and can carry the same banned phase markers.
 fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return; // a missing root is fine — just nothing to scan
+        return; // an unreadable nested directory contributes nothing
     };
     for entry in entries.flatten() {
         let path = entry.path();

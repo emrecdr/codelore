@@ -79,8 +79,10 @@ pub const W_REVIEWER: f64 = 0.5;
 /// - **`doe_scores(path TEXT, author TEXT, doe DOUBLE, is_expert BOOLEAN)`** —
 ///   DOE scores and expert flags per Cury & Avelino, SBES'24 (arXiv 2408.08733).
 ///
-/// Both tables are idempotent: calling this function more than once on the
-/// same `FactsDb` is a no-op (guarded by [`FactsDb::is_knowledge_shares_built`]).
+/// Both tables are idempotent: calling this function again with the same
+/// `time_bucket` and lineage settings is a no-op (guarded by
+/// [`FactsDb::is_knowledge_shares_built_for`]). Different settings select a
+/// different source table, so they rebuild rather than hit the guard.
 ///
 /// # Errors
 ///

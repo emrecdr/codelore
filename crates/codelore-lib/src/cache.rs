@@ -29,9 +29,12 @@ use crate::Options;
 /// complexity scan recorded its coverage into `provenance`. Those stores hold
 /// correct facts, but they cannot say how much of the repository the scan
 /// actually reached, so the code-health gate reads their coverage as unknown
-/// and cannot enforce the floor against them. Left in place they would keep
-/// greening on partial coverage indefinitely, because a cache hit never re-runs
-/// the scan that would record it — the one case where an entry must be
+/// and cannot enforce the floor against them. A cache hit never re-runs the
+/// scan that would record it, so nothing else evicts them: the key's
+/// `CARGO_PKG_VERSION` component already orphans every entry on a released
+/// upgrade, which leaves same-version builds of `main` — this repo's own
+/// dogfood and self-gate among them — as the population that would otherwise
+/// keep greening on partial coverage. The one case where an entry must be
 /// discarded for what it *omits* rather than for anything wrong in it.
 ///
 /// The prior epoch (`schema_v21`) orphans entries whose Kamei enrichment
