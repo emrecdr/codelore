@@ -51,6 +51,30 @@ const SCANNED: &[&str] = &[
     "crates/codelore-cli/tests",
 ];
 
+/// Individual files scanned alongside [`SCANNED`]. Manifests carry prose
+/// comments of exactly the kind this guard polices, and they sit at crate root
+/// rather than under `src`/`tests`, so no root above reaches them — neither by
+/// path nor by extension.
+///
+/// `crates/codelore-rca/UPSTREAM.md` is here because that crate's manifest
+/// sets `readme = "UPSTREAM.md"`: it is the text crates.io publishes, and the
+/// doc guards do not reach it either (they scan `README.md` plus `docs/**`).
+///
+/// The vendored fork is included at *manifest* level and excluded at *source*
+/// level, because the split that matters is provenance rather than crate.
+/// `codelore-rca/Cargo.toml` is codelore-authored — our grammar pins, our
+/// node-ID annotations, our lint decisions — while the `src/` tree beside it is
+/// upstream MPL code that no root above scans. The upstream issue references
+/// that manifest carries (`#528`, `#1183`) are outside every rule here anyway:
+/// this guard bans `F`/`T`-prefixed IDs and `Plan`/`Task`/`DEEP` phase
+/// markers, not bare `#`-prefixed numbers.
+const SCANNED_FILES: &[&str] = &[
+    "Cargo.toml",
+    "crates/codelore-lib/Cargo.toml",
+    "crates/codelore-cli/Cargo.toml",
+    "crates/codelore-rca/Cargo.toml",
+    "crates/codelore-rca/UPSTREAM.md",
+];
 /// `CARGO_MANIFEST_DIR` is `<root>/crates/codelore-lib`; two levels up is the
 /// workspace root. Embedded at compile time, so it resolves under CI too.
 fn workspace_root() -> PathBuf {
@@ -177,6 +201,20 @@ fn scanned_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
     for rel in SCANNED {
         collect_source_files(&root.join(rel), &mut files);
+    }
+    for rel in SCANNED_FILES {
+        let path = root.join(rel);
+        // Named files are asserted to exist rather than skipped when missing.
+        // A directory root that moves scans nothing and trips the emptiness
+        // check below; a named file that moves would silently stop being
+        // scanned while every test stayed green — the guard would go inert
+        // exactly where its coverage was most deliberate.
+        assert!(
+            path.is_file(),
+            "{rel} is listed for scanning but does not exist — the guard's \
+             file list has drifted from the tree"
+        );
+        files.push(path);
     }
     assert!(
         !files.is_empty(),

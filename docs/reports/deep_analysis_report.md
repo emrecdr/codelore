@@ -1894,7 +1894,7 @@ that switching the workflow before that configuration exists breaks the next
 release. Sequencing, not incompatibility. Recorded so the next cycle does not
 re-derive a resolved argument.
 
-### F308 (Active) — the comment-hygiene guard cannot see manifests, and phase markers live there
+### F308 (Fixed — Unreleased) — the comment-hygiene guard cannot see manifests, and phase markers live there
 
 Found while validating cycle 19, whose §3 concerns a scanner that is blind to
 one syntactic form. The same shape appears one layer over: the comment-hygiene
@@ -1969,6 +1969,26 @@ the one file no convention guard reads.
 
 Recorded rather than fixed inline, per the standing rule that latent findings
 spotted during unrelated work land as findings.
+
+*   **Resolution**: the guard now scans an explicit file list alongside its
+    directory roots — the three workspace manifests, `codelore-rca`'s manifest,
+    and `codelore-rca/UPSTREAM.md`. Named files are asserted to *exist* rather
+    than skipped when absent: a directory root that moves scans nothing and
+    trips the existing emptiness check, but a named file that moves would
+    silently stop being scanned while every test stayed green — the guard going
+    inert exactly where its coverage was most deliberate.
+*   **The stated reason for exempting `codelore-rca/Cargo.toml` did not hold**,
+    and the exemption was dropped. This entry justified it as "grammar-pinning
+    comments referencing upstream issue numbers that must keep passing";
+    including the manifest and running the guard shows those comments pass
+    regardless, because the rules ban `F`/`T`-prefixed IDs and
+    `Plan`/`Task`/`DEEP` phase markers, not bare `#`-prefixed numbers
+    (`#528`, `#1183`). The entry's own principle — exempt upstream-derived
+    text, not the crate containing it — then argues for inclusion: that
+    manifest is codelore-authored (our grammar pins, our node-ID annotations,
+    our lint decisions), while the `src/` tree beside it is upstream MPL code
+    that no root scans. The fork is now covered at manifest level and excluded
+    at source level, which is the provenance split the entry asked for.
 
 ### F309 (Fixed — v0.29.0) — the vendored fork's public surface still describes languages it no longer parses
 
