@@ -3926,4 +3926,61 @@ that needs it is exactly the HEAD-time three.
 Noted by a cleanup pass over the change that instrumented the complexity scan.
 
 
-The next sweep re-opens at **F376**.
+### F376 (Active) — the degraded-coverage counts survive only on the path that was already failing
+
+A cleanup pass over the coverage instrumentation removed the `tracing::warn!`
+that `eval_code_health_gate` fired whenever the HEAD complexity scan came back
+`Below` the floor:
+
+> code-health gate degraded: the HEAD complexity scan scored {scored} of
+> {eligible} eligible files, below the coverage floor — the health rows below
+> describe only the part of the repository that was measured
+
+and moved the two counts onto the violation record, where they render as
+`{scored}/{eligible} files scanned`. The move is right on its own terms: a
+violation is structured, reaches the SARIF and PR-annotation surfaces, and is
+the only place that can say *which* of the two causes of a degraded verdict
+fired. A log line was never able to do any of that.
+
+What went with it is the condition. The violation is pushed under
+
+```rust
+if degraded && g.fail_on_degraded { /* …counts… */ } else { violations.extend(ch_violations); }
+```
+
+so the counts are emitted only on a run that is also failing because of them.
+With `fail_on_degraded = false` the record still carries `verdict = "degraded"`,
+so `emit_gate_notices` prints its notice — but that notice deliberately names
+neither cause, `GateRunRecord` has no field for the counts, and no other surface
+reports them. The operator still learns that the scan was too thin to judge the
+repository. They can no longer learn whether it missed one file or nine hundred,
+which is the number that decides whether to investigate or ignore.
+
+The affected population is small and is precisely the wrong one to lose this.
+`default_fail_on_degraded()` returns `true`, so only a configuration that
+explicitly opted out is touched — and opting out is what an operator does when
+they want the diagnosis *without* the build failure. The flag exists to keep the
+signal and drop the failure; the current shape drops half the signal along with
+it.
+
+Recorded rather than fixed because the repair is a placement decision with three
+defensible answers, and picking one inside a cleanup pass would be deciding it by
+accident:
+
+*   **Restore the `warn!` beside the violation.** Cheapest, and preserves the
+    consequence sentence the old message carried. But it puts a number the
+    violation already models back into a log line, which is the split the
+    cleanup was removing.
+*   **Give the notice the counts.** Keeps one surface, but `GateRunRecord` would
+    have to carry `scored`/`eligible` — widening a record shared by every gate to
+    serve one of them.
+*   **Push the violation unconditionally and let `fail_on_degraded` govern only
+    the exit code.** The cleanest model, since a violation would then mean "this
+    is what we found" rather than "this is why we failed" — but that redefinition
+    reaches every consumer of the violations list, so it is a contract change,
+    not a local fix.
+
+Noted by a cleanup pass over the change that moved the counts onto the violation.
+
+
+The next sweep re-opens at **F377**.
