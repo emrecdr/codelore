@@ -519,4 +519,28 @@ mod guard_key_tests {
              baked against the other source"
         );
     }
+
+    #[test]
+    fn a_changes_swap_invalidates_the_shares_guard() {
+        let db = FactsDb::new_in_memory().expect("db");
+        let opts = Options::default();
+
+        materialize_knowledge_shares(&db, &opts).expect("first build");
+        db.conn()
+            .execute("DROP TABLE knowledge_shares", [])
+            .expect("drop");
+
+        // `apply_grouping` swaps `changes` in place and calls this. The shares
+        // tables are built FROM that table (directly or through the lineage
+        // view), so a guard that survived the swap would serve tables built
+        // against the pre-swap path set for the rest of the run.
+        db.invalidate_changes_lineage();
+
+        materialize_knowledge_shares(&db, &opts).expect("rebuild after invalidation");
+        assert!(
+            shares_table_exists(&db),
+            "invalidating the source must clear this guard; without it the \
+             stale tables outlive the path set they were built against"
+        );
+    }
 }
