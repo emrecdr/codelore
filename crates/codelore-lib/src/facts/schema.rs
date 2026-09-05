@@ -15,7 +15,14 @@ pub const INITIAL_PROVENANCE: &[(&str, &str)] = &[
     ("arrow_version", crate::arrow_facade::ARROW_RUNTIME_VERSION),
 ];
 
-/// Eligible-file count of the HEAD complexity scan, and the subset it scored.
+/// Eligible-file count of the HEAD **complexity** scan, and the subset it
+/// scored.
+///
+/// The key names carry the scan they describe because they are not the only
+/// HEAD-time scan that tallies coverage — `clones` and `imports` do too, and
+/// the module doc for `ScanCoverage` argues a thin `clones` matters more than
+/// a thin `complexity_metrics`. Namespacing now costs two tokens; doing it
+/// after these keys ship costs a `CACHE_EPOCH` bump.
 ///
 /// These live in `provenance` rather than in an in-memory ingest stat because
 /// the gate that reads them runs on cache hits too, and a cache hit never
@@ -25,6 +32,6 @@ pub const INITIAL_PROVENANCE: &[(&str, &str)] = &[
 /// Absent on any store written before these keys existed. Readers must treat
 /// missing as "unknown" rather than as zero — a zero eligible count means a
 /// docs-only tree, which is honestly complete, not blind.
-pub const KEY_HEAD_SCAN_ELIGIBLE: &str = "head_scan_eligible";
+pub const KEY_HEAD_SCAN_ELIGIBLE: &str = "head_scan_complexity_eligible";
 /// Companion to [`KEY_HEAD_SCAN_ELIGIBLE`]; see its documentation.
-pub const KEY_HEAD_SCAN_SCORED: &str = "head_scan_scored";
+pub const KEY_HEAD_SCAN_SCORED: &str = "head_scan_complexity_scored";

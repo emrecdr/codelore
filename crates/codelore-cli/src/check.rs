@@ -409,8 +409,13 @@ fn emit_gate_notices(
             ("hotspot_anchored_max", "skipped") => eprintln!(
                 "  ⚠ hotspot_anchored_max: skipped — no anchored hotspot data (no calibration artifact active, or no analyzed file's language is covered by the corpus)"
             ),
+            // Two causes reach this verdict — an empty scan on a non-empty repo,
+            // and a scan that covered too little of it — so the notice names
+            // neither. The violation line carries which one fired and its counts.
             ("code_health_min", "degraded") => eprintln!(
-                "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
+                "  ⚠ code_health_min: degraded — the health scan did not cover enough of \
+                 this repository to judge it; the gate reports no verdict rather than one \
+                 drawn from a partial scan"
             ),
             ("new_code", "skipped") => eprintln!(
                 "  ⚠ new_code: skipped — {}",
@@ -537,7 +542,7 @@ fn eval_code_health_gate(
         return Ok(((Vec::new(), Vec::new()), code_health));
     };
     let ch_violations = evaluate_code_health_gate(thresholds, &code_health);
-    // Degraded: the health scan returned nothing, yet the repository actually
+    // Blind: the health scan returned nothing, yet the repository actually
     // carries analyzable source. The witness reads the HEAD tree directly rather
     // than counting `complexity_metrics`, which derives from the same
     // changes⋈commits join as the (empty) health set and so empties in lockstep
@@ -554,20 +559,17 @@ fn eval_code_health_gate(
     // under `--after`/`--before`, where attempting fewer files than the tree
     // holds is correct — and it is read from `provenance` because a cache hit
     // never re-runs the scan that computed it.
-    let coverage = db.head_scan_coverage_verdict()?;
-    let thin_coverage = matches!(
-        coverage,
-        codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { .. }
-    );
-    if let codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { scored, eligible } = coverage
-    {
-        tracing::warn!(
-            "code-health gate degraded: the HEAD complexity scan scored {scored} of \
-             {eligible} eligible files, below the coverage floor — the health rows \
-             below describe only the part of the repository that was measured"
-        );
-    }
-    let degraded = blind || thin_coverage;
+    //
+    // The counts are carried rather than collapsed into the boolean, because
+    // the verdict alone cannot say WHICH of the two causes fired and the
+    // violation record has to report the one that did.
+    let thin_coverage = match db.head_scan_coverage_verdict()? {
+        codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { scored, eligible } => {
+            Some((scored, eligible))
+        }
+        _ => None,
+    };
+    let degraded = blind || thin_coverage.is_some();
     let worst = code_health
         .iter()
         .map(|r| r.score)
@@ -593,7 +595,13 @@ fn eval_code_health_gate(
         violations.push(GateViolation {
             gate: "code_health_min".into(),
             path: "(degraded)".into(),
-            actual: "no-data".into(),
+            // `no-data` is only true of the blind case. A thin scan DID return
+            // rows, so reporting no-data there sends the operator debugging an
+            // empty-result problem they do not have.
+            actual: match thin_coverage {
+                Some((scored, eligible)) => format!("{scored}/{eligible} files scanned"),
+                None => "no-data".into(),
+            },
             threshold: format!("{min:.1}"),
         });
     } else {

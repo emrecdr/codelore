@@ -2759,8 +2759,9 @@ same as the lineage guard (key the guard on the inputs).
     currently occur.** The shares-affecting fields are exactly the two
     `lineage::source_table` reads, `time_bucket` and `use_canonical_lineage`;
     `shares.rs` touches `opts` through nothing else. No production code mutates
-    either field after construction, so the three callers
-    (`coordination_needs`, `marginal_owner_risk`, `bus_factor`) all receive the
+    either field after construction, so the four callers
+    (`coordination_needs`, `marginal_owner_risk`, `bus_factor`, `code_familiarity`)
+    all receive the
     same values. **The entry's cited example is wrong**: `delivery_metrics`
     never calls `materialize_knowledge_shares`, and `include_merges` is not
     shares-affecting in any case.
@@ -3885,5 +3886,44 @@ half nothing will catch drifting.
 
 Noted while recovering a publish that had already failed.
 
+### F375 (Active) — the coverage the gate now enforces is recorded for the least dangerous of three scans
 
-The next sweep re-opens at **F375**.
+`ScanCoverage` is tallied by three HEAD-time passes —
+`ingest_complexity_at_head`, `populate_clones_at_head` and
+`populate_imports_at_head` — and each warns when it falls below the floor.
+Only the complexity pass persists its counts, so only its blindness survives
+a cache hit and reaches a gate.
+
+The asymmetry runs the wrong way. `coverage.rs`'s own module doc argues that a
+thin `clones` matters *more* than a thin `complexity_metrics`: a partial
+complexity scan drags scores toward whatever survived, but
+`disallow_clone_type_1` counts distinct clone groups and **passes on zero**, so
+a clone scan that saw nothing is indistinguishable from a repository with no
+duplication. `max_dependency_cycles` and `max_propagation_cost` have the same
+shape over a blind `imports` scan — zero cycles and zero propagation cost both
+pass. Three ingest-time scans, three gates that can green on blindness, one of
+them now instrumented.
+
+The three analysis-time tallies are correctly outside this: `analyses/clones`,
+`analyses/architecture_trend` and the at-rev pass re-run on every invocation,
+so their warning always fires and persistence would buy nothing. The population
+that needs it is exactly the HEAD-time three.
+
+*   **Cheap half, already taken**: the provenance keys were renamed
+    `head_scan_complexity_{eligible,scored}` before they shipped, so a second
+    scan can adopt the scheme without either an inconsistent naming split or a
+    `CACHE_EPOCH` bump to rename a released key.
+*   **Write side**: the persistence belongs on `ScanCoverage` beside
+    `warn_if_degraded`, which already takes the scan name, rather than in the
+    complexity pass reaching for `schema::KEY_*` itself. Both sibling passes
+    have `&self: &FactsDb` in scope, so there is no plumbing obstacle.
+*   **Read side is the open design question, and is why this is recorded rather
+    than fixed**: what a degraded verdict *means* for a boolean gate like
+    `disallow_clone_type_1` is a product decision, not a mechanical one. Wiring
+    a sentinel into those gates without answering it would trade a silent false
+    pass for a noisy false failure.
+
+Noted by a cleanup pass over the change that instrumented the complexity scan.
+
+
+The next sweep re-opens at **F376**.

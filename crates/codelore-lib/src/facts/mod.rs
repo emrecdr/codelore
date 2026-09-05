@@ -69,11 +69,15 @@ fn apply_memory_pragmas_with_limit(
 
 /// How the HEAD complexity scan's recorded coverage compares to the floor.
 ///
-/// Four cases rather than a bool because they demand different handling and
-/// collapsing them loses the distinction that matters: a store with no
-/// recorded coverage is *unknown*, and a tree with nothing to scan is
-/// *complete*. Treating either as "below" would fail runs that are fine;
-/// treating either as "met" would green a run that is blind.
+/// Four cases rather than a bool because collapsing them loses distinctions the
+/// caller needs to keep apart: a store with no recorded coverage is *unknown*,
+/// and a tree with nothing to scan is *complete*. Treating either as "below"
+/// would fail runs that are fine.
+///
+/// The gate currently degrades on `Below` alone, so `Unknown` does not fail a
+/// run — deliberately, because a store written before these keys existed would
+/// otherwise start failing on upgrade, and the epoch bump already forces those
+/// stores to re-ingest and record real counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanCoverageVerdict {
     /// The store predates the coverage keys. Nothing can be concluded.
@@ -108,7 +112,7 @@ pub struct FactsDb {
     /// analyses plus kamei under `--use-canonical-lineage`). The view's
     /// content is a pure function of the immutable `changes` / `commits`
     /// tables; the only post-build mutation is `apply_grouping`'s in-place
-    /// `changes` swap, which calls `invalidate_changes_lineage` so the next
+    /// `changes` swap, which calls `invalidate_changes_derived` so the next
     /// materialise rebuilds against the grouped paths. `Cell` (not
     /// `RefCell`) — a plain `bool` on the single connection-owning thread.
     changes_lineage_built: std::cell::Cell<bool>,
@@ -172,10 +176,13 @@ impl FactsDb {
         self.changes_lineage_built.set(true);
     }
 
-    /// Invalidate the `changes_lineage` guard after a `changes` mutation
-    /// (the `apply_grouping` swap) so the next materialise rebuilds the
-    /// view against the new path set.
-    pub(crate) fn invalidate_changes_lineage(&self) {
+    /// Invalidate every guard over a view built FROM `changes` after that table
+    /// is mutated (the `apply_grouping` swap), so the next materialise rebuilds
+    /// against the new path set.
+    ///
+    /// Named for the relationship rather than for one dependent: it resets three
+    /// guards, and a fourth `changes`-derived view added later belongs here too.
+    pub(crate) fn invalidate_changes_derived(&self) {
         self.changes_lineage_built.set(false);
         // `changes_bucketed` builds on top of `changes` (directly or via the
         // lineage view), so the same mutation invalidates it too.
@@ -562,13 +569,8 @@ impl FactsDb {
         self.conn
             .execute_batch(schema::SCHEMA_V1)
             .map_err(|e| CodeLoreError::Analysis(format!("create schema: {e}")))?;
-        let mut stmt = self
-            .conn
-            .prepare("INSERT OR REPLACE INTO provenance (key, value) VALUES (?, ?)")
-            .map_err(|e| CodeLoreError::Analysis(format!("prepare: {e}")))?;
         for (k, v) in schema::INITIAL_PROVENANCE {
-            stmt.execute(duckdb::params![k, v])
-                .map_err(|e| CodeLoreError::Analysis(format!("provenance insert: {e}")))?;
+            self.set_provenance(k, v)?;
         }
         Ok(())
     }
@@ -594,7 +596,7 @@ impl FactsDb {
     /// Absence is a real state, not an error: a fact store written before a
     /// key existed simply lacks it, and callers must distinguish that from a
     /// recorded zero.
-    pub fn provenance_value(&self, key: &str) -> Result<Option<String>> {
+    pub(crate) fn provenance_value(&self, key: &str) -> Result<Option<String>> {
         let got: std::result::Result<String, duckdb::Error> = self.conn.query_row(
             "SELECT value FROM provenance WHERE key = ?",
             duckdb::params![key],
@@ -631,10 +633,11 @@ impl FactsDb {
 
     /// Classify the stored HEAD-scan coverage against the disclosure floor.
     ///
-    /// The predicate lives here, beside the floor it enforces, rather than at
-    /// the call site: a consumer that recomputed its own ratio would be free to
-    /// drift from the threshold the warning uses, and the two would then
-    /// disagree about the same scan.
+    /// The floor comparison itself lives in `ingest::coverage::below_floor`,
+    /// beside the constant, and both consumers call it — this verdict and the
+    /// ingest-time warning. A second copy of `scored / eligible < FLOOR` here
+    /// would be free to drift from the threshold the warning uses, and the two
+    /// would then disagree about the same scan.
     pub fn head_scan_coverage_verdict(&self) -> Result<ScanCoverageVerdict> {
         let Some((scored, eligible)) = self.head_scan_coverage()? else {
             return Ok(ScanCoverageVerdict::Unknown);
@@ -642,9 +645,7 @@ impl FactsDb {
         if eligible == 0 {
             return Ok(ScanCoverageVerdict::Vacuous);
         }
-        #[allow(clippy::cast_precision_loss)]
-        let ratio = scored as f64 / eligible as f64;
-        Ok(if ratio < ingest::coverage::MIN_SCAN_COVERAGE {
+        Ok(if ingest::coverage::below_floor(scored, eligible) {
             ScanCoverageVerdict::Below { scored, eligible }
         } else {
             ScanCoverageVerdict::Met { scored, eligible }
