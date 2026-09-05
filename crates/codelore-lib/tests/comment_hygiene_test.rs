@@ -22,12 +22,17 @@
 //! any such token reappears, so the convention can't silently regress (it was
 //! re-introduced repeatedly before this guard existed).
 //!
-//! Scope: `.rs` and `.sql` under `crates/codelore-(lib|cli)/(src|tests)`. The
-//! `.sql` schema (`facts/schema_v1.sql`) is code too and once carried the same
-//! markers. The vendored `codelore-rca` MPL fork is intentionally excluded — it
-//! tracks upstream and is hands-off. `CHANGELOG.md`, the findings report, and
-//! other Markdown are out of scope: those are the sanctioned homes for audit
-//! IDs.
+//! Scope: `.rs` and `.sql` under `crates/codelore-(lib|cli)/(src|tests)`, plus
+//! the named files in `SCANNED_FILES` — the workspace manifests and the vendored
+//! fork's published readme. The `.sql` schema (`facts/schema_v1.sql`) is code too
+//! and once carried the same markers; manifests carry the same kind of prose and
+//! sit above the roots, so no root reaches them.
+//!
+//! The vendored `codelore-rca` fork is excluded by **provenance, not by crate**:
+//! its `src/` tree tracks upstream and is hands-off, but its manifest and
+//! `UPSTREAM.md` are codelore-authored, and `UPSTREAM.md` is what crates.io
+//! publishes. `CHANGELOG.md` and the findings report stay out of scope — those
+//! are the sanctioned homes for audit IDs.
 //!
 //! Both checks scan the WHOLE line, so a marker is caught in a comment, a
 //! string literal (an `anyhow::bail!` message, an assertion label), a
@@ -75,6 +80,7 @@ const SCANNED_FILES: &[&str] = &[
     "crates/codelore-rca/Cargo.toml",
     "crates/codelore-rca/UPSTREAM.md",
 ];
+
 /// `CARGO_MANIFEST_DIR` is `<root>/crates/codelore-lib`; two levels up is the
 /// workspace root. Embedded at compile time, so it resolves under CI too.
 fn workspace_root() -> PathBuf {
@@ -200,15 +206,24 @@ fn scanned_files() -> Vec<PathBuf> {
     let root = workspace_root();
     let mut files = Vec::new();
     for rel in SCANNED {
-        collect_source_files(&root.join(rel), &mut files);
+        // Asserted to exist for the same reason the named files below are: the
+        // emptiness check at the end cannot catch a root that moves, because the
+        // other three roots keep `files` populated. A renamed root would drop a
+        // whole tree from the guard with every test still green.
+        let dir = root.join(rel);
+        assert!(
+            dir.is_dir(),
+            "{rel} is listed as a scan root but is not a directory — the guard's \
+             root list has drifted from the tree"
+        );
+        collect_source_files(&dir, &mut files);
     }
     for rel in SCANNED_FILES {
         let path = root.join(rel);
-        // Named files are asserted to exist rather than skipped when missing.
-        // A directory root that moves scans nothing and trips the emptiness
-        // check below; a named file that moves would silently stop being
-        // scanned while every test stayed green — the guard would go inert
-        // exactly where its coverage was most deliberate.
+        // Named files are asserted to exist for the same reason the roots above
+        // are: a path that moves would silently stop being scanned while every
+        // test stayed green — the guard going inert exactly where its coverage
+        // was most deliberate.
         assert!(
             path.is_file(),
             "{rel} is listed for scanning but does not exist — the guard's \
@@ -251,7 +266,7 @@ fn no_task_id_references_in_code() {
 
     assert!(
         violations.is_empty(),
-        "found {} finding/task-ID reference(s) in .rs/.sql source (comment, string, DDL, \
+        "found {} finding/task-ID reference(s) in scanned source and manifests (comment, string, DDL, \
          or file name). Drop the ID and keep the rationale — audit history lives in \
          CHANGELOG.md and the findings report, not in the code:\n{}",
         violations.len(),
@@ -282,7 +297,7 @@ fn no_plan_phase_markers_in_code() {
 
     assert!(
         violations.is_empty(),
-        "found {} phase-number marker(s) in .rs/.sql source (comment, string, or DDL). \
+        "found {} phase-number marker(s) in scanned source and manifests (comment, string, or DDL). \
          Describe the current state and drop the marker — which release a feature shipped \
          in is history for CHANGELOG.md, not the code:\n{}",
         violations.len(),

@@ -20,6 +20,19 @@
 /// — is drawing conclusions from a minority of the codebase.
 pub(crate) const MIN_SCAN_COVERAGE: f64 = 0.9;
 
+/// Whether a scan that reached `scored` of `eligible` files falls below
+/// [`MIN_SCAN_COVERAGE`].
+///
+/// The one place the floor is applied. Both consumers route through it — the
+/// ingest-time warning and the gate verdict — because they must agree about the
+/// same scan, and a second copy of `scored / eligible < FLOOR` in another module
+/// would be free to drift from this one. Zero eligible files is *not* below the
+/// floor: a tree with nothing to scan is honestly complete.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn below_floor(scored: u64, eligible: u64) -> bool {
+    eligible != 0 && (scored as f64) / (eligible as f64) < MIN_SCAN_COVERAGE
+}
+
 pub(crate) const REASON_BLOB_READ: &str = "blob read failed";
 pub(crate) const REASON_PARSE_ERROR: &str = "parse error";
 
@@ -144,7 +157,7 @@ impl ScanCoverage {
     /// they say *which* file, this says *how much of the repository is
     /// missing*.
     pub(crate) fn warn_if_degraded(&self, scan: &str, table: &str) {
-        if self.eligible == 0 || self.ratio() >= MIN_SCAN_COVERAGE {
+        if !below_floor(self.scored as u64, self.eligible as u64) {
             return;
         }
         let detail = self

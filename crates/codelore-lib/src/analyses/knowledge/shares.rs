@@ -89,17 +89,20 @@ pub const W_REVIEWER: f64 = 0.5;
 pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> {
     // Key the guard on what determines the tables' content: the two option
     // fields `source_table` reads, so a differing key rebuilds rather than
-    // serving tables baked against another source. The bucket component is
-    // presently always "none" — `--time-bucket` is rejected upstream for every
-    // analysis that consumes these tables — but it is carried anyway to mirror
-    // the sibling `changes_bucketed` guard and to stay correct if a bucket-aware
-    // consumer is ever added.
-    let guard_key = (
-        opts.time_bucket
-            .map_or("none", crate::options::TimeBucket::as_sql_unit),
-        opts.use_canonical_lineage,
-    );
-    if db.is_knowledge_shares_built_for(guard_key.0, guard_key.1) {
+    // serving tables baked against another source. Named locals rather than a
+    // tuple, matching the sibling `changes_bucketed` guard this mirrors.
+    //
+    // `unit` is always "none" in the current tree: no analysis that consumes
+    // these tables accepts `--time-bucket`. It is carried to keep the key the
+    // same shape as the sibling's, not because it protects a bucketed caller —
+    // such a caller would fail before reaching this guard, since
+    // `materialize_if_needed` no-ops when a bucket is set while `source_table`
+    // returns `changes_bucketed`, so the table would never be built.
+    let unit = opts
+        .time_bucket
+        .map_or("none", crate::options::TimeBucket::as_sql_unit);
+    let lineage = opts.use_canonical_lineage;
+    if db.is_knowledge_shares_built_for(unit, lineage) {
         return Ok(());
     }
 
@@ -204,7 +207,7 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     // ── Step 3: DOE scores ────────────────────────────────────────────────────
     materialize_doe_scores(db, src)?;
 
-    db.mark_knowledge_shares_built(guard_key.0, guard_key.1);
+    db.mark_knowledge_shares_built(unit, lineage);
     Ok(())
 }
 
@@ -534,7 +537,7 @@ mod guard_key_tests {
         // tables are built FROM that table (directly or through the lineage
         // view), so a guard that survived the swap would serve tables built
         // against the pre-swap path set for the rest of the run.
-        db.invalidate_changes_lineage();
+        db.invalidate_changes_derived();
 
         materialize_knowledge_shares(&db, &opts).expect("rebuild after invalidation");
         assert!(
