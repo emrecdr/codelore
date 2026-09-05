@@ -2744,7 +2744,7 @@ touched files are exactly the analysis's subject. Three other analyses carry
 a uniform field.
 
 
-### F330 (Active) — the knowledge-shares guard ignores the options it was built under
+### F330 (Fixed — Unreleased) — the knowledge-shares guard ignores the options it was built under
 
 `is_knowledge_shares_built` is a bare bool: the first caller's `opts`
 (window, lineage source) bake the temp tables, and later callers with
@@ -2754,6 +2754,34 @@ dashboard build is a live pattern (`delivery_metrics` clones opts with
 pair actually diverges on shares-affecting fields; the fix shape is the
 same as the lineage guard (key the guard on the inputs).
 
+
+*   **Validation asked for by this entry, now done — the divergence does not
+    currently occur.** The shares-affecting fields are exactly the two
+    `lineage::source_table` reads, `time_bucket` and `use_canonical_lineage`;
+    `shares.rs` touches `opts` through nothing else. No production code mutates
+    either field after construction, so the three callers
+    (`coordination_needs`, `marginal_owner_risk`, `bus_factor`) all receive the
+    same values. **The entry's cited example is wrong**: `delivery_metrics`
+    never calls `materialize_knowledge_shares`, and `include_merges` is not
+    shares-affecting in any case.
+*   **Fixed regardless, as consistency rather than speculation.** The correct
+    shape already existed three fields away: `changes_bucketed_built` is keyed
+    on `(unit, lineage)` precisely because one run can legitimately want two
+    bucketings. A bare bool guarding input-dependent state was an inconsistency
+    with the codebase's own pattern, so the guard now carries the same key.
+*   **A second gap in the same mechanism, found while fixing this one**:
+    `invalidate_changes_lineage` reset the lineage and bucketed guards but not
+    this one, though the shares tables are built `FROM` the very table
+    `apply_grouping` swaps. Left set, they would survive a path-set swap they
+    were not built against. Now invalidated alongside their source.
+*   **A suspected crash was investigated and does not exist.** Bucketed shares
+    read `changes_bucketed`, which this function — unlike the lineage view —
+    does not materialise for itself, so a direct call with `time_bucket` set
+    raises a catalog error. That combination is unreachable: the CLI rejects
+    `--time-bucket` for every analysis consuming these tables ("bucketing only
+    applies to co-change analyses"), verified by running it. The guard key
+    still carries the bucket component to mirror its sibling, and the code says
+    the component is presently always `"none"` rather than implying a live path.
 
 ### F331 (Active) — refactoring-targets leans on a biomarker-table side effect that call order barely protects
 

@@ -87,7 +87,19 @@ pub const W_REVIEWER: f64 = 0.5;
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors.
 #[tracing::instrument(name = "knowledge-shares", skip_all)]
 pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> {
-    if db.is_knowledge_shares_built() {
+    // Key the guard on what determines the tables' content: the two option
+    // fields `source_table` reads, so a differing key rebuilds rather than
+    // serving tables baked against another source. The bucket component is
+    // presently always "none" — `--time-bucket` is rejected upstream for every
+    // analysis that consumes these tables — but it is carried anyway to mirror
+    // the sibling `changes_bucketed` guard and to stay correct if a bucket-aware
+    // consumer is ever added.
+    let guard_key = (
+        opts.time_bucket
+            .map_or("none", crate::options::TimeBucket::as_sql_unit),
+        opts.use_canonical_lineage,
+    );
+    if db.is_knowledge_shares_built_for(guard_key.0, guard_key.1) {
         return Ok(());
     }
 
@@ -192,7 +204,7 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     // ── Step 3: DOE scores ────────────────────────────────────────────────────
     materialize_doe_scores(db, src)?;
 
-    db.mark_knowledge_shares_built();
+    db.mark_knowledge_shares_built(guard_key.0, guard_key.1);
     Ok(())
 }
 
@@ -448,4 +460,63 @@ fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
          FROM doe_raw",
     );
     db.execute_batch(&sql)
+}
+
+#[cfg(test)]
+mod guard_key_tests {
+    use super::materialize_knowledge_shares;
+    use crate::Options;
+    use crate::facts::FactsDb;
+
+    /// True when the `knowledge_shares` temp table currently exists.
+    ///
+    /// Observing the table is what makes this test exercise the *producer*
+    /// rather than only the guard predicate: dropping it and re-entering
+    /// distinguishes "the guard reported a hit" from "the guard rebuilt".
+    fn shares_table_exists(db: &FactsDb) -> bool {
+        db.conn()
+            .query_row(
+                "SELECT COUNT(*) FROM duckdb_tables WHERE table_name = 'knowledge_shares'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .expect("count query")
+            > 0
+    }
+
+    #[test]
+    fn the_same_options_hit_the_guard_and_a_differing_key_rebuilds() {
+        let db = FactsDb::new_in_memory().expect("db");
+        let plain = Options::default();
+
+        materialize_knowledge_shares(&db, &plain).expect("first build");
+        assert!(shares_table_exists(&db), "first call must build the table");
+
+        // Drop it behind the guard's back. A second call under the SAME key
+        // must report a hit and leave it dropped — otherwise this test cannot
+        // tell a rebuild from a no-op, and every assertion below is vacuous.
+        db.conn()
+            .execute("DROP TABLE knowledge_shares", [])
+            .expect("drop");
+        materialize_knowledge_shares(&db, &plain).expect("second build, same key");
+        assert!(
+            !shares_table_exists(&db),
+            "same options must hit the build-once guard, not rebuild"
+        );
+
+        // A differing lineage flag selects a different source table, so the
+        // key must miss and the tables must be rebuilt. Lineage defaults to
+        // ON, so the contrasting value here is `false` — the `--code-maat-compat`
+        // shape.
+        let no_lineage = Options {
+            use_canonical_lineage: false,
+            ..Options::default()
+        };
+        materialize_knowledge_shares(&db, &no_lineage).expect("third build, new key");
+        assert!(
+            shares_table_exists(&db),
+            "a differing lineage flag must rebuild rather than serve tables \
+             baked against the other source"
+        );
+    }
 }

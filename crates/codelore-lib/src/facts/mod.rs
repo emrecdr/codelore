@@ -112,11 +112,14 @@ pub struct FactsDb {
     /// materialise rebuilds against the grouped paths. `Cell` (not
     /// `RefCell`) — a plain `bool` on the single connection-owning thread.
     changes_lineage_built: std::cell::Cell<bool>,
-    /// Idempotence guard for the knowledge-share temp tables (set on first
-    /// materialise, checked at every entry to skip redundant rebuilds within
-    /// a single run). Mirrors `changes_lineage_built`; a plain `bool`, so it
-    /// names no `analyses` type and stays here with the other SQL-level guards.
-    knowledge_shares_built: std::cell::Cell<bool>,
+    /// Build-once guard for the knowledge-share temp tables, keyed like
+    /// `changes_bucketed_built` on the parameters that change their content:
+    /// the bucket's SQL unit and whether the lineage view was used. Those two
+    /// select which table the shares are built `FROM`, so a bare flag would
+    /// hand a later caller tables baked under an earlier caller's source and
+    /// report a hit. `None` = not built; a differing key forces a rebuild.
+    /// Names no `analyses` type, so it stays here with the other SQL guards.
+    knowledge_shares_built: std::cell::Cell<Option<(&'static str, bool)>>,
     /// Build-once guard for `changes_bucketed`, keyed on the parameters that
     /// change its content: the bucket's SQL unit and whether it was built on
     /// top of the lineage view. `None` = not built; a differing key forces a
@@ -135,7 +138,7 @@ impl FactsDb {
             conn,
             analysis_memos: std::cell::RefCell::new(std::collections::HashMap::new()),
             changes_lineage_built: std::cell::Cell::new(false),
-            knowledge_shares_built: std::cell::Cell::new(false),
+            knowledge_shares_built: std::cell::Cell::new(None),
             changes_bucketed_built: std::cell::Cell::new(None),
         }
     }
@@ -177,6 +180,10 @@ impl FactsDb {
         // `changes_bucketed` builds on top of `changes` (directly or via the
         // lineage view), so the same mutation invalidates it too.
         self.changes_bucketed_built.set(None);
+        // So does `knowledge_shares`, which selects `FROM` whichever of the
+        // three the caller's options resolve to. Left set, it would survive a
+        // path-set swap it was not built against.
+        self.knowledge_shares_built.set(None);
     }
 
     /// Whether `changes_bucketed` is already materialised for this run WITH
@@ -191,15 +198,21 @@ impl FactsDb {
         self.changes_bucketed_built.set(Some((unit, lineage)));
     }
 
-    /// Returns `true` if `knowledge_shares` and `doe_scores` temp tables
-    /// have already been materialised in this run.
-    pub(crate) fn is_knowledge_shares_built(&self) -> bool {
-        self.knowledge_shares_built.get()
+    /// Whether `knowledge_shares` and `doe_scores` are already materialised
+    /// for this run WITH this exact `(bucket unit, lineage)` key.
+    ///
+    /// Keyed for the same reason as [`Self::is_changes_bucketed_built_for`]:
+    /// the tables are built `FROM` whichever source those two fields select,
+    /// so a bare "built" flag would hand a second caller tables baked under
+    /// the first caller's source and call it a cache hit.
+    pub(crate) fn is_knowledge_shares_built_for(&self, unit: &'static str, lineage: bool) -> bool {
+        self.knowledge_shares_built.get() == Some((unit, lineage))
     }
 
-    /// Record that the knowledge-share temp tables have been materialised.
-    pub(crate) fn mark_knowledge_shares_built(&self) {
-        self.knowledge_shares_built.set(true);
+    /// Record that the knowledge-share temp tables have been materialised
+    /// under this key.
+    pub(crate) fn mark_knowledge_shares_built(&self, unit: &'static str, lineage: bool) {
+        self.knowledge_shares_built.set(Some((unit, lineage)));
     }
 
     /// Open a fresh in-memory fact store, spilling to the default temp
