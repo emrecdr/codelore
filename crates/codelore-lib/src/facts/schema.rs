@@ -35,3 +35,11 @@ pub const INITIAL_PROVENANCE: &[(&str, &str)] = &[
 pub const KEY_HEAD_SCAN_ELIGIBLE: &str = "head_scan_complexity_eligible";
 /// Companion to [`KEY_HEAD_SCAN_ELIGIBLE`]; see its documentation.
 pub const KEY_HEAD_SCAN_SCORED: &str = "head_scan_complexity_scored";
+/// Files the HEAD complexity scan skipped for exceeding the AST size cap.
+///
+/// Separate from `eligible`/`scored` because it is not a coverage loss: the cap
+/// exists to skip generated bundles, and folding these into either figure would
+/// make the deliberate skip look like a failure or like success. It is stored
+/// so the gate can see the second way a scan goes blind — a tree of five real
+/// files beside five hundred minified ones scores 5 of 5 and reads as complete.
+pub const KEY_HEAD_SCAN_OVERSIZE: &str = "head_scan_complexity_oversize";

@@ -88,6 +88,15 @@ pub enum ScanCoverageVerdict {
     Met { scored: u64, eligible: u64 },
     /// Coverage fell below the floor.
     Below { scored: u64, eligible: u64 },
+    /// More of what looked like source was skipped for exceeding the AST size
+    /// cap than was scanned.
+    ///
+    /// A distinct state rather than another `Below`, because its payload is a
+    /// different pair and its remedy is different: the loss ratio is met — this
+    /// scan lost nothing — so quoting `scored`/`eligible` here would report
+    /// complete coverage while the table describes a minority of the tree. The
+    /// fix is an ignore rule, not a re-ingest.
+    OversizeMajority { scored: u64, oversize: u64 },
 }
 
 pub struct FactsDb {
@@ -687,11 +696,24 @@ impl FactsDb {
         if eligible == 0 {
             return Ok(ScanCoverageVerdict::Vacuous);
         }
-        Ok(if ingest::coverage::below_floor(scored, eligible) {
-            ScanCoverageVerdict::Below { scored, eligible }
-        } else {
-            ScanCoverageVerdict::Met { scored, eligible }
-        })
+        // Loss first: `Below` names files the scan owed and could not deliver,
+        // which is the more severe fault and the one a re-ingest can repair. A
+        // tree can be both, and reporting the oversize share of a scan that
+        // also lost half its files would understate what went wrong.
+        if ingest::coverage::below_floor(scored, eligible) {
+            return Ok(ScanCoverageVerdict::Below { scored, eligible });
+        }
+        // A store predating this key reads zero rather than absent: an old
+        // cache says nothing about oversize skips, and treating silence as a
+        // majority would fail a correct run.
+        let oversize = self
+            .provenance_value(schema::KEY_HEAD_SCAN_OVERSIZE)?
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        if ingest::coverage::oversize_majority(scored, oversize) {
+            return Ok(ScanCoverageVerdict::OversizeMajority { scored, oversize });
+        }
+        Ok(ScanCoverageVerdict::Met { scored, eligible })
     }
 
     pub fn list_tables(&self) -> Result<Vec<String>> {

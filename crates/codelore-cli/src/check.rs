@@ -188,7 +188,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // repeated beneath each of them. Fires whether or not
         // `fail_on_degraded` turns it into a failure — opting out of the
         // failure is exactly when the operator still wants the diagnosis.
-        if let Some((scored, eligible)) = thin_scan_coverage(&db)? {
+        if let Some(verdict) = degrading_scan_verdict(&db)? {
             let affected: Vec<&str> = ledger_records
                 .iter()
                 .filter(|r| r.verdict == "degraded")
@@ -196,7 +196,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                 .filter(|g| COMPLEXITY_DERIVED_GATES.contains(g))
                 .collect();
             if !affected.is_empty() {
-                eprintln!("  ⚠ {}", thin_scan_notice(scored, eligible, &affected));
+                eprintln!("  ⚠ {}", scan_defect_notice(verdict, &affected));
             }
         }
         emit_gate_notices(&ledger_records, shallow_checkout);
@@ -424,22 +424,62 @@ fn blind_health_notice() -> String {
         .to_string()
 }
 
-/// The run-level message for a scan too thin to support any gate that reads
+/// The `actual` a scan defect reports on the violation record.
+///
+/// Terse, because it reaches the FAIL listing and SARIF where a sentence would
+/// not fit. The two states report different pairs on purpose: quoting
+/// `scored`/`eligible` for an oversize majority would print complete coverage
+/// on a run degraded precisely because the table describes a minority.
+fn scan_defect_actual(verdict: codelore_lib::cli_api::facts::ScanCoverageVerdict) -> String {
+    use codelore_lib::cli_api::facts::ScanCoverageVerdict as V;
+    match verdict {
+        V::Below { scored, eligible } => format!("{scored}/{eligible} files scanned"),
+        V::OversizeMajority { scored, oversize } => {
+            format!("{oversize} files over the AST cap vs {scored} scanned")
+        }
+        V::Unknown | V::Vacuous | V::Met { .. } => "no-data".into(),
+    }
+}
+
+/// The run-level message for a scan that cannot support any gate reading
 /// `complexity_metrics`.
 ///
 /// Emitted once per run rather than once per affected gate: the cause is one
 /// scan, and repeating it under each of ten gate names would bury the counts
 /// that are the actionable part. Built as a value so those counts are
 /// asserted — a disclosure that stops naming its magnitude is true and useless.
-fn thin_scan_notice(scored: u64, eligible: u64, affected: &[&str]) -> String {
-    format!(
-        "scan coverage: degraded — the HEAD complexity scan scored {scored} of \
-         {eligible} eligible files, below the coverage floor. Gates reading that \
-         table describe only the part of the repository it measured, and a thinner \
-         scan reads as a healthier one: {}. Re-ingest on a full clone, or set \
-         `fail_on_degraded = false` to keep the disclosure without the failure.",
-        affected.join(", ")
-    )
+///
+/// The two states get different remedies, not just different numbers. A thin
+/// scan lost files it owed and a re-ingest can recover them; an oversize
+/// majority lost nothing and re-ingesting changes nothing, because the cap did
+/// exactly what it exists to do — the repository is simply mostly generated,
+/// and the fix is an ignore rule.
+fn scan_defect_notice(
+    verdict: codelore_lib::cli_api::facts::ScanCoverageVerdict,
+    affected: &[&str],
+) -> String {
+    use codelore_lib::cli_api::facts::ScanCoverageVerdict as V;
+    let gates = affected.join(", ");
+    match verdict {
+        V::Below { scored, eligible } => format!(
+            "scan coverage: degraded — the HEAD complexity scan scored {scored} of \
+             {eligible} eligible files, below the coverage floor. Gates reading that \
+             table describe only the part of the repository it measured, and a thinner \
+             scan reads as a healthier one: {gates}. Re-ingest on a full clone, or set \
+             `fail_on_degraded = false` to keep the disclosure without the failure."
+        ),
+        V::OversizeMajority { scored, oversize } => format!(
+            "scan coverage: degraded — the HEAD complexity scan skipped {oversize} \
+             file(s) past the AST size cap, more than the {scored} it scanned. It lost \
+             nothing, so its coverage reads as complete, but the table describes a \
+             minority of what looks like source here: {gates}. Re-ingesting will not \
+             change this — exclude the generated directories via `.codeloreignore`, or \
+             set `fail_on_degraded = false`."
+        ),
+        V::Unknown | V::Vacuous | V::Met { .. } => {
+            format!("scan coverage: degraded — cause unavailable; gates affected: {gates}")
+        }
+    }
 }
 
 fn emit_gate_notices(
@@ -561,26 +601,30 @@ fn eval_hotspot_gates(
     Ok(((hs_violations, recs), hotspots))
 }
 
-/// The HEAD scan's counts when its coverage fell below the floor, `None`
-/// otherwise.
+/// The scan verdict when the HEAD scan cannot support a gate that reads
+/// `complexity_metrics`, `None` when it can.
 ///
-/// Two callers need this: the gate, which turns it into a violation and an
-/// exit code, and the operator notice, which only reports it. They read the
-/// same store in the same run and must not describe it differently, so the
-/// mapping from verdict to counts lives here rather than at each site — the
-/// same reason the floor comparison itself sits beside its constant.
-fn thin_scan_coverage(db: &codelore_lib::cli_api::facts::FactsDb) -> Result<Option<(u64, u64)>> {
-    Ok(
-        match db
-            .head_scan_coverage_verdict()
-            .context("read scan coverage")?
-        {
-            codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { scored, eligible } => {
-                Some((scored, eligible))
-            }
-            _ => None,
-        },
-    )
+/// Two callers need this: the gate pass, which turns it into a degraded verdict
+/// and an exit code, and the operator notice, which only reports it. They read
+/// the same store in the same run and must not describe it differently, so the
+/// mapping lives here rather than at each site — the same reason the floor
+/// comparison itself sits beside its constant.
+///
+/// The verdict is returned whole rather than reduced to a pair of counts: the
+/// two degrading states carry differently shaped payloads (`scored`/`eligible`
+/// against `scored`/`oversize`), and flattening them would force each caller to
+/// re-derive which it was holding.
+fn degrading_scan_verdict(
+    db: &codelore_lib::cli_api::facts::FactsDb,
+) -> Result<Option<codelore_lib::cli_api::facts::ScanCoverageVerdict>> {
+    use codelore_lib::cli_api::facts::ScanCoverageVerdict as V;
+    let v = db
+        .head_scan_coverage_verdict()
+        .context("read scan coverage")?;
+    Ok(match v {
+        V::Below { .. } | V::OversizeMajority { .. } => Some(v),
+        V::Unknown | V::Vacuous | V::Met { .. } => None,
+    })
 }
 
 /// Evaluate `code_health_min` gate with degraded-detection.
@@ -1140,13 +1184,13 @@ fn evaluate_all_gates(
     // gate stays skipped — it evaluated nothing, so there is nothing to
     // distrust — while both `passed` and `failed` become `degraded`, keeping
     // the precedence the code-health gate already used when it owned this.
-    if let Some((scored, eligible)) = thin_scan_coverage(db)? {
+    if let Some(verdict) = degrading_scan_verdict(db)? {
         let affected = degrade_complexity_derived(&mut recs);
         if !affected.is_empty() && g.fail_on_degraded {
             violations.push(codelore_lib::cli_api::quality_gates::GateViolation {
                 gate: "scan_coverage".into(),
                 path: "(degraded)".into(),
-                actual: format!("{scored}/{eligible} files scanned"),
+                actual: scan_defect_actual(verdict),
                 // Qualitative, matching the `no new cycles` / `>= 0` thresholds
                 // beside it. The numeric floor stays `pub(crate)` in the lib so
                 // nothing out here can re-apply it and drift from the one
@@ -1319,11 +1363,18 @@ mod complexity_degradation_tests {
 
 #[cfg(test)]
 mod degraded_notice_tests {
-    use super::{blind_health_notice, thin_scan_notice};
+    use super::{blind_health_notice, scan_defect_actual, scan_defect_notice};
+    use codelore_lib::cli_api::facts::ScanCoverageVerdict as V;
 
     #[test]
     fn a_thin_scan_notice_carries_both_counts() {
-        let msg = thin_scan_notice(40, 5200, &["cognitive_max"]);
+        let msg = scan_defect_notice(
+            V::Below {
+                scored: 40,
+                eligible: 5200,
+            },
+            &["cognitive_max"],
+        );
         assert!(
             msg.contains("40") && msg.contains("5200"),
             "the magnitude is what the operator acts on, but the message omitted it: {msg}"
@@ -1331,11 +1382,17 @@ mod degraded_notice_tests {
     }
 
     #[test]
-    fn a_thin_scan_notice_names_the_gates_it_degraded() {
-        // The counts say the scan was thin; the gate list says what that cost.
-        // Without it the operator cannot tell whether the run they care about
-        // was affected at all.
-        let msg = thin_scan_notice(40, 5200, &["cognitive_max", "max_dependency_cycles"]);
+    fn a_scan_defect_notice_names_the_gates_it_degraded() {
+        // The counts say the scan was inadequate; the gate list says what that
+        // cost. Without it the operator cannot tell whether the run they care
+        // about was affected at all.
+        let msg = scan_defect_notice(
+            V::Below {
+                scored: 40,
+                eligible: 5200,
+            },
+            &["cognitive_max", "max_dependency_cycles"],
+        );
         assert!(
             msg.contains("cognitive_max") && msg.contains("max_dependency_cycles"),
             "every degraded gate must be named: {msg}"
@@ -1346,11 +1403,62 @@ mod degraded_notice_tests {
     fn a_thin_scan_is_not_described_as_having_returned_nothing() {
         // A thin scan DID return rows. Describing it as empty sends the
         // operator debugging a problem they do not have.
-        let msg = thin_scan_notice(40, 5200, &["cognitive_max"]);
+        let msg = scan_defect_notice(
+            V::Below {
+                scored: 40,
+                eligible: 5200,
+            },
+            &["cognitive_max"],
+        );
         assert!(
             !msg.contains("no rows"),
             "a partial scan returned rows by definition: {msg}"
         );
+    }
+
+    #[test]
+    fn an_oversize_majority_reports_its_own_pair_and_its_own_remedy() {
+        // The failure this guards: quoting scored/eligible here would print
+        // complete coverage — the scan lost nothing — on a run degraded
+        // precisely because the table describes a minority of the tree. And the
+        // remedy differs: re-ingesting cannot help, because the cap did exactly
+        // what it exists to do.
+        let msg = scan_defect_notice(
+            V::OversizeMajority {
+                scored: 5,
+                oversize: 500,
+            },
+            &["cognitive_max"],
+        );
+        assert!(
+            msg.contains("500") && msg.contains('5'),
+            "both sides of the majority must be named: {msg}"
+        );
+        assert!(
+            msg.contains(".codeloreignore"),
+            "an oversize majority is fixed by an ignore rule, not a re-ingest: {msg}"
+        );
+        assert!(
+            !msg.contains("below the coverage floor"),
+            "an oversize scan met the floor; saying otherwise misdirects: {msg}"
+        );
+    }
+
+    #[test]
+    fn the_two_defects_report_different_actuals() {
+        // Both reach the FAIL listing and SARIF, where one pair standing in for
+        // the other would be a wrong number rather than a vague one.
+        let thin = scan_defect_actual(V::Below {
+            scored: 40,
+            eligible: 5200,
+        });
+        let over = scan_defect_actual(V::OversizeMajority {
+            scored: 5,
+            oversize: 500,
+        });
+        assert_ne!(thin, over);
+        assert!(thin.contains("5200"), "{thin}");
+        assert!(over.contains("500") && over.contains("AST cap"), "{over}");
     }
 
     #[test]

@@ -33,6 +33,16 @@ pub(crate) fn below_floor(scored: u64, eligible: u64) -> bool {
     eligible != 0 && (scored as f64) / (eligible as f64) < MIN_SCAN_COVERAGE
 }
 
+/// True when more of what looked like source was size-skipped than scanned.
+///
+/// Beside [`below_floor`] for the same reason, and answering a question that
+/// one structurally cannot: oversize skips are excluded from `eligible` on
+/// purpose, so a scan can meet the floor while describing a minority of the
+/// tree. No cast here — this is an integer comparison, not a ratio.
+pub(crate) fn oversize_majority(scored: u64, oversize: u64) -> bool {
+    oversize > scored
+}
+
 pub(crate) const REASON_BLOB_READ: &str = "blob read failed";
 pub(crate) const REASON_PARSE_ERROR: &str = "parse error";
 
@@ -186,7 +196,15 @@ impl ScanCoverage {
     /// disclosure fires on. Its own tests call it directly, so the warning
     /// and the tests cannot drift apart.
     pub(crate) fn oversize_majority(&self) -> bool {
-        self.skipped_oversize > self.scored
+        oversize_majority(self.scored as u64, self.skipped_oversize as u64)
+    }
+
+    /// Files skipped for exceeding the AST size cap. Deliberately outside the
+    /// loss ratio — a generated bundle is not a file the scan owed the user —
+    /// which is why it needs its own persisted counter rather than folding
+    /// into `eligible`.
+    pub(crate) fn skipped_oversize(&self) -> usize {
+        self.skipped_oversize
     }
 
     /// Emit one aggregate warning when the size cap, not scan failure, is

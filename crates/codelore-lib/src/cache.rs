@@ -25,7 +25,14 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v22`) orphans entries written before the HEAD
+/// The current epoch (`schema_v23`) orphans entries written before the HEAD
+/// complexity scan recorded how many files it skipped for exceeding the AST
+/// size cap. Those stores can report their loss ratio but not the second way
+/// the same scan goes blind — a tree of five real files beside five hundred
+/// minified bundles stores five of five eligible and reads as complete
+/// coverage — and a cache hit never re-runs the scan that would record it.
+///
+/// The prior epoch (`schema_v22`) orphans entries written before the HEAD
 /// complexity scan recorded its coverage into `provenance`. Those stores hold
 /// correct facts, but they cannot say how much of the repository the scan
 /// actually reached, so the code-health gate reads their coverage as unknown
@@ -62,7 +69,7 @@ use crate::Options;
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v22";
+pub const CACHE_EPOCH: &str = "schema_v23";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
