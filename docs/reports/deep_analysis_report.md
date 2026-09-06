@@ -4091,7 +4091,7 @@ message is returned rather than printed so its counts are asserted against a
 real store, since a disclosure that stops naming its magnitude fails the same
 way as the absent one it replaces.
 
-### F380 (Active) — the knowledge-shares idempotence test cannot fail
+### F380 (Fixed — Unreleased) — the knowledge-shares idempotence test cannot fail
 
 `knowledge_shares_materialize_is_idempotent` calls `materialize_knowledge_shares`
 twice and asserts `COUNT(*)` is unchanged. Step one of that function is
@@ -4106,7 +4106,14 @@ change to that key would be reasoned about against a test that cannot object.
 The in-crate drop-and-observe test added alongside that re-keying is the only
 real proof, so the repair is to delete the vacuous one rather than add a third.
 
-### F381 (Active) — the parity suite's other shared helper has the vacuity that was just closed next door
+**Resolved** by deletion, and the case was stronger than recorded. Because
+`materialize_knowledge_shares` returns early on a guard hit, the second call
+executed *nothing at all* — so the test did not even prove the `CREATE OR
+REPLACE` was deterministic, which was the one real property it looked like it
+carried. It paid a full `coupling_repo` ingest to assert that a no-op changed
+no rows.
+
+### F381 (Fixed — Unreleased) — the parity suite's other shared helper has the vacuity that was just closed next door
 
 `parse_summary_csv` gained a cardinality floor because both sides of the
 comparison run through it, so a parser break is a shared failure that leaves both
@@ -4127,6 +4134,14 @@ runs, so a vacuous pass there is a vacuous pass always.
 
 The floor belongs inside the shared helpers, whose breakage *is* the failure
 mode, rather than at one of the call sites.
+
+**Resolved** in `normalize` itself, since both callers are the two sides of one
+comparison and would otherwise each need a copy. The floor is accompanied by a
+test that drives it, because the guard would otherwise have inherited the
+vacuity it exists to prevent: both parity tests are `#[ignore]`d behind
+`CODE_MAAT_PATH`, so an assertion reachable only through them never executes in
+CI. A `#[should_panic]` test feeds `normalize` a lone header row directly, which
+runs on every build and pins the message as well as the behaviour.
 
 ### F382 (Active) — the published provenance sidecar omits the coverage the provenance table now holds
 

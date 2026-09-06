@@ -79,11 +79,36 @@ fn run_code_maat(code_maat: &str, log_path: &Path, analysis: &str) -> String {
 /// remaining rows, trim trailing whitespace per row. Returns a `BTreeSet`
 /// so set-equality semantics are explicit.
 fn normalize(csv: &str) -> BTreeSet<String> {
-    csv.lines()
+    let rows: BTreeSet<String> = csv
+        .lines()
         .skip(1)
         .map(|l| l.trim_end().to_string())
         .filter(|l| !l.is_empty())
-        .collect()
+        .collect();
+    // Both sides of every comparison run through here, so an empty result is a
+    // SHARED failure rather than a one-sided one: each side collapses to the
+    // empty set and `assert_eq!` reports parity having compared nothing. The
+    // `skip(1)` is the fragile part — a CSV that loses its header, gains a
+    // second one, or changes delimiter silently changes what gets dropped.
+    // Asserted here rather than at the call sites because the breakage is a
+    // property of this function, and both callers would need their own copy.
+    assert!(
+        !rows.is_empty(),
+        "normalize produced no rows — the CSV lost the shape this parses \
+         (headerless, empty, or a changed delimiter), which would otherwise \
+         make the comparison below vacuously true"
+    );
+    rows
+}
+
+#[test]
+#[should_panic(expected = "normalize produced no rows")]
+fn normalize_rejects_a_csv_that_lost_its_shape() {
+    // The parity tests are `#[ignore]`d behind `CODE_MAAT_PATH`, so the floor
+    // above would never execute in CI — a guard that runs only when someone
+    // deliberately asks the question it protects is one nobody is watching.
+    // This drives it directly: a lone header row leaves nothing after `skip(1)`.
+    let _ = normalize("entity,n-revs\n");
 }
 
 #[test]
