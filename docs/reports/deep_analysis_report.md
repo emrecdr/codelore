@@ -3994,7 +3994,7 @@ describe the same scan differently, and the message itself is built by a pure
 function so the magnitude it must carry is asserted rather than assumed.
 
 
-### F377 (Active) — the scan detects two kinds of blindness and persists only one
+### F377 (Fixed — Unreleased) — the scan detects two kinds of blindness and persists only one
 
 `ScanCoverage::tally` computes `eligible = scored + lost` and keeps
 `skipped_oversize` in a separate field, deliberately outside the loss ratio. The
@@ -4025,6 +4025,29 @@ rather than only the first. That needs a variant whose payload is shaped unlike
 `Below`'s (`5/5 scanned, 500 oversize` reads nothing like `40/5200 scanned`),
 which is also the strongest argument for keeping the verdict an enum rather than
 collapsing it to an `Option`.
+
+**Resolved**, and the enum argument held up in practice: `OversizeMajority`
+carries `scored`/`oversize` where `Below` carries `scored`/`eligible`, so an
+`Option<(u64, u64)>` return would have printed one pair under the other's
+meaning. Quoting `scored`/`eligible` for an oversize majority is the specific
+wrong answer — that scan lost nothing, so it reports *complete* coverage on a
+run degraded precisely because the table describes a minority.
+
+The two states also get different remedies, which the notice now says: a thin
+scan lost files a re-ingest can recover, while an oversize majority lost nothing
+and re-ingesting changes nothing, because the cap did exactly what it exists to
+do. The fix there is an ignore rule.
+
+Loss is checked first where a tree is both, since it is the more severe fault
+and the one that is repairable. A store predating the new key reads zero rather
+than absent, so silence cannot be mistaken for a majority and fail a correct
+run.
+
+This is also the finding that finally carries an **end-to-end** test, exactly as
+the testing-constraint note under [F378] predicted: the size cap is applied from
+`source.len()` before the parser, so one small source file beside two files over
+the cap ingests to `OversizeMajority { scored: 1, oversize: 2 }` deterministically.
+The loss paths remain unreachable from content.
 
 ### F378 (Fixed — Unreleased) — the coverage floor is enforced only when one particular gate is configured
 

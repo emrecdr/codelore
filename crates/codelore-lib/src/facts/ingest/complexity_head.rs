@@ -132,6 +132,14 @@ impl FactsDb {
             crate::facts::schema::KEY_HEAD_SCAN_SCORED,
             &coverage.scored().to_string(),
         )?;
+        // The second way this scan goes blind, and the one the loss ratio
+        // structurally cannot express: oversize skips are excluded from
+        // `eligible` on purpose, so a tree of five real files beside five
+        // hundred minified bundles stores 5 of 5 and reads as complete.
+        self.set_provenance(
+            crate::facts::schema::KEY_HEAD_SCAN_OVERSIZE,
+            &coverage.skipped_oversize().to_string(),
+        )?;
 
         // Collapse back to the shape the serial drain already consumes. The
         // drain is unchanged; only the classification above is new.

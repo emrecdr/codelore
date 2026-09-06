@@ -583,6 +583,65 @@ fn head_only_ingest_matches_full_ingest_complexity_and_leaves_history_empty() {
 /// This test closes that gap by running the scan for real and asserting the
 /// counts arrive, so the write and the read are pinned by different tests.
 #[test]
+fn a_real_ingest_detects_an_oversize_majority_the_loss_ratio_cannot_see() {
+    // The first end-to-end test of the coverage feature, and it exists because
+    // this is the ONE defect reachable from file content. The loss reasons
+    // (`blob read failed`, `parse error`) need object-store failure — nine `.rs`
+    // files of invalid UTF-8 beside one valid file still ingest as
+    // `Met { scored: 10, eligible: 10 }`, because tree-sitter tolerates the
+    // garbage and scores every file. The size cap does not: it is applied
+    // before the parser, from `source.len()` alone.
+    //
+    // The shape being caught: this repository loses NOTHING, so its loss ratio
+    // is a perfect 1/1 and reads as complete coverage, while the table it
+    // produced describes one file out of three.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "dev@example.com"]);
+    run_git(path, &["config", "user.name", "Dev"]);
+
+    std::fs::create_dir_all(path.join("src")).expect("mkdir");
+    std::fs::write(path.join("src/real.rs"), "pub fn a() -> u32 { 1 }\n").expect("write real");
+    // Two files past the AST cap, so the skipped set outnumbers the scanned one.
+    let bulk = "// ".to_string() + &"x".repeat(2 * 1024 * 1024) + "\n";
+    for name in ["src/bundle_a.rs", "src/bundle_b.rs"] {
+        std::fs::write(path.join(name), &bulk).expect("write bundle");
+    }
+    run_git(path, &["add", "."]);
+    run_git(
+        path,
+        &[
+            "commit",
+            "-m",
+            "one real file beside two bundles",
+            "--quiet",
+        ],
+    );
+
+    let repo = GixRepo::open(path).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let verdict = db.head_scan_coverage_verdict().expect("verdict");
+    assert_eq!(
+        verdict,
+        codelore_lib::facts::ScanCoverageVerdict::OversizeMajority {
+            scored: 1,
+            oversize: 2
+        },
+        "a scan that skipped more than it scored must say so; \
+         `Met` here would report complete coverage of a table describing one file in three"
+    );
+}
+
+#[test]
 fn a_real_ingest_records_the_head_scan_coverage() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let repo = GixRepo::open(tiny.dir.path()).expect("open");
