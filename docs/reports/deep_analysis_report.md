@@ -4057,7 +4057,7 @@ and the shallow-checkout warning — rather than inside one gate's evaluator.
 Recorded rather than fixed because moving it changes which runs can fail, which
 is a policy decision rather than a cleanup.
 
-### F379 (Active) — one command reads the coverage the store now records; three do not
+### F379 (Fixed — Unreleased) — one command reads the coverage the store now records; three do not
 
 The premise for persisting the counts was that a cache hit never re-runs the
 scan, so the ingest-time warning never fires. That premise is true of every
@@ -4076,6 +4076,20 @@ store carries a caveat you cannot see from here". One verdict read and one
 `warn!` there would cover every command. Related to [F375], which records the
 same shape one level down: sibling *scans* uninstrumented rather than sibling
 *commands* unserved.
+
+**Resolved** at the convergence point the finding names. The cache-hit branch
+of `open_or_ingest_with_cache_root` now emits the disclosure, beside the
+dirty-worktree warning that set the precedent for "this cached store carries a
+caveat you cannot see from here" — so it is a property of the store rather than
+of whichever command opened it, and `analyze`, `diff` and `mcp` are served
+without any of them knowing about coverage. Deliberately *not* gated on an
+interactive stderr, unlike its neighbour: that gate exists because
+`is_worktree_dirty` costs an O(tracked-files) walk, while this costs two point
+selects, and the non-interactive path is where the warning matters most — a CI
+job reading hotspot output has no other way to learn the scan was partial. The
+message is returned rather than printed so its counts are asserted against a
+real store, since a disclosure that stops naming its magnitude fails the same
+way as the absent one it replaces.
 
 ### F380 (Active) — the knowledge-shares idempotence test cannot fail
 
