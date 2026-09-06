@@ -183,7 +183,23 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // branches so both paths surface them; stderr keeps stdout a clean SARIF
     // document in --format sarif; suppressed under --quiet.
     if !args.quiet {
-        emit_gate_notices(&ledger_records, shallow_checkout, thin_scan_coverage(&db)?);
+        // Run-level first: one scan degrades every complexity-derived gate, so
+        // the cause is stated once above the per-gate lines rather than
+        // repeated beneath each of them. Fires whether or not
+        // `fail_on_degraded` turns it into a failure — opting out of the
+        // failure is exactly when the operator still wants the diagnosis.
+        if let Some((scored, eligible)) = thin_scan_coverage(&db)? {
+            let affected: Vec<&str> = ledger_records
+                .iter()
+                .filter(|r| r.verdict == "degraded")
+                .map(|r| r.gate.as_str())
+                .filter(|g| COMPLEXITY_DERIVED_GATES.contains(g))
+                .collect();
+            if !affected.is_empty() {
+                eprintln!("  ⚠ {}", thin_scan_notice(scored, eligible, &affected));
+            }
+        }
+        emit_gate_notices(&ledger_records, shallow_checkout);
     }
     // One-per-run hint when the corpus lens is inactive — the check path always
     // computes code-health rows, which carry no corpus_percentile without an
@@ -401,24 +417,34 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 /// magnitude is the whole point of the message: "too thin to judge" does not
 /// tell an operator whether the scan missed one file or nine hundred, and that
 /// is the number that decides whether to investigate.
-fn degraded_health_notice(thin_coverage: Option<(u64, u64)>) -> String {
-    match thin_coverage {
-        Some((scored, eligible)) => format!(
-            "code_health_min: degraded — the HEAD complexity scan scored {scored} of \
-             {eligible} eligible files, below the coverage floor; the health rows below \
-             describe only the part of the repository that was measured"
-        ),
-        None => "code_health_min: degraded — the health scan returned no rows on a \
-             repository that carries analyzable source; the gate reports no verdict rather \
-             than one drawn from a blind scan"
-            .to_string(),
-    }
+fn blind_health_notice() -> String {
+    "code_health_min: degraded — the health scan returned no rows on a repository \
+     that carries analyzable source; the gate reports no verdict rather than one \
+     drawn from a blind scan"
+        .to_string()
+}
+
+/// The run-level message for a scan too thin to support any gate that reads
+/// `complexity_metrics`.
+///
+/// Emitted once per run rather than once per affected gate: the cause is one
+/// scan, and repeating it under each of ten gate names would bury the counts
+/// that are the actionable part. Built as a value so those counts are
+/// asserted — a disclosure that stops naming its magnitude is true and useless.
+fn thin_scan_notice(scored: u64, eligible: u64, affected: &[&str]) -> String {
+    format!(
+        "scan coverage: degraded — the HEAD complexity scan scored {scored} of \
+         {eligible} eligible files, below the coverage floor. Gates reading that \
+         table describe only the part of the repository it measured, and a thinner \
+         scan reads as a healthier one: {}. Re-ingest on a full clone, or set \
+         `fail_on_degraded = false` to keep the disclosure without the failure.",
+        affected.join(", ")
+    )
 }
 
 fn emit_gate_notices(
     ledger_records: &[codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
     shallow_checkout: bool,
-    thin_coverage: Option<(u64, u64)>,
 ) {
     for r in ledger_records {
         match (r.gate.as_str(), r.verdict.as_str()) {
@@ -432,13 +458,11 @@ fn emit_gate_notices(
                 "  ⚠ hotspot_anchored_max: skipped — no anchored hotspot data (no calibration artifact active, or no analyzed file's language is covered by the corpus)"
             ),
             // Two causes reach this verdict, and the magnitude is what decides
-            // whether to investigate or ignore. The violation carries it too, but
-            // only on a run that `fail_on_degraded` is already failing — and
-            // opting out of the failure is precisely when the operator still
-            // wants the diagnosis. This notice fires on both paths, so it is
-            // where the counts have to be.
+            // Only the blind cause reaches this gate now. Thin coverage
+            // degrades ten gates rather than this one, so it is disclosed once
+            // at run level instead of repeated under each gate's name.
             ("code_health_min", "degraded") => {
-                eprintln!("  ⚠ {}", degraded_health_notice(thin_coverage));
+                eprintln!("  ⚠ {}", blind_health_notice());
             }
             ("new_code", "skipped") => eprintln!(
                 "  ⚠ new_code: skipped — {}",
@@ -596,20 +620,16 @@ fn eval_code_health_gate(
     // short-circuit keeps the tree walk off every healthy run.
     let blind = code_health.is_empty()
         && codelore_lib::cli_api::quality_gates::head_has_scorable_source(repo, opts);
-    // Partial coverage is the other way this gate can green on blindness, and
-    // the emptiness witness above cannot see it: a scan that reached a minority
-    // of the repository still returns rows, so `is_empty()` is false and the
-    // gate reports on whatever it happened to measure. The scan's own eligible
-    // count is the honest denominator — a HEAD-tree ratio would fire spuriously
-    // under `--after`/`--before`, where attempting fewer files than the tree
-    // holds is correct — and it is read from `provenance` because a cache hit
-    // never re-runs the scan that computed it.
-    //
-    // The counts are carried rather than collapsed into the boolean, because
-    // the verdict alone cannot say WHICH of the two causes fired and the
-    // violation record has to report the one that did.
-    let thin_coverage = thin_scan_coverage(db)?;
-    let degraded = blind || thin_coverage.is_some();
+    // Thin coverage is the other way this gate can green on blindness, but it
+    // is NOT handled here: it degrades every gate that reads
+    // `complexity_metrics`, not this one, and deciding it inside this
+    // evaluator put it below the `code_health_min` early return above — so a
+    // threshold file configuring any other complexity-derived gate never
+    // reached it at all. It is applied once in `evaluate_all_gates`, where
+    // every gate's record exists. What stays here is the cause that genuinely
+    // belongs to this gate: an empty health set on a repository that carries
+    // analyzable source, which no other gate can witness.
+    let degraded = blind;
     let worst = code_health
         .iter()
         .map(|r| r.score)
@@ -635,13 +655,10 @@ fn eval_code_health_gate(
         violations.push(GateViolation {
             gate: "code_health_min".into(),
             path: "(degraded)".into(),
-            // `no-data` is only true of the blind case. A thin scan DID return
-            // rows, so reporting no-data there sends the operator debugging an
-            // empty-result problem they do not have.
-            actual: match thin_coverage {
-                Some((scored, eligible)) => format!("{scored}/{eligible} files scanned"),
-                None => "no-data".into(),
-            },
+            // Only the blind cause reaches here now, and `no-data` is exactly
+            // true of it. The thin-scan cause carries counts instead, and is
+            // reported by the run-level pass that owns it.
+            actual: "no-data".into(),
             threshold: format!("{min:.1}"),
         });
     } else {
@@ -701,6 +718,36 @@ fn eval_arch_gates(
 /// This is a pure compute layer: it records each gate's verdict in the returned
 /// ledger records (including `"skipped"` and `"degraded"`) and prints nothing.
 /// `run_check_cmd` renders the skip/degraded notices from those records.
+/// Gates whose measurement derives from `complexity_metrics`, and which are
+/// therefore untrustworthy when the HEAD scan that filled that table reached
+/// too little of the repository.
+///
+/// Every entry reads the table, directly or as the universe it seeds:
+/// `import_graph` selects its node set straight from it, so a thin scan
+/// shrinks the graph and reports FEWER cycles — the reads-thinner-as-better
+/// shape the floor exists to catch, and the reason the architecture gates are
+/// here rather than treated as structural.
+///
+/// `disallow_clone_type_1` is the sole exemption: clone detection runs its own
+/// HEAD scan, whose coverage this figure says nothing about.
+///
+/// Deliberately placed against [`assert_every_gate_is_classified`]: that
+/// destructure already fails to compile when a gate is added, so the edit that
+/// forces a new gate to be wired is the same edit that must decide whether it
+/// reads complexity. A list kept anywhere else would drift silently.
+const COMPLEXITY_DERIVED_GATES: &[&str] = &[
+    "cognitive_max",
+    "hotspot_score_max",
+    "hotspot_anchored_max",
+    "code_health_min",
+    "max_dependency_cycles",
+    "max_propagation_cost",
+    "max_red_effort_pct",
+    "code_familiarity_min",
+    "max_findings_in_hot_files",
+    "corpus_percentile_max",
+];
+
 /// Compile-time exhaustiveness anchor for the AUTHORITATIVE gate surface,
 /// mirroring the destructure the MCP `check_gates` tool already carries:
 /// adding a field to `Gates` fails to compile HERE until the new gate is
@@ -714,21 +761,50 @@ fn eval_arch_gates(
 fn assert_every_gate_is_classified(g: &codelore_lib::cli_api::quality_gates::Gates) {
     use codelore_lib::cli_api::quality_gates::Gates;
     let Gates {
-        cognitive_max: _,               // evaluated: eval_hotspot_gates
-        hotspot_score_max: _,           // evaluated: eval_hotspot_gates
-        hotspot_anchored_max: _,        // evaluated: eval_hotspot_gates
-        code_health_min: _,             // evaluated: eval_code_health_gate
-        disallow_clone_type_1: _,       // evaluated: the clone gate in evaluate_all_gates
-        max_dependency_cycles: _,       // evaluated: eval_arch_gates
-        max_propagation_cost: _,        // evaluated: eval_arch_gates
-        max_red_effort_pct: _,          // evaluated: the effort gate in evaluate_all_gates
-        code_familiarity_min: _,        // evaluated: the familiarity gate in evaluate_all_gates
-        max_findings_in_hot_files: _,   // evaluated: the external-findings gate
-        corpus_percentile_max: _,       // evaluated: the corpus-lens gate
+        cognitive_max: _,               // evaluated: eval_hotspot_gates; complexity-derived
+        hotspot_score_max: _,           // evaluated: eval_hotspot_gates; complexity-derived
+        hotspot_anchored_max: _,        // evaluated: eval_hotspot_gates; complexity-derived
+        code_health_min: _,             // evaluated: eval_code_health_gate; complexity-derived
+        disallow_clone_type_1: _,       // evaluated: the clone gate; NOT complexity-derived
+        max_dependency_cycles: _,       // evaluated: eval_arch_gates; complexity-derived
+        max_propagation_cost: _,        // evaluated: eval_arch_gates; complexity-derived
+        max_red_effort_pct: _,          // evaluated: the effort gate; complexity-derived
+        code_familiarity_min: _,        // evaluated: the familiarity gate; complexity-derived
+        max_findings_in_hot_files: _,   // evaluated: the external-findings gate; complexity-derived
+        corpus_percentile_max: _,       // evaluated: the corpus-lens gate; complexity-derived
         fail_on_degraded: _,            // policy: degraded-gate exit semantics, not a gate
         fail_on_skipped: _,             // policy: cross-surface exit-code semantics
         red_effort_exempt_improving: _, // modifier of max_red_effort_pct
     } = g;
+}
+
+/// Mark every complexity-derived gate in `recs` as degraded, returning the
+/// names marked.
+///
+/// Split out of `evaluate_all_gates` so the rule can be tested without a
+/// repository whose scan is actually thin — forcing that needs a corrupt pack
+/// or a blobless clone, so the alternative is no coverage at all for the pass
+/// that decides which gates a thin scan invalidates.
+///
+/// A `skipped` gate stays skipped: it evaluated nothing, so there is nothing to
+/// distrust. Both `passed` and `failed` become `degraded`, which keeps the
+/// precedence the code-health gate used while it owned this rule — "we could
+/// not judge" outranks either judgement drawn from a scan too thin to support
+/// one.
+fn degrade_complexity_derived(
+    recs: &mut [codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
+) -> Vec<&'static str> {
+    let mut affected = Vec::new();
+    for r in recs {
+        if r.verdict == "skipped" {
+            continue;
+        }
+        if let Some(name) = COMPLEXITY_DERIVED_GATES.iter().find(|g| **g == r.gate) {
+            "degraded".clone_into(&mut r.verdict);
+            affected.push(*name);
+        }
+    }
+    affected
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
@@ -1053,6 +1129,33 @@ fn evaluate_all_gates(
         }
     }
 
+    // ── Thin scan degrades every gate that reads the thin table ────────────
+    // The floor used to be consumed inside `eval_code_health_gate`, below that
+    // gate's own `code_health_min` early return, so a threshold file that
+    // configured any OTHER complexity-derived gate never reached it: for those
+    // configs the enforcement was not weakened, it was absent. `cognitive_max`
+    // on a blobless clone scoring forty of five thousand files passed clean.
+    //
+    // Applied here, once, where every gate's record already exists. A skipped
+    // gate stays skipped — it evaluated nothing, so there is nothing to
+    // distrust — while both `passed` and `failed` become `degraded`, keeping
+    // the precedence the code-health gate already used when it owned this.
+    if let Some((scored, eligible)) = thin_scan_coverage(db)? {
+        let affected = degrade_complexity_derived(&mut recs);
+        if !affected.is_empty() && g.fail_on_degraded {
+            violations.push(codelore_lib::cli_api::quality_gates::GateViolation {
+                gate: "scan_coverage".into(),
+                path: "(degraded)".into(),
+                actual: format!("{scored}/{eligible} files scanned"),
+                // Qualitative, matching the `no new cycles` / `>= 0` thresholds
+                // beside it. The numeric floor stays `pub(crate)` in the lib so
+                // nothing out here can re-apply it and drift from the one
+                // comparison that decides the verdict.
+                threshold: "\u{2265} coverage floor".into(),
+            });
+        }
+    }
+
     Ok((violations, recs, hotspot_count, code_health))
 }
 
@@ -1147,12 +1250,80 @@ fn emit_check_sarif(
 }
 
 #[cfg(test)]
+mod complexity_degradation_tests {
+    use super::{COMPLEXITY_DERIVED_GATES, degrade_complexity_derived};
+    use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
+
+    fn rec(gate: &str, verdict: &str) -> GateRunRecord {
+        GateRunRecord {
+            ts: "2026-09-06T00:00:00Z".into(),
+            head_sha: "abc123".into(),
+            gate: gate.into(),
+            threshold: 1.0,
+            value: 1.0,
+            verdict: verdict.into(),
+            mode: "check".into(),
+        }
+    }
+
+    #[test]
+    fn a_gate_that_reads_the_thin_table_is_degraded_whether_it_passed_or_failed() {
+        // The bug this closes: the floor was consumed below `code_health_min`'s
+        // own early return, so a config setting only `cognitive_max` never
+        // reached it and passed clean on a scan covering a fraction of the tree.
+        let mut recs = vec![
+            rec("cognitive_max", "passed"),
+            rec("code_health_min", "failed"),
+        ];
+        let affected = degrade_complexity_derived(&mut recs);
+        assert_eq!(affected.len(), 2, "both gates read complexity_metrics");
+        assert!(
+            recs.iter().all(|r| r.verdict == "degraded"),
+            "a judgement drawn from a scan too thin to support one is not a judgement"
+        );
+    }
+
+    #[test]
+    fn the_clone_gate_is_left_alone() {
+        // Clone detection runs its own HEAD scan; this coverage figure says
+        // nothing about it. Degrading it here would fail a run for a limitation
+        // that does not apply to the gate the user configured.
+        let mut recs = vec![rec("disallow_clone_type_1", "passed")];
+        let affected = degrade_complexity_derived(&mut recs);
+        assert!(
+            affected.is_empty(),
+            "the clone gate does not read complexity_metrics"
+        );
+        assert_eq!(recs[0].verdict, "passed");
+    }
+
+    #[test]
+    fn a_skipped_gate_stays_skipped() {
+        // It evaluated nothing, so there is nothing to distrust — and marking it
+        // degraded would turn a gate that never ran into a build failure.
+        let mut recs = vec![rec("corpus_percentile_max", "skipped")];
+        let affected = degrade_complexity_derived(&mut recs);
+        assert!(affected.is_empty());
+        assert_eq!(recs[0].verdict, "skipped");
+    }
+
+    #[test]
+    fn the_classified_set_is_not_empty_and_excludes_the_one_exemption() {
+        // Anti-vacuity: an empty list would make every assertion above pass
+        // while the pass degraded nothing at all.
+        assert!(!COMPLEXITY_DERIVED_GATES.is_empty());
+        assert!(!COMPLEXITY_DERIVED_GATES.contains(&"disallow_clone_type_1"));
+        assert!(COMPLEXITY_DERIVED_GATES.contains(&"max_dependency_cycles"));
+    }
+}
+
+#[cfg(test)]
 mod degraded_notice_tests {
-    use super::degraded_health_notice;
+    use super::{blind_health_notice, thin_scan_notice};
 
     #[test]
     fn a_thin_scan_notice_carries_both_counts() {
-        let msg = degraded_health_notice(Some((40, 5200)));
+        let msg = thin_scan_notice(40, 5200, &["cognitive_max"]);
         assert!(
             msg.contains("40") && msg.contains("5200"),
             "the magnitude is what the operator acts on, but the message omitted it: {msg}"
@@ -1160,11 +1331,22 @@ mod degraded_notice_tests {
     }
 
     #[test]
+    fn a_thin_scan_notice_names_the_gates_it_degraded() {
+        // The counts say the scan was thin; the gate list says what that cost.
+        // Without it the operator cannot tell whether the run they care about
+        // was affected at all.
+        let msg = thin_scan_notice(40, 5200, &["cognitive_max", "max_dependency_cycles"]);
+        assert!(
+            msg.contains("cognitive_max") && msg.contains("max_dependency_cycles"),
+            "every degraded gate must be named: {msg}"
+        );
+    }
+
+    #[test]
     fn a_thin_scan_is_not_described_as_having_returned_nothing() {
         // A thin scan DID return rows. Describing it as empty sends the
-        // operator debugging a problem they do not have — the confusion the
-        // violation record's `no-data` used to cause on this path.
-        let msg = degraded_health_notice(Some((40, 5200)));
+        // operator debugging a problem they do not have.
+        let msg = thin_scan_notice(40, 5200, &["cognitive_max"]);
         assert!(
             !msg.contains("no rows"),
             "a partial scan returned rows by definition: {msg}"
@@ -1172,8 +1354,8 @@ mod degraded_notice_tests {
     }
 
     #[test]
-    fn a_blind_scan_notice_names_the_other_cause_and_invents_no_counts() {
-        let msg = degraded_health_notice(None);
+    fn the_blind_notice_names_the_other_cause_and_invents_no_counts() {
+        let msg = blind_health_notice();
         assert!(msg.contains("no rows"), "blind cause must be named: {msg}");
         assert!(
             !msg.contains("eligible files"),

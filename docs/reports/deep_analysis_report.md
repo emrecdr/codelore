@@ -4026,7 +4026,7 @@ rather than only the first. That needs a variant whose payload is shaped unlike
 which is also the strongest argument for keeping the verdict an enum rather than
 collapsing it to an `Option`.
 
-### F378 (Active) — the coverage floor is enforced only when one particular gate is configured
+### F378 (Fixed — Unreleased) — the coverage floor is enforced only when one particular gate is configured
 
 The verdict is read inside `eval_code_health_gate`, *after* its own early
 return:
@@ -4056,6 +4056,28 @@ already fire regardless of which gates are configured — `ensure_ingest_witness
 and the shallow-checkout warning — rather than inside one gate's evaluator.
 Recorded rather than fixed because moving it changes which runs can fail, which
 is a policy decision rather than a cleanup.
+
+**Resolved**, with the scope decided deliberately rather than by default. The
+disclosure half turned out to be already complete — `warn_if_degraded` fires at
+ingest time regardless of configured gates, and [F379] closed the cache-hit
+path — so what remained was purely enforcement. It now degrades every gate whose
+measurement derives from `complexity_metrics`, which the audit under-counted:
+`import_graph` selects its node set straight from that table, so a thin scan
+shrinks the graph and reports *fewer* cycles, putting the architecture gates in
+scope too. Ten of the eleven gates qualify; `disallow_clone_type_1` is the sole
+exemption, since clone detection runs its own HEAD scan that this figure says
+nothing about.
+
+The list is deliberately placed against `assert_every_gate_is_classified`, the
+destructure that already fails to compile when a field is added to `Gates`: the
+edit forced to wire a new gate is the same edit that must decide whether it
+reads complexity. A list kept anywhere else would drift silently, which is the
+failure mode this finding is an instance of.
+
+The rule itself is extracted as `degrade_complexity_derived` so it can be tested
+without a repository whose scan is genuinely thin — forcing that needs a corrupt
+pack or a blobless clone, so the alternative was no coverage at all for the pass
+deciding which gates a thin scan invalidates.
 
 ### F379 (Fixed — Unreleased) — one command reads the coverage the store now records; three do not
 
