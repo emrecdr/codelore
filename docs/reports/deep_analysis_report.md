@@ -3926,7 +3926,7 @@ that needs it is exactly the HEAD-time three.
 Noted by a cleanup pass over the change that instrumented the complexity scan.
 
 
-### F376 (Active) — the degraded-coverage counts survive only on the path that was already failing
+### F376 (Fixed — Unreleased) — the degraded-coverage counts survive only on the path that was already failing
 
 A cleanup pass over the coverage instrumentation removed the `tracing::warn!`
 that `eval_code_health_gate` fired whenever the HEAD complexity scan came back
@@ -3981,6 +3981,17 @@ accident:
     not a local fix.
 
 Noted by a cleanup pass over the change that moved the counts onto the violation.
+
+**Resolved** by the second option, with the placement narrowed during
+implementation. `GateRunRecord` was not widened: it has fourteen construction
+sites across three files, and every gate but this one would carry a field it
+never sets. The notice needs the counts, not the record — and `run_check_cmd`
+already holds the `FactsDb`, so it reads the verdict at the point of use rather
+than threading a value out through two signatures that would have carried it
+only to hand it back. The mapping from verdict to counts is now a single
+`thin_scan_coverage` helper shared by the gate and the notice, so the two cannot
+describe the same scan differently, and the message itself is built by a pure
+function so the magnitude it must carry is asserted rather than assumed.
 
 
 ### F377 (Active) — the scan detects two kinds of blindness and persists only one

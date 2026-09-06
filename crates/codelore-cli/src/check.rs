@@ -183,7 +183,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // branches so both paths surface them; stderr keeps stdout a clean SARIF
     // document in --format sarif; suppressed under --quiet.
     if !args.quiet {
-        emit_gate_notices(&ledger_records, shallow_checkout);
+        emit_gate_notices(&ledger_records, shallow_checkout, thin_scan_coverage(&db)?);
     }
     // One-per-run hint when the corpus lens is inactive — the check path always
     // computes code-health rows, which carry no corpus_percentile without an
@@ -394,9 +394,31 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 /// ledger records the evaluator produced. Keeping this out of the compute layer
 /// means `evaluate_all_gates` stays print-free and the notice wording lives
 /// beside the rest of `run_check_cmd`'s reporting.
+/// The `code_health_min` degraded message, naming which of the two causes
+/// fired and — for a thin scan — how thin.
+///
+/// Built as a value rather than printed inline so it can be asserted. The
+/// magnitude is the whole point of the message: "too thin to judge" does not
+/// tell an operator whether the scan missed one file or nine hundred, and that
+/// is the number that decides whether to investigate.
+fn degraded_health_notice(thin_coverage: Option<(u64, u64)>) -> String {
+    match thin_coverage {
+        Some((scored, eligible)) => format!(
+            "code_health_min: degraded — the HEAD complexity scan scored {scored} of \
+             {eligible} eligible files, below the coverage floor; the health rows below \
+             describe only the part of the repository that was measured"
+        ),
+        None => "code_health_min: degraded — the health scan returned no rows on a \
+             repository that carries analyzable source; the gate reports no verdict rather \
+             than one drawn from a blind scan"
+            .to_string(),
+    }
+}
+
 fn emit_gate_notices(
     ledger_records: &[codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
     shallow_checkout: bool,
+    thin_coverage: Option<(u64, u64)>,
 ) {
     for r in ledger_records {
         match (r.gate.as_str(), r.verdict.as_str()) {
@@ -409,14 +431,15 @@ fn emit_gate_notices(
             ("hotspot_anchored_max", "skipped") => eprintln!(
                 "  ⚠ hotspot_anchored_max: skipped — no anchored hotspot data (no calibration artifact active, or no analyzed file's language is covered by the corpus)"
             ),
-            // Two causes reach this verdict — an empty scan on a non-empty repo,
-            // and a scan that covered too little of it — so the notice names
-            // neither. The violation line carries which one fired and its counts.
-            ("code_health_min", "degraded") => eprintln!(
-                "  ⚠ code_health_min: degraded — the health scan did not cover enough of \
-                 this repository to judge it; the gate reports no verdict rather than one \
-                 drawn from a partial scan"
-            ),
+            // Two causes reach this verdict, and the magnitude is what decides
+            // whether to investigate or ignore. The violation carries it too, but
+            // only on a run that `fail_on_degraded` is already failing — and
+            // opting out of the failure is precisely when the operator still
+            // wants the diagnosis. This notice fires on both paths, so it is
+            // where the counts have to be.
+            ("code_health_min", "degraded") => {
+                eprintln!("  ⚠ {}", degraded_health_notice(thin_coverage));
+            }
             ("new_code", "skipped") => eprintln!(
                 "  ⚠ new_code: skipped — {}",
                 new_code_skip_reason(r.threshold, shallow_checkout)
@@ -514,6 +537,28 @@ fn eval_hotspot_gates(
     Ok(((hs_violations, recs), hotspots))
 }
 
+/// The HEAD scan's counts when its coverage fell below the floor, `None`
+/// otherwise.
+///
+/// Two callers need this: the gate, which turns it into a violation and an
+/// exit code, and the operator notice, which only reports it. They read the
+/// same store in the same run and must not describe it differently, so the
+/// mapping from verdict to counts lives here rather than at each site — the
+/// same reason the floor comparison itself sits beside its constant.
+fn thin_scan_coverage(db: &codelore_lib::cli_api::facts::FactsDb) -> Result<Option<(u64, u64)>> {
+    Ok(
+        match db
+            .head_scan_coverage_verdict()
+            .context("read scan coverage")?
+        {
+            codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { scored, eligible } => {
+                Some((scored, eligible))
+            }
+            _ => None,
+        },
+    )
+}
+
 /// Evaluate `code_health_min` gate with degraded-detection.
 /// Returns the gate result bundle + the raw `CodeHealthRow` vec (reused by ratchet).
 fn eval_code_health_gate(
@@ -563,12 +608,7 @@ fn eval_code_health_gate(
     // The counts are carried rather than collapsed into the boolean, because
     // the verdict alone cannot say WHICH of the two causes fired and the
     // violation record has to report the one that did.
-    let thin_coverage = match db.head_scan_coverage_verdict()? {
-        codelore_lib::cli_api::facts::ScanCoverageVerdict::Below { scored, eligible } => {
-            Some((scored, eligible))
-        }
-        _ => None,
-    };
+    let thin_coverage = thin_scan_coverage(db)?;
     let degraded = blind || thin_coverage.is_some();
     let worst = code_health
         .iter()
@@ -1104,4 +1144,40 @@ fn emit_check_sarif(
         &mut stdout,
     )
     .context("emit check SARIF")
+}
+
+#[cfg(test)]
+mod degraded_notice_tests {
+    use super::degraded_health_notice;
+
+    #[test]
+    fn a_thin_scan_notice_carries_both_counts() {
+        let msg = degraded_health_notice(Some((40, 5200)));
+        assert!(
+            msg.contains("40") && msg.contains("5200"),
+            "the magnitude is what the operator acts on, but the message omitted it: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_thin_scan_is_not_described_as_having_returned_nothing() {
+        // A thin scan DID return rows. Describing it as empty sends the
+        // operator debugging a problem they do not have — the confusion the
+        // violation record's `no-data` used to cause on this path.
+        let msg = degraded_health_notice(Some((40, 5200)));
+        assert!(
+            !msg.contains("no rows"),
+            "a partial scan returned rows by definition: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_blind_scan_notice_names_the_other_cause_and_invents_no_counts() {
+        let msg = degraded_health_notice(None);
+        assert!(msg.contains("no rows"), "blind cause must be named: {msg}");
+        assert!(
+            !msg.contains("eligible files"),
+            "there is no ratio to report when the scan returned nothing: {msg}"
+        );
+    }
 }
