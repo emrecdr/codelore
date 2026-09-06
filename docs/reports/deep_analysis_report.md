@@ -4079,6 +4079,19 @@ without a repository whose scan is genuinely thin — forcing that needs a corru
 pack or a blobless clone, so the alternative was no coverage at all for the pass
 deciding which gates a thin scan invalidates.
 
+**Why no end-to-end test accompanies it**, established by experiment rather than
+assumed. The obvious way to build a thin fixture is content the parser rejects,
+so that was tried: nine `.rs` files of invalid UTF-8 beside one valid file
+ingest as `Met { scored: 10, eligible: 10 }`. Tree-sitter tolerates the garbage
+and produces a tree, so every file is `Scored` and nothing is `Lost`. Both loss
+reasons — `blob read failed` and `parse error` — require object-store failure
+rather than file content, which is not constructible without a fragile fixture.
+
+That constraint does **not** apply to the oversize counter [F377] concerns: a
+file larger than `DEFAULT_MAX_AST_FILE_BYTES` yields `SkippedOversize`
+deterministically from content alone, so the oversize-majority case *is*
+testable end to end whenever that finding is taken up.
+
 ### F379 (Fixed — Unreleased) — one command reads the coverage the store now records; three do not
 
 The premise for persisting the counts was that a cache hit never re-runs the
