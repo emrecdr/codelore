@@ -441,7 +441,11 @@ impl FactsDb {
                      `analyze`, to have both halves agree."
                 );
             }
-            return Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir));
+            let db = Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir))?;
+            if let Some(msg) = db.cached_scan_thin_warning() {
+                tracing::warn!("{msg}");
+            }
+            return Ok(db);
         }
 
         tracing::info!("cache miss: ingesting to {}", cache_p.display());
@@ -626,6 +630,47 @@ impl FactsDb {
             .provenance_value(schema::KEY_HEAD_SCAN_ELIGIBLE)?
             .and_then(parse);
         Ok(scored.zip(eligible))
+    }
+
+    /// The warning a cache hit owes when the store it serves came from a HEAD
+    /// scan that reached too little of the repository to describe it.
+    ///
+    /// Returned rather than printed so the text can be asserted. A disclosure
+    /// that quietly stops naming its numbers fails the same way as the missing
+    /// one it replaces, and nothing else would notice.
+    ///
+    /// The ingest-time warning cannot cover this: a cache hit never re-runs the
+    /// scan that emits it. Until the counts were recorded, nothing could — but
+    /// once they were, only `check` read them back, so the same thin store
+    /// produced a `degraded` verdict on one command and unqualified rows on the
+    /// next. This is the read that makes the disclosure a property of the store
+    /// rather than of one caller, which is why it sits beside the dirty-worktree
+    /// warning rather than in any command.
+    ///
+    /// Not gated on an interactive stderr, unlike that neighbour. The gate there
+    /// exists because `is_worktree_dirty` costs an O(tracked-files) walk; this
+    /// costs two point selects against a table with a handful of rows. And the
+    /// non-interactive path is where it matters most — a CI job reading hotspot
+    /// output has no other way to learn the scan was partial.
+    ///
+    /// A read failure is swallowed rather than propagated: this is a hint, and
+    /// failing an otherwise-good cache open because a disclosure could not be
+    /// computed would be the worse trade. Unparseable counts already read as
+    /// `Unknown` and say nothing.
+    fn cached_scan_thin_warning(&self) -> Option<String> {
+        let ScanCoverageVerdict::Below { scored, eligible } =
+            self.head_scan_coverage_verdict().ok()?
+        else {
+            return None;
+        };
+        Some(format!(
+            "cache hit on a store whose HEAD scan reached {scored} of {eligible} \
+             eligible files, below the coverage floor. Analyses derived from that \
+             scan — code health, hotspot complexity, architecture metrics — describe \
+             only the part of the repository that was measured, and a partial scan \
+             reads as a healthier one rather than as an incomplete one. Re-ingest \
+             with `--no-cache` on a full clone to replace it."
+        ))
     }
 
     /// Classify the stored HEAD-scan coverage against the disclosure floor.
@@ -875,6 +920,44 @@ mod scan_coverage_verdict_tests {
                 scored: 40,
                 eligible: 200
             }
+        );
+    }
+
+    #[test]
+    fn a_thin_store_warns_a_cache_hit_with_both_counts() {
+        // The disclosure a cache hit owes every command. Only `check` read the
+        // recorded counts back, so the same store produced a `degraded` verdict
+        // there and unqualified rows everywhere else. The magnitude is the part
+        // that decides whether to re-ingest, so losing it would leave the
+        // warning true and useless.
+        let db = FactsDb::new_in_memory().expect("db");
+        record(&db, "40", "5200");
+        let msg = db
+            .cached_scan_thin_warning()
+            .expect("a store below the floor must warn");
+        assert!(
+            msg.contains("40") && msg.contains("5200"),
+            "the warning must name how thin the scan was: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_complete_or_silent_store_does_not_warn_a_cache_hit() {
+        // Warning on a healthy store would train the reader to ignore it, and
+        // warning on a store that predates the keys would fire on every cache
+        // built before the counts existed.
+        let complete = FactsDb::new_in_memory().expect("db");
+        record(&complete, "100", "100");
+        assert!(
+            complete.cached_scan_thin_warning().is_none(),
+            "a scan that met the floor must not warn"
+        );
+
+        let silent = FactsDb::new_in_memory().expect("db");
+        assert!(
+            silent.cached_scan_thin_warning().is_none(),
+            "a store predating the keys says nothing about its scan, which is \
+             not the same as saying the scan was thin"
         );
     }
 
