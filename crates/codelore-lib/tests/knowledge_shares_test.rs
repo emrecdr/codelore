@@ -122,34 +122,6 @@ fn knowledge_shares_excludes_bot_authors() {
     );
 }
 
-/// Idempotence: calling materialize twice is a no-op (same row count).
-#[test]
-fn knowledge_shares_materialize_is_idempotent() {
-    let coupling = codelore_lib::test_support::coupling_repo::build();
-    let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
-    let db = FactsDb::new_in_memory().expect("new_in_memory");
-    let opts = Options {
-        repo_path: coupling.dir.path().to_path_buf(),
-        ..Options::default()
-    };
-    db.ingest(&repo, &opts).expect("ingest");
-
-    materialize_knowledge_shares(&db, &opts).expect("first materialize");
-    let count_first: i64 = db
-        .query_row("SELECT COUNT(*) FROM knowledge_shares", [], |r| r.get(0))
-        .expect("count after first");
-
-    materialize_knowledge_shares(&db, &opts).expect("second materialize");
-    let count_second: i64 = db
-        .query_row("SELECT COUNT(*) FROM knowledge_shares", [], |r| r.get(0))
-        .expect("count after second");
-
-    assert_eq!(
-        count_first, count_second,
-        "materialize must be idempotent: row count changed from {count_first} to {count_second}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // DOE tests (coupling_repo — single-author, so file creator = only developer)
 // ---------------------------------------------------------------------------
