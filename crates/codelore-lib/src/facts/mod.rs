@@ -617,7 +617,7 @@ impl FactsDb {
     /// Returned as counts rather than a ratio so a caller can report the
     /// actual figures, and so the vacuous `eligible == 0` case (a docs-only
     /// tree, honestly complete) stays distinguishable from thin coverage.
-    pub fn head_scan_coverage(&self) -> Result<Option<(u64, u64)>> {
+    fn head_scan_coverage(&self) -> Result<Option<(u64, u64)>> {
         let parse = |s: String| s.parse::<u64>().ok();
         let scored = self
             .provenance_value(schema::KEY_HEAD_SCAN_SCORED)?
@@ -625,10 +625,7 @@ impl FactsDb {
         let eligible = self
             .provenance_value(schema::KEY_HEAD_SCAN_ELIGIBLE)?
             .and_then(parse);
-        Ok(match (scored, eligible) {
-            (Some(s), Some(e)) => Some((s, e)),
-            _ => None,
-        })
+        Ok(scored.zip(eligible))
     }
 
     /// Classify the stored HEAD-scan coverage against the disclosure floor.

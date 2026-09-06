@@ -3983,4 +3983,143 @@ accident:
 Noted by a cleanup pass over the change that moved the counts onto the violation.
 
 
-The next sweep re-opens at **F377**.
+### F377 (Active) — the scan detects two kinds of blindness and persists only one
+
+`ScanCoverage::tally` computes `eligible = scored + lost` and keeps
+`skipped_oversize` in a separate field, deliberately outside the loss ratio. The
+scan then emits two disclosures on adjacent lines:
+
+```rust
+coverage.warn_if_degraded("complexity", "complexity_metrics");        // loss ratio
+coverage.warn_if_mostly_oversize("complexity", "complexity_metrics"); // oversize majority
+```
+
+Only the first was persisted, and the `(scored, eligible)` pair chosen cannot
+carry the second. A tree with five real source files and five hundred minified
+bundles tallies `scored=5, lost=0, skipped_oversize=500`: the stored counts read
+as **100% coverage**, and `head_scan_coverage_verdict` returns `Met`. The
+emptiness witness misses it too, because the health set has five rows and
+`is_empty()` is false.
+
+`coverage.rs`'s own module doc already names this as "the reads-as-improvement
+failure mode one classification to the left of the one the loss ratio removes",
+so the gap is between what the module knows and what the store keeps. The
+all-oversize case *is* caught, because `head_has_scorable_source` applies no size
+cap; the partial case is the hole, and it is the common one. On a cache hit the
+ingest-time warning is gone and nothing stored can reconstruct it.
+
+The repair is to persist the third counter and have the verdict apply both
+predicates `coverage.rs` already owns — `below_floor` and `oversize_majority` —
+rather than only the first. That needs a variant whose payload is shaped unlike
+`Below`'s (`5/5 scanned, 500 oversize` reads nothing like `40/5200 scanned`),
+which is also the strongest argument for keeping the verdict an enum rather than
+collapsing it to an `Option`.
+
+### F378 (Active) — the coverage floor is enforced only when one particular gate is configured
+
+The verdict is read inside `eval_code_health_gate`, *after* its own early
+return:
+
+```rust
+let Some(min) = g.code_health_min else {
+    return Ok(((Vec::new(), Vec::new()), code_health));
+};
+```
+
+So for any threshold file that does not configure `code_health_min`, the
+coverage verdict is never read, no `degraded` record is written, the notice
+prints nothing, and the run exits 0. The enforcement is not weakened for those
+configs — it is absent.
+
+`complexity_metrics`, the table the coverage describes, feeds far more than that
+one gate: `code_health`, `code_familiarity`, `architecture_trend`, hotspots and
+effort-exposure all read it, and the gates downstream — `cognitive_max`,
+`hotspot_score_max`, `hotspot_anchored_max`, `max_red_effort_pct`,
+`corpus_percentile_max`, `max_findings_in_hot_files` — are `MAX`, share and count
+aggregates that read *thinner* as *better*. `[gates] cognitive_max = 30` with no
+`code_health_min` is a valid non-empty config, and on a blobless partial clone
+scoring forty of five thousand files it passes clean.
+
+The signal belongs at run level, beside the two blindness disclosures that
+already fire regardless of which gates are configured — `ensure_ingest_witnessed`
+and the shallow-checkout warning — rather than inside one gate's evaluator.
+Recorded rather than fixed because moving it changes which runs can fail, which
+is a policy decision rather than a cleanup.
+
+### F379 (Active) — one command reads the coverage the store now records; three do not
+
+The premise for persisting the counts was that a cache hit never re-runs the
+scan, so the ingest-time warning never fires. That premise is true of every
+command, but the recorded fact is read back on exactly one path: grepping every
+consumer of `KEY_HEAD_SCAN_*` returns `check` alone. `analyze`, `diff` and `mcp`
+still depend solely on `warn_if_degraded`, which only fires when the scan runs.
+
+So `codelore analyze --analysis hotspots` on a warm cache built from a partial
+clone prints hotspot rows covering twelve percent of the repository with no
+warning of any kind, while `codelore check` against the *identical store*
+reports `degraded`. Same store, same blindness, opposite disclosure.
+
+The convergence point is the cache-hit branch of `open_or_ingest_with_cache_root`,
+where the dirty-worktree warning already lives as the precedent for "this cached
+store carries a caveat you cannot see from here". One verdict read and one
+`warn!` there would cover every command. Related to [F375], which records the
+same shape one level down: sibling *scans* uninstrumented rather than sibling
+*commands* unserved.
+
+### F380 (Active) — the knowledge-shares idempotence test cannot fail
+
+`knowledge_shares_materialize_is_idempotent` calls `materialize_knowledge_shares`
+twice and asserts `COUNT(*)` is unchanged. Step one of that function is
+`CREATE OR REPLACE TEMP TABLE knowledge_shares AS <deterministic SELECT>`, and
+`doe_scores` is likewise `CREATE OR REPLACE`. A rebuild therefore reproduces an
+identical row count, so the assertion holds whether or not the build-once guard
+exists — the test proves the query is deterministic, not that the guard works.
+
+It advertises coverage it does not provide, which is the more expensive half: the
+guard was recently re-keyed on the options it was built under, and a future
+change to that key would be reasoned about against a test that cannot object.
+The in-crate drop-and-observe test added alongside that re-keying is the only
+real proof, so the repair is to delete the vacuous one rather than add a third.
+
+### F381 (Active) — the parity suite's other shared helper has the vacuity that was just closed next door
+
+`parse_summary_csv` gained a cardinality floor because both sides of the
+comparison run through it, so a parser break is a shared failure that leaves both
+maps empty and every comparison vacuously true. `normalize`, the other
+both-sides helper forty lines above in the same file, has the identical shape and
+did not:
+
+```rust
+fn normalize(csv: &str) -> BTreeSet<String> {
+    csv.lines().skip(1).map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()).collect()
+}
+```
+
+If either CSV drifts to headerless or empty, both sides collapse to the empty set
+and `assert_eq!` compares nothing. The bound on this is that both tests are
+`#[ignore]`d behind `CODE_MAAT_PATH` — but that is also the only time either
+runs, so a vacuous pass there is a vacuous pass always.
+
+The floor belongs inside the shared helpers, whose breakage *is* the failure
+mode, rather than at one of the call sites.
+
+### F382 (Active) — the published provenance sidecar omits the coverage the provenance table now holds
+
+`Manifest` carries every other reproducibility-critical value — grammar pins,
+corpus and defect vintage, cache-key hash, target triple — and `capture` already
+takes `db`, with a doc note reserving it for reading provenance-table values. It
+does not carry scan coverage.
+
+So `codelore analyze --analysis code-health -o out.parquet` against a
+twelve-percent-covered store writes a parquet file and a sidecar
+byte-indistinguishable from one produced on a complete scan. The sidecar exists
+to answer "what was this output computed from", and how much of the repository
+the scan actually reached is exactly that kind of fact. Scoped to `analyze`'s two
+file-output paths, which are the only sidecar write sites. The
+`MANIFEST_SCHEMA_VERSION` bump contract already exists for adding a field.
+
+Found by the same cleanup pass as [F377]–[F381], which read whole files and
+traced call sites rather than diff hunks.
+
+
+The next sweep re-opens at **F383**.
