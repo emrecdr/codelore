@@ -188,16 +188,21 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // repeated beneath each of them. Fires whether or not
         // `fail_on_degraded` turns it into a failure — opting out of the
         // failure is exactly when the operator still wants the diagnosis.
-        if let Some(verdict) = degrading_scan_verdict(&db)? {
-            let affected: Vec<&str> = ledger_records
-                .iter()
-                .filter(|r| r.verdict == "degraded")
-                .map(|r| r.gate.as_str())
-                .filter(|g| COMPLEXITY_DERIVED_GATES.contains(g))
-                .collect();
-            if !affected.is_empty() {
-                eprintln!("  ⚠ {}", scan_defect_notice(verdict, &affected));
-            }
+        //
+        // The ledger filter is the cheap half and runs first: a healthy run
+        // degrades nothing, so the store read never happens. The evaluator has
+        // already consulted the same verdict and dropped it, so this read is a
+        // second answer to a question already asked.
+        let affected: Vec<&str> = ledger_records
+            .iter()
+            .filter(|r| r.verdict == "degraded")
+            .map(|r| r.gate.as_str())
+            .filter(|g| COMPLEXITY_DERIVED_GATES.contains(g))
+            .collect();
+        if !affected.is_empty()
+            && let Some(verdict) = degrading_scan_verdict(&db)?
+        {
+            eprintln!("  ⚠ {}", scan_defect_notice(verdict, &affected));
         }
         emit_gate_notices(&ledger_records, shallow_checkout);
     }
@@ -406,23 +411,17 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     }
 }
 
-/// Emit the per-gate skip / degraded notices to stderr, derived from the
-/// ledger records the evaluator produced. Keeping this out of the compute layer
-/// means `evaluate_all_gates` stays print-free and the notice wording lives
-/// beside the rest of `run_check_cmd`'s reporting.
-/// The `code_health_min` degraded message, naming which of the two causes
-/// fired and — for a thin scan — how thin.
+/// The `code_health_min` degraded message.
 ///
-/// Built as a value rather than printed inline so it can be asserted. The
-/// magnitude is the whole point of the message: "too thin to judge" does not
-/// tell an operator whether the scan missed one file or nine hundred, and that
-/// is the number that decides whether to investigate.
-fn blind_health_notice() -> String {
-    "code_health_min: degraded — the health scan returned no rows on a repository \
+/// A const rather than a value built per call, matching
+/// `CORPUS_PERCENTILE_SKIP_REASON` one arm above it in the same match: the text
+/// can never vary, and a const is just as assertable. Only the blind cause
+/// reaches this gate — thin coverage degrades every complexity-derived gate
+/// rather than this one, and is disclosed once at run level by
+/// [`scan_defect_notice`], which carries the counts.
+const BLIND_HEALTH_NOTICE: &str = "code_health_min: degraded — the health scan returned no rows on a repository \
      that carries analyzable source; the gate reports no verdict rather than one \
-     drawn from a blind scan"
-        .to_string()
-}
+     drawn from a blind scan";
 
 /// The `actual` a scan defect reports on the violation record.
 ///
@@ -482,6 +481,10 @@ fn scan_defect_notice(
     }
 }
 
+/// Emit the per-gate skip / degraded notices to stderr, derived from the
+/// ledger records the evaluator produced. Keeping this out of the compute layer
+/// means `evaluate_all_gates` stays print-free and the notice wording lives
+/// beside the rest of `run_check_cmd`'s reporting.
 fn emit_gate_notices(
     ledger_records: &[codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
     shallow_checkout: bool,
@@ -497,12 +500,12 @@ fn emit_gate_notices(
             ("hotspot_anchored_max", "skipped") => eprintln!(
                 "  ⚠ hotspot_anchored_max: skipped — no anchored hotspot data (no calibration artifact active, or no analyzed file's language is covered by the corpus)"
             ),
-            // Two causes reach this verdict, and the magnitude is what decides
-            // Only the blind cause reaches this gate now. Thin coverage
-            // degrades ten gates rather than this one, so it is disclosed once
-            // at run level instead of repeated under each gate's name.
+            // Only the blind cause reaches this gate. Thin coverage degrades
+            // every complexity-derived gate rather than this one, so it is
+            // disclosed once at run level instead of repeated under each
+            // gate's name.
             ("code_health_min", "degraded") => {
-                eprintln!("  ⚠ {}", blind_health_notice());
+                eprintln!("  ⚠ {BLIND_HEALTH_NOTICE}");
             }
             ("new_code", "skipped") => eprintln!(
                 "  ⚠ new_code: skipped — {}",
@@ -673,12 +676,11 @@ fn eval_code_health_gate(
     // every gate's record exists. What stays here is the cause that genuinely
     // belongs to this gate: an empty health set on a repository that carries
     // analyzable source, which no other gate can witness.
-    let degraded = blind;
     let worst = code_health
         .iter()
         .map(|r| r.score)
         .fold(f64::INFINITY, f64::min);
-    let verdict = if degraded {
+    let verdict = if blind {
         "degraded"
     } else if ch_violations.is_empty() {
         "passed"
@@ -695,7 +697,7 @@ fn eval_code_health_gate(
         mode: "check".into(),
     };
     let mut violations = Vec::new();
-    if degraded && g.fail_on_degraded {
+    if blind && g.fail_on_degraded {
         violations.push(GateViolation {
             gate: "code_health_min".into(),
             path: "(degraded)".into(),
@@ -748,20 +750,6 @@ fn eval_arch_gates(
     Ok((arch_v, recs))
 }
 
-/// Evaluate all configured gates and build ledger records for this run.
-///
-/// Returns `(violations, ledger_records, hotspot_count, code_health_rows)`.
-/// `code_health_rows` is returned so callers (e.g. `--ratchet`) can extract
-/// ratchet metrics without re-running the analysis.
-///
-/// `external_store` is the pre-opened sidecar for the
-/// `max_findings_in_hot_files` gate. Pass `Some(store)` when the sidecar exists
-/// and holds findings; `None` when absent or empty (gate skipped, no sidecar
-/// created).
-///
-/// This is a pure compute layer: it records each gate's verdict in the returned
-/// ledger records (including `"skipped"` and `"degraded"`) and prints nothing.
-/// `run_check_cmd` renders the skip/degraded notices from those records.
 /// Gates whose measurement derives from `complexity_metrics`, and which are
 /// therefore untrustworthy when the HEAD scan that filled that table reached
 /// too little of the repository.
@@ -851,6 +839,20 @@ fn degrade_complexity_derived(
     affected
 }
 
+/// Evaluate all configured gates and build ledger records for this run.
+///
+/// Returns `(violations, ledger_records, hotspot_count, code_health_rows)`.
+/// `code_health_rows` is returned so callers (e.g. `--ratchet`) can extract
+/// ratchet metrics without re-running the analysis.
+///
+/// `external_store` is the pre-opened sidecar for the
+/// `max_findings_in_hot_files` gate. Pass `Some(store)` when the sidecar exists
+/// and holds findings; `None` when absent or empty (gate skipped, no sidecar
+/// created).
+///
+/// This is a pure compute layer: it records each gate's verdict in the returned
+/// ledger records (including `"skipped"` and `"degraded"`) and prints nothing.
+/// `run_check_cmd` renders the skip/degraded notices from those records.
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
 fn evaluate_all_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
@@ -1363,7 +1365,7 @@ mod complexity_degradation_tests {
 
 #[cfg(test)]
 mod degraded_notice_tests {
-    use super::{blind_health_notice, scan_defect_actual, scan_defect_notice};
+    use super::{BLIND_HEALTH_NOTICE, scan_defect_actual, scan_defect_notice};
     use codelore_lib::cli_api::facts::ScanCoverageVerdict as V;
 
     #[test]
@@ -1463,7 +1465,7 @@ mod degraded_notice_tests {
 
     #[test]
     fn the_blind_notice_names_the_other_cause_and_invents_no_counts() {
-        let msg = blind_health_notice();
+        let msg = BLIND_HEALTH_NOTICE;
         assert!(msg.contains("no rows"), "blind cause must be named: {msg}");
         assert!(
             !msg.contains("eligible files"),

@@ -574,14 +574,6 @@ fn head_only_ingest_matches_full_ingest_complexity_and_leaves_history_empty() {
     );
 }
 
-/// A real ingest must leave the HEAD scan's coverage behind it.
-///
-/// The unit tests around `head_scan_coverage_verdict` seed `provenance`
-/// themselves, so they verify the predicate but never that anything writes it.
-/// Deleting both `set_provenance` calls from the scan leaves every one of them
-/// green while the gate reads `Unknown` forever and the enforcement is inert.
-/// This test closes that gap by running the scan for real and asserting the
-/// counts arrive, so the write and the read are pinned by different tests.
 #[test]
 fn a_real_ingest_detects_an_oversize_majority_the_loss_ratio_cannot_see() {
     // The first end-to-end test of the coverage feature, and it exists because
@@ -602,12 +594,11 @@ fn a_real_ingest_detects_an_oversize_majority_the_loss_ratio_cannot_see() {
     run_git(path, &["config", "user.email", "dev@example.com"]);
     run_git(path, &["config", "user.name", "Dev"]);
 
-    std::fs::create_dir_all(path.join("src")).expect("mkdir");
-    std::fs::write(path.join("src/real.rs"), "pub fn a() -> u32 { 1 }\n").expect("write real");
+    write_file(path, "src/real.rs", "pub fn a() -> u32 { 1 }\n");
     // Two files past the AST cap, so the skipped set outnumbers the scanned one.
     let bulk = "// ".to_string() + &"x".repeat(2 * 1024 * 1024) + "\n";
     for name in ["src/bundle_a.rs", "src/bundle_b.rs"] {
-        std::fs::write(path.join(name), &bulk).expect("write bundle");
+        write_file(path, name, &bulk);
     }
     run_git(path, &["add", "."]);
     run_git(
@@ -641,6 +632,14 @@ fn a_real_ingest_detects_an_oversize_majority_the_loss_ratio_cannot_see() {
     );
 }
 
+/// A real ingest must leave the HEAD scan's coverage behind it.
+///
+/// The unit tests around `head_scan_coverage_verdict` seed `provenance`
+/// themselves, so they verify the predicate but never that anything writes it.
+/// Deleting the `set_provenance` calls from the scan leaves every one of them
+/// green while the gate reads `Unknown` forever and the enforcement is inert.
+/// This test closes that gap by running the scan for real and asserting the
+/// counts arrive, so the write and the read are pinned by different tests.
 #[test]
 fn a_real_ingest_records_the_head_scan_coverage() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
