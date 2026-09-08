@@ -64,6 +64,43 @@ fn open_both() -> (GixRepo, GitCliRepo) {
     (gix, cli)
 }
 
+/// Both backends must fail the same way on a path that is not a repository,
+/// and must distinguish "nothing is there" from "this is not a repository".
+///
+/// Conflating the two is what sent a `check --repo <typo>` user looking for a
+/// missing `.git` directory. The oracle only works if the two agree, so the
+/// distinction is asserted on both rather than on the production backend
+/// alone.
+#[test]
+fn both_backends_separate_a_missing_path_from_a_non_repository() {
+    let missing = std::path::Path::new("/nonexistent/codelore-open-diagnostic");
+    let (Err(gix_err), Err(cli_err)) = (GixRepo::open(missing), GitCliRepo::open(missing)) else {
+        panic!("both backends must reject a missing path");
+    };
+    for (backend, err) in [("gix", &gix_err), ("cli", &cli_err)] {
+        assert!(
+            err.to_string().contains("does not exist"),
+            "{backend} must say the path is absent, got: {err}"
+        );
+    }
+
+    // A directory that exists but holds no repository must still report the
+    // other diagnosis — otherwise the new check would swallow the real one.
+    let empty = tempfile::tempdir().expect("tempdir");
+    let (Err(gix_err), Err(cli_err)) =
+        (GixRepo::open(empty.path()), GitCliRepo::open(empty.path()))
+    else {
+        panic!("both backends must reject a directory holding no repository");
+    };
+    for (backend, err) in [("gix", &gix_err), ("cli", &cli_err)] {
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("does not exist"),
+            "{backend} must not report an existing directory as absent, got: {msg}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
