@@ -633,6 +633,33 @@ impl Options {
                     .to_string(),
             ));
         }
+        // Explicitly-named input files must exist. These four are hashed by
+        // content into the cache key, and the hasher treats an unreadable
+        // path as "no override" — so a typo does not just go unnoticed, it
+        // collapses the key onto the run that named no file at all. On a
+        // cold cache that surfaces as a clean read error, but on a warm one
+        // the typo'd run hits the un-grouped entry and fails much later with
+        // a missing-table error from the query layer. Rejecting the path up
+        // front makes both paths report the same thing.
+        //
+        // Only the explicit flags are checked: the auto-discovered siblings
+        // (`.codelore-teams`, `.codelorebots`) are absent in most repos and
+        // being absent is what "no override" legitimately means for them.
+        for (flag, path) in [
+            ("--group-file", self.group_file.as_ref()),
+            ("--team-map-file", self.team_map_file.as_ref()),
+            ("--calibration", self.calibration.as_ref()),
+            ("--defect-calibration", self.defect_calibration.as_ref()),
+        ] {
+            if let Some(p) = path
+                && !p.is_file()
+            {
+                return Err(crate::CodeLoreError::InvalidOptions(format!(
+                    "{flag} {} must be an existing file",
+                    p.display()
+                )));
+            }
+        }
         if let Some(dir) = &self.temp_dir {
             if !dir.is_dir() {
                 return Err(crate::CodeLoreError::InvalidOptions(format!(
@@ -1340,6 +1367,68 @@ mod tests {
             format!("{err}").contains("temp-dir"),
             "error must name the offending flag: {err}"
         );
+    }
+
+    #[test]
+    fn validate_rejects_every_missing_named_input_file() {
+        // Each of these is content-hashed into the cache key, where an
+        // unreadable path reads as "no override" — so a typo silently
+        // collapses onto the no-file key and only fails later, from the
+        // query layer, once a warm cache serves the un-overridden store.
+        let missing = std::path::PathBuf::from("/nonexistent/codelore-input-file");
+        for (flag, opts) in [
+            (
+                "group-file",
+                Options {
+                    group_file: Some(missing.clone()),
+                    ..Options::default()
+                },
+            ),
+            (
+                "team-map-file",
+                Options {
+                    team_map_file: Some(missing.clone()),
+                    ..Options::default()
+                },
+            ),
+            (
+                "calibration",
+                Options {
+                    calibration: Some(missing.clone()),
+                    ..Options::default()
+                },
+            ),
+            (
+                "defect-calibration",
+                Options {
+                    defect_calibration: Some(missing.clone()),
+                    ..Options::default()
+                },
+            ),
+        ] {
+            let Err(err) = opts.validate() else {
+                panic!("missing --{flag} must fail");
+            };
+            assert!(
+                format!("{err}").contains(flag),
+                "error must name the offending flag: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_named_input_files_that_exist() {
+        // Anti-vacuity partner: the rejection above must come from the file
+        // being absent, not from naming these fields at all.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("groups.txt");
+        std::fs::write(&file, "a=b\n").unwrap();
+        let opts = Options {
+            group_file: Some(file.clone()),
+            team_map_file: Some(file),
+            ..Options::default()
+        };
+        assert!(opts.validate().is_ok(), "existing files must validate");
     }
 
     #[test]
