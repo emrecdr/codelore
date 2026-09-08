@@ -658,7 +658,7 @@ impl FactsDb {
     ///
     /// Not gated on an interactive stderr, unlike that neighbour. The gate there
     /// exists because `is_worktree_dirty` costs an O(tracked-files) walk; this
-    /// costs two point selects against a table with a handful of rows. And the
+    /// costs a few point selects against a table with a handful of rows. And the
     /// non-interactive path is where it matters most — a CI job reading hotspot
     /// output has no other way to learn the scan was partial.
     ///
@@ -667,19 +667,31 @@ impl FactsDb {
     /// computed would be the worse trade. Unparseable counts already read as
     /// `Unknown` and say nothing.
     fn cached_scan_thin_warning(&self) -> Option<String> {
-        let ScanCoverageVerdict::Below { scored, eligible } =
-            self.head_scan_coverage_verdict().ok()?
-        else {
-            return None;
-        };
-        Some(format!(
-            "cache hit on a store whose HEAD scan reached {scored} of {eligible} \
-             eligible files, below the coverage floor. Analyses derived from that \
-             scan — code health, hotspot complexity, architecture metrics — describe \
-             only the part of the repository that was measured, and a partial scan \
-             reads as a healthier one rather than as an incomplete one. Re-ingest \
-             with `--no-cache` on a full clone to replace it."
-        ))
+        // Exhaustive, with no `_` arm, deliberately. Every other consumer of
+        // this verdict is already a `match` and so was forced to reconsider
+        // when a second degrading state was added to the enum; this one was
+        // written as a `let`-else and absorbed it silently instead. Naming
+        // every variant makes the next one a compile error here too.
+        match self.head_scan_coverage_verdict().ok()? {
+            ScanCoverageVerdict::Below { scored, eligible } => Some(format!(
+                "cache hit on a store whose HEAD scan reached {scored} of {eligible} \
+                 eligible files, below the coverage floor. Analyses derived from that \
+                 scan — code health, hotspot complexity, architecture metrics — describe \
+                 only the part of the repository that was measured, and a partial scan \
+                 reads as a healthier one rather than as an incomplete one. Re-ingest \
+                 with `--no-cache` on a full clone to replace it."
+            )),
+            // The rest are silent, and are spelled out rather than swept up by
+            // `_` so that a new state has to be decided here. They are not
+            // silent for the same reason: the last three have nothing to
+            // disclose, while `OversizeMajority` is a gap — the ingest-time
+            // pass does warn on it, so a cache hit is the only path that says
+            // nothing about a scan whose table describes a minority of the tree.
+            ScanCoverageVerdict::OversizeMajority { .. }
+            | ScanCoverageVerdict::Unknown
+            | ScanCoverageVerdict::Vacuous
+            | ScanCoverageVerdict::Met { .. } => None,
+        }
     }
 
     /// Classify the stored HEAD-scan coverage against the disclosure floor.

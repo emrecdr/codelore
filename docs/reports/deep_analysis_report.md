@@ -4220,4 +4220,45 @@ Found by the same cleanup pass as [F377]–[F381], which read whole files and
 traced call sites rather than diff hunks.
 
 
-The next sweep re-opens at **F383**.
+### F383 (Active) — a cache hit discloses one of the two ways the scan went blind
+
+`FactsDb::cached_scan_thin_warning` renders a message for
+`ScanCoverageVerdict::Below` and returns `None` for every other state, including
+`OversizeMajority`. The ingest path does not have that gap: `populate_complexity`
+calls both `warn_if_degraded` and `warn_if_mostly_oversize`, so a cache **miss**
+discloses either defect and a cache **hit** discloses only the first.
+
+That inverts the reason the cache-hit warning exists. It was added so the
+disclosure would be a property of the store rather than of whichever command
+happened to read it — a thin store previously produced a `degraded` verdict under
+`check` and unqualified rows under everything else. An oversize majority now
+reproduces exactly that split: `check` fails on it, because
+`degrading_scan_verdict` treats `Below` and `OversizeMajority` alike, while
+`analyze`, `explain` and the MCP surfaces open the same store and say nothing.
+The affected repository is the one least able to notice — its scan lost nothing,
+so its loss ratio reads as complete coverage while the table describes a minority
+of the tree.
+
+The reason this one state was missed is structural rather than careless. Three
+consumers of the verdict — `degrading_scan_verdict`, `scan_defect_actual`,
+`scan_defect_notice` — are exhaustive matches with no wildcard arm, so adding the
+variant failed to compile until each was updated. `cached_scan_thin_warning` was
+written as a `let`-else, which routes every unmatched state into its bail arm; it
+was the only non-exhaustive read of the enum and the only one that went stale,
+in the same commit that added the variant and edited the same file.
+
+That half is now closed: the function is an exhaustive match spelling out every
+variant with no wildcard arm, so a third degrading state is a compile error here
+rather than silence, and the gap that remains is named in the code instead of
+being absorbed. What is left is the behavioural half — deciding
+what a cache hit should say about an oversize majority, and whether the message
+belongs beside the `Below` prose or in a shared renderer. Recorded rather than
+fixed because emitting a warning where none is emitted today changes observable
+output, and that edit is also where a shared `is_degrading` predicate on
+`ScanCoverageVerdict` would earn a second caller; adding it now, with one caller,
+would be an abstraction ahead of its use.
+
+Found by a cleanup pass over the range that added the second degrading state.
+
+
+The next sweep re-opens at **F384**.
