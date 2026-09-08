@@ -168,7 +168,9 @@ jobs:
         # so end-users get the dashboard out of the box; source
         # installs (`cargo install codelore`) default OFF.
         # See `crates/codelore-lib/build.rs` for the JS-dep fetch.
-        run: cargo build --release -p codelore --target ${{ matrix.target }} --features spa
+        # `--locked` so the published binary is built from the audited
+        # `Cargo.lock` rather than a fresh resolution the `deny` job never saw.
+        run: cargo build --locked --release -p codelore --target ${{ matrix.target }} --features spa
 
       - name: Stage artifact
         shell: bash
@@ -191,7 +193,19 @@ jobs:
             cp "target/${{ matrix.target }}/release/codelore.exe" "$stage_dir/codelore.exe"
             cp README.md "$stage_dir/README.md"
             cp CHANGELOG.md "$stage_dir/CHANGELOG.md"
-            (cd "$stage_dir" && 7z a "../${archive_name}.zip" codelore.exe README.md CHANGELOG.md LICENSE LICENSE-MPL-codelore-rca NOTICE 2>/dev/null || true)
+            # 7-Zip exits non-zero on non-fatal warnings while still writing a
+            # usable archive, so its status is deliberately not the gate. What
+            # is checked instead is the archive's *contents*: every downstream
+            # control validates these bytes and none validates what is inside,
+            # so an archive missing the binary would be hashed into
+            # SHA256SUMS, receive a genuine SLSA attestation, and publish as
+            # authentic. stderr is no longer discarded, so a real failure is
+            # diagnosable from the job log rather than silent.
+            (cd "$stage_dir" && 7z a "../${archive_name}.zip" codelore.exe README.md CHANGELOG.md LICENSE LICENSE-MPL-codelore-rca NOTICE) || true
+            if ! 7z l "dist/${archive_name}.zip" | grep -q 'codelore\.exe'; then
+              echo "::error::dist/${archive_name}.zip does not contain codelore.exe"
+              exit 1
+            fi
           else
             cp "target/${{ matrix.target }}/release/codelore" "$stage_dir/codelore"
             tar -C "$stage_dir" -czf "dist/${archive_name}.tar.gz" codelore LICENSE LICENSE-MPL-codelore-rca NOTICE
@@ -203,6 +217,10 @@ jobs:
         with:
           name: codelore-${{ matrix.target }}
           path: dist/
+          # Matches the container and attestation uploads: an empty upload
+          # here would hand the signer nothing to attest and surface only as
+          # a confusing downstream failure.
+          if-no-files-found: error
 
   # Trusted signer — the only job in this workflow permitted to sign.
   #
