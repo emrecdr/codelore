@@ -146,13 +146,18 @@ by checking root node kind_id against enum constants:
 
 | Grammar | Version | Key node |
 |---------|---------|----------|
+| tree-sitter (core) | =0.25.3 | the ABI the five grammars' node IDs were generated against |
 | tree-sitter-javascript | =0.23.1 | program id=133 |
 | tree-sitter-typescript | =0.23.1 | program id=166/172 |
 | tree-sitter-python | =0.23.6 | module id=108 |
 | tree-sitter-java | =0.23.5 | program id=138 |
 | tree-sitter-rust | =0.23.2 | source_file id=155 |
 
-These five are the whole set. Kotlin, C++ and the two Mozilla helper grammars
+The core pin is listed first because it is what makes the others meaningful: a
+grammar bumped alone either fails to load against this ABI or, worse, loads and
+renumbers node IDs so the metrics stay plausible and become wrong.
+
+Those five grammars are the whole set. Kotlin, C++ and the two Mozilla helper grammars
 (`ccomment`, `preproc`) were removed once it was established that nothing in the
 product could reach them; see "Unreachable-grammar excision" above. `language_cpp.rs`
 and the `get_language!(tree_sitter_cpp)` macro arm went with them, so no grammar

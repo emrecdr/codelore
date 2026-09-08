@@ -250,7 +250,6 @@ The action's startup cost is essentially the download (≈ 200-300 ms on warm Gi
 |---|---|
 | `contents: read` | Required by `actions/checkout` (default) |
 | `security-events: write` | Required by `github/codeql-action/upload-sarif` |
-| `actions: read` | (Optional) Lets the action read previous run metadata for caching |
 
 ## Versioning
 

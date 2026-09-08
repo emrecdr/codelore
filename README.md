@@ -362,10 +362,13 @@ code_health_min = 38.0
 # Exactly one import cycle exists today. A second one fails the gate.
 max_dependency_cycles = 1
 # Share of recent churn landing in red-band files, counted against
-# health-scored churn only and exempting churn that improves a file's health.
-# ~29% today while a refactor campaign is in flight; the ceiling tracks that
-# with margin. See docs/advanced-usage.md for the full definition.
+# health-scored churn only. ~29% today while a refactor campaign is in
+# flight; the ceiling tracks that with margin. See docs/advanced-usage.md
+# for the full definition.
 max_red_effort_pct = 30.0
+# Compare the ceiling against only the *degrading* share — churn that
+# refactored a red file toward health is exempt. Off unless set.
+red_effort_exempt_improving = true
 ```
 
 A bound that tracks today's worst gates on *regression*, not on the status quo. [This repository's own thresholds file](.codelore-thresholds.toml) is a worked example — every gate carries the measurement it came from and why its margin exists.
@@ -380,6 +383,8 @@ A bound that tracks today's worst gates on *regression*, not on the status quo. 
 ```
 
 `codelore check` exits non-zero on any violation, which fails the step and the build. With no thresholds file it passes vacuously — configured gates are what make it bind.
+
+One failure mode is worth knowing before it surprises you: a gate whose analysis produced no trustworthy data is recorded as **`degraded`** and, by default, fails. A gate must not go green on blindness. The usual trigger is a HEAD complexity scan that reached too little of the repository — a blobless partial clone, or a tree whose files are mostly oversize generated bundles — which raises a `scan_coverage` violation and degrades every complexity-derived gate at once. That means a run can turn red without any threshold or any line of your code changing. Set `fail_on_degraded = false` under `[gates]` to keep the disclosure without the failure; set `fail_on_skipped = true` to also fail gates that had nothing to evaluate at all. Both are explained in [docs/advanced-usage.md](docs/advanced-usage.md#quality-gate).
 
 **4. Ratchet, so the bar rises with you**
 

@@ -98,6 +98,8 @@ pub trait Repo: Send + Sync {
 }
 ```
 
+Rendered above as one flat list, but the trait splits evenly: seven methods are required — `walk_commits`, `changed_files`, `diff_hunks`, `resolve_alias`, `head_sha`, `tracked_paths_at_head`, `tags` — and seven carry **default bodies**: `is_worktree_dirty` (returns `false`), `merge_or_rebase_in_progress`, `is_shallow`, `read_blob_at` (returns `Ok(None)`), `read_blob_at_head`, `blob_reader_at` and `worktree_changes`. That split matters for the two-backend rule below: a backend that fails to override one of the seven defaults still compiles, and then answers *no blob* or *never dirty* instead of failing. The compiler cannot catch that; the differential tests are what does.
+
 The small `BlobReader` companion trait (`fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>>`) reads many blobs at one revision without re-resolving rev→commit→root-tree per call — the HEAD-time scans build one per rayon worker via `map_init`.
 
 Two implementations:
