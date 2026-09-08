@@ -64,8 +64,18 @@ impl FactsDb {
             .map_init(
                 || repo.blob_reader_at("HEAD"),
                 |reader, (rel, lang)| {
-                    let code = match reader.read(&rel) {
-                        Ok(Some(code)) => code,
+                    // Capped read so an oversize blob is rejected from its
+                    // object header where the backend can, rather than being
+                    // allocated in full and immediately discarded.
+                    let cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES;
+                    let code = match reader.read_capped(&rel, cap as u64) {
+                        Ok(Some(crate::repo::BlobRead::Data(code))) => code,
+                        Ok(Some(crate::repo::BlobRead::Oversize(size))) => {
+                            tracing::debug!(
+                                "imports: skipping {rel} ({size} bytes > {cap}-byte AST cap)"
+                            );
+                            return ScanOutcome::SkippedOversize;
+                        }
                         Ok(None) => {
                             // Path not tracked at HEAD; skip (non-fatal, the
                             // rest of the scan continues).
@@ -80,14 +90,6 @@ impl FactsDb {
                             return ScanOutcome::Lost(REASON_BLOB_READ);
                         }
                     };
-                    if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                        tracing::debug!(
-                            "imports: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
-                            size = code.len(),
-                            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                        );
-                        return ScanOutcome::SkippedOversize;
-                    }
                     match extract_imports(&code, lang) {
                         Ok(imports) => ScanOutcome::Scored((rel, imports)),
                         Err(e) => {

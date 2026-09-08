@@ -53,8 +53,29 @@ impl FactsDb {
                         // exists on disk but isn't tracked at HEAD (a freshly
                         // ingested commit may have added paths not yet in any
                         // tree the backend has cached).
-                        let source = match reader.read(&path) {
-                            Ok(Some(b)) => b,
+                        // Capped read: an oversize blob is rejected from its
+                        // object header where the backend can, so the bytes
+                        // this branch would immediately discard are never
+                        // allocated. Under `into_par_iter` that allocation was
+                        // per worker.
+                        let cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES;
+                        let source = match reader.read_capped(&path, cap as u64) {
+                            Ok(Some(crate::repo::BlobRead::Data(b))) => b,
+                            Ok(Some(crate::repo::BlobRead::Oversize(size))) => {
+                                // Skip oversized files before handing to
+                                // tree-sitter. Without this guard, deeply-nested
+                                // generated/minified files (sqlite3.c, .pb.cc,
+                                // minified .js) can OOM or stack-overflow the AST
+                                // walker. Log at debug — minified bundles in
+                                // `node_modules`-style layouts are the common case
+                                // and we'd otherwise drown the console.
+                                tracing::debug!(
+                                    "complexity: skipping {path} ({size} bytes > {cap}-byte AST \
+                                     cap; likely generated/minified; excluded from complexity \
+                                     metrics)"
+                                );
+                                return ScanOutcome::SkippedOversize;
+                            }
                             Ok(None) => {
                                 // Path not tracked at HEAD; skip (matches the
                                 // HEAD-time scan semantic of "current files only").
@@ -73,21 +94,6 @@ impl FactsDb {
                                 return ScanOutcome::Lost(REASON_BLOB_READ);
                             }
                         };
-                        // Skip oversized files before handing to tree-sitter.
-                        // Without this guard, deeply-nested generated/minified
-                        // files (sqlite3.c, .pb.cc, minified .js) can OOM or
-                        // stack-overflow the AST walker. Log at debug — minified
-                        // bundles in `node_modules`-style layouts are the common
-                        // case and we'd otherwise drown the console.
-                        if source.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                            tracing::debug!(
-                                "complexity: skipping {path} ({size} bytes > {cap}-byte AST cap; \
-                             likely generated/minified; excluded from complexity metrics)",
-                                size = source.len(),
-                                cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                            );
-                            return ScanOutcome::SkippedOversize;
-                        }
                         // Path only used for error reporting in compute_for_file;
                         // the repo-relative form is more useful than the absolute
                         // working-tree path anyway.

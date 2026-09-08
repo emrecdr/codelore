@@ -58,8 +58,22 @@ impl FactsDb {
                     // blob support return Ok(None) — same skip behaviour as
                     // the disk-not-found case the previous let-Ok-else
                     // handled.
-                    let code = match reader.read(&rel) {
-                        Ok(Some(code)) => code,
+                    // Capped read so an oversize blob is rejected from its
+                    // object header where the backend can, rather than being
+                    // allocated in full and immediately discarded.
+                    let cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES;
+                    let code = match reader.read_capped(&rel, cap as u64) {
+                        Ok(Some(crate::repo::BlobRead::Data(code))) => code,
+                        Ok(Some(crate::repo::BlobRead::Oversize(size))) => {
+                            // Skip oversized files (generated / minified)
+                            // before tree-sitter to avoid OOM / stack-overflow
+                            // on deeply nested generated code. Same cap as the
+                            // complexity pass.
+                            tracing::debug!(
+                                "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)"
+                            );
+                            return Ok(ScanOutcome::SkippedOversize);
+                        }
                         Ok(None) => {
                             // Path not tracked at HEAD; skip (non-fatal, the
                             // rest of the scan continues).
@@ -74,17 +88,6 @@ impl FactsDb {
                             return Ok(ScanOutcome::Lost(REASON_BLOB_READ));
                         }
                     };
-                    // Skip oversized files (generated / minified) before
-                    // tree-sitter to avoid OOM / stack-overflow on deeply
-                    // nested generated code. Same cap as complexity pass.
-                    if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                        tracing::debug!(
-                            "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
-                            size = code.len(),
-                            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                        );
-                        return Ok(ScanOutcome::SkippedOversize);
-                    }
                     // A file that fingerprints to nothing is still fully
                     // covered — it was read and walked, it simply holds no
                     // extractable functions.
