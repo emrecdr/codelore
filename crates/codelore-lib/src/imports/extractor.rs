@@ -160,7 +160,7 @@ fn collect_rust_imports(decl: Node<'_>, source: &[u8], out: &mut Vec<RawImport>)
         return;
     };
     let mut targets = Vec::new();
-    push_use_targets(argument, source, "", &mut targets);
+    push_use_targets(argument, source, "", 0, &mut targets);
     for target in targets {
         if target.is_empty() {
             continue;
@@ -170,9 +170,42 @@ fn collect_rust_imports(decl: Node<'_>, source: &[u8], out: &mut Vec<RawImport>)
     }
 }
 
+/// Deepest `use`-tree nesting [`push_use_targets`] will descend.
+///
+/// The byte cap this walker already sits behind
+/// (`DEFAULT_MAX_AST_FILE_BYTES`) exists to turn deeply-nested generated
+/// code into a graceful skip, but it bounds *size*, not *depth*: a
+/// source file well under two megabytes can still nest
+/// `use a::{a::{ … }}` far enough to exhaust the stack of the rayon
+/// worker running the scan. That is an abort, not a skipped file — it
+/// takes the whole ingest with it and no error type can catch it.
+///
+/// Real declarations nest three or four levels. This bound sits two
+/// orders of magnitude above that, so every legitimate `use` expands
+/// exactly as before; past it the subtree is dropped and the file keeps
+/// whatever targets were already collected.
+const MAX_USE_TREE_DEPTH: u32 = 128;
+
 /// Recurse a Rust use-tree, threading the `::`-joined module path built
 /// so far, pushing one canonical target string per leaf.
-fn push_use_targets(node: Node<'_>, source: &[u8], prefix: &str, out: &mut Vec<String>) {
+///
+/// `depth` counts nesting levels descended so far and stops the walk at
+/// [`MAX_USE_TREE_DEPTH`]; see that constant for why a byte cap alone
+/// does not hold this line.
+fn push_use_targets(
+    node: Node<'_>,
+    source: &[u8],
+    prefix: &str,
+    depth: u32,
+    out: &mut Vec<String>,
+) {
+    if depth >= MAX_USE_TREE_DEPTH {
+        tracing::debug!(
+            depth = MAX_USE_TREE_DEPTH,
+            "imports: use-tree deeper than the nesting cap; dropping the remaining subtree"
+        );
+        return;
+    }
     match node.kind() {
         // `path::{ … }` — fold `path` into the prefix, recurse the group.
         "scoped_use_list" => {
@@ -182,20 +215,20 @@ fn push_use_targets(node: Node<'_>, source: &[u8], prefix: &str, out: &mut Vec<S
             let new_prefix =
                 inner.map_or_else(|| prefix.to_string(), |p| join_use_path(prefix, &p));
             if let Some(list) = node.child_by_field_name("list") {
-                push_use_targets(list, source, &new_prefix, out);
+                push_use_targets(list, source, &new_prefix, depth + 1, out);
             }
         }
         // `{ a, b, … }` — recurse each leaf under the same prefix.
         "use_list" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                push_use_targets(child, source, prefix, out);
+                push_use_targets(child, source, prefix, depth + 1, out);
             }
         }
         // `path as alias` — keep the path, drop the alias.
         "use_as_clause" => {
             if let Some(path) = node.child_by_field_name("path") {
-                push_use_targets(path, source, prefix, out);
+                push_use_targets(path, source, prefix, depth + 1, out);
             }
         }
         // `self` inside a group (`use a::{self, b}`) is the parent module.
@@ -859,6 +892,24 @@ mod tests {
         got
     }
 
+    /// `use crate::m0::{m1::{ … ::{Item} }}` nested `levels` deep — one
+    /// leaf at the bottom, so a full descent yields exactly one target.
+    fn nested_use_source(levels: usize) -> String {
+        use std::fmt::Write as _;
+        let mut src = String::from("use crate::");
+        for i in 0..levels {
+            // `write!` into a String rather than `push_str(&format!(..))`
+            // — the extra allocation is what `format_push_string` flags.
+            write!(src, "m{i}::{{").expect("writing to a String is infallible");
+        }
+        src.push_str("Item");
+        for _ in 0..levels {
+            src.push('}');
+        }
+        src.push_str(";\n");
+        src
+    }
+
     #[test]
     fn rust_top_level_group_expands_to_each_leaf() {
         assert_eq!(
@@ -876,6 +927,39 @@ mod tests {
                 "a::b::d".to_string(),
                 "a::e".to_string(),
             ],
+        );
+    }
+
+    #[test]
+    fn rust_moderately_nested_use_tree_expands_in_full() {
+        // Anti-vacuity anchor for the over-cap test below. It proves the
+        // generated nesting really parses and really drives the walk, so
+        // an absent leaf there means "the cap dropped it", not
+        // "tree-sitter never saw a use declaration at all".
+        let got = rust_targets(nested_use_source(20).as_bytes());
+        assert_eq!(got.len(), 1, "one leaf at the bottom of the nesting");
+        assert!(
+            got[0].starts_with("crate::m0::m1::") && got[0].ends_with("::Item"),
+            "full path must be threaded through every level, got {}",
+            got[0],
+        );
+    }
+
+    #[test]
+    fn rust_use_tree_past_the_depth_cap_is_dropped_not_fatal() {
+        // Nesting far past MAX_USE_TREE_DEPTH used to exhaust the stack
+        // of the thread running the scan — an abort that took the whole
+        // ingest with it, uncatchable by any error type. The byte cap
+        // these files pass through bounds size, not depth, so a source
+        // well under it still reached that recursion.
+        let got = extract_imports(
+            nested_use_source(MAX_USE_TREE_DEPTH as usize * 4).as_bytes(),
+            ImportLanguage::Rust,
+        )
+        .expect("extraction must return rather than abort");
+        assert!(
+            got.iter().all(|r| !r.target.ends_with("::Item")),
+            "the leaf below the cap must not surface",
         );
     }
 
