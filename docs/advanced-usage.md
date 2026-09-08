@@ -1115,8 +1115,9 @@ codelore analyze --analysis hotspots --no-cache
 # Override the XDG root (useful in CI with per-job caches)
 codelore analyze --analysis hotspots --cache-dir /tmp/codelore-cache
 
-# Inspect the cache
-ls "$(dirs -c codelore 2>/dev/null || echo $XDG_CACHE_HOME)/codelore/"
+# Inspect the cache — `profile` prints the resolved root, the current
+# size and the eviction cap, on every platform
+codelore profile
 ```
 
 Eviction: 5 entries per repo + 2 GB global cap, oldest-ingest-first. Pruning runs after every successful miss-and-write. Note this is FIFO, not LRU: a cache hit opens the store read-only and so never refreshes its mtime, meaning a frequently-read entry can be evicted ahead of a newer one that was never reused.
@@ -1395,9 +1396,11 @@ INFO bench.analyze_and_emit: close time.busy=43ms time.idle=18µs
 For finer-grained timing, raise the level:
 `RUST_LOG=codelore=debug` also shows the per-analysis spans inside
 `codelore-lib` (cache hit/miss, materialize_changes_bucketed,
-etc.). The default `--verbose` flag enables `info` for
-`codelore` but not `codelore::bench`, so the bench-specific
-spans stay out of normal-verbosity output.
+etc.). `--verbose` already includes the bench spans without any
+`RUST_LOG` at all: its filter is `info,codelore=debug`, whose bare
+`info` directive covers the `codelore::bench` target. Reach for
+`RUST_LOG=codelore::bench=info` when you want the timings *without*
+the rest of the verbose output.
 
 ## 11.8. Using codelore as a local quality hook
 
