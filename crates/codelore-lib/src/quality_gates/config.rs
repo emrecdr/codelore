@@ -314,6 +314,31 @@ fn finite_min(problems: &mut Vec<String>, key: &str, value: Option<f64>, min: f6
     }
 }
 
+/// Push a problem when `path` is present and would resolve outside the
+/// repository that declared it.
+///
+/// These paths are read out of the analysed repository's own file, so they are
+/// attacker-controlled whenever that repository is untrusted — and they are
+/// read on the plain `analyze --repo <clone>` path as well as by `check`,
+/// `gate`, `explain` and the MCP server at startup. An absolute path escapes by
+/// definition, and a `..` component escapes once joined to the repo root;
+/// neither has a legitimate use for an artifact a repository declares about
+/// itself.
+///
+/// `..` is rejected outright rather than normalised and re-checked. The lexical
+/// normaliser used for import resolution pops on an empty stack, so
+/// `../secrets` collapses to `secrets` — which would then pass a starts-with
+/// test while naming a file outside the tree.
+fn confined_to_repo(problems: &mut Vec<String>, key: &str, path: Option<&Path>) {
+    let Some(p) = path else { return };
+    if p.is_absolute() || p.components().any(|c| c == std::path::Component::ParentDir) {
+        problems.push(format!(
+            "{key} = {} must be a relative path inside the repository",
+            p.display()
+        ));
+    }
+}
+
 impl Thresholds {
     /// Auto-discover `.codelore-thresholds.toml` at the repo root.
     /// Returns the default (no gates configured) when the file is
@@ -526,6 +551,12 @@ impl Thresholds {
                 100.0,
             );
         }
+
+        confined_to_repo(
+            &mut problems,
+            "defect_artifact",
+            self.calibration.defect_artifact.as_deref(),
+        );
 
         if problems.is_empty() {
             Ok(())
@@ -852,6 +883,35 @@ new_hotspot_max = 0
     }
 
     // ───────── value validation ─────────
+
+    #[test]
+    fn validate_rejects_a_defect_artifact_that_escapes_the_repo() {
+        // Paths are single-quoted TOML literals so a Windows separator is
+        // not read as an escape.
+        for bad in ["/etc/passwd", "../../secrets.json", "sub/../../escape.json"] {
+            let text = format!("[calibration]\ndefect_artifact = '{bad}'\n");
+            let t = Thresholds::from_text(&text).expect("well-formed TOML");
+            let Err(err) = t.validate() else {
+                panic!("{bad} must be rejected");
+            };
+            assert!(
+                err.contains("defect_artifact"),
+                "error must name the offending key: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_defect_artifact_inside_the_repo() {
+        // Anti-vacuity partner: the rejection above must come from the path
+        // escaping, not from the key being present at all.
+        let t = Thresholds::from_text("[calibration]\ndefect_artifact = 'ci/defects.calib.json'\n")
+            .expect("well-formed TOML");
+        assert!(
+            t.validate().is_ok(),
+            "a relative in-repo artifact path must validate"
+        );
+    }
 
     #[test]
     fn validate_accepts_default_and_empty_config() {
