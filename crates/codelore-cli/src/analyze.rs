@@ -7,9 +7,11 @@
 //! single-page dashboard from the full analysis suite.
 
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use codelore_lib::cli_api::facts::FactsDb;
+use codelore_lib::cli_api::output::banner::Preflight;
 use codelore_lib::cli_api::repo::{GixRepo, Repo as _};
 use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use codelore_lib::cli_api::{analyses, output};
@@ -1267,23 +1269,73 @@ fn run_streaming_dispatch(
     Ok(rows)
 }
 
+/// Classify `--repo` before the banner is built: `None` when the path is
+/// there to be opened, otherwise the pre-flight state and the typed error
+/// that belong to the fault.
+///
+/// `try_exists` rather than `exists`: the latter answers `false` when the
+/// metadata cannot be read at all, so an unreadable directory is reported
+/// as absent — and "create it" is the wrong instruction for a permission
+/// fault. Both `Repo` backends draw this same three-way distinction in
+/// `open`; this gate runs in front of them purely to render a banner, so
+/// matching their verdict is what stops one command contradicting another
+/// about the same path.
+fn classify_repo_path(path: &Path, repo_path_str: &str) -> Option<(Preflight, CodeLoreError)> {
+    match path.try_exists() {
+        Ok(true) => None,
+        Ok(false) => Some((
+            Preflight::RepoPathMissing {
+                repo_path: repo_path_str.to_string(),
+            },
+            CodeLoreError::Repo(format!("--repo path does not exist: {repo_path_str}")),
+        )),
+        Err(e) => Some((
+            Preflight::RepoPathUnreadable {
+                repo_path: repo_path_str.to_string(),
+                reason: e.to_string(),
+            },
+            CodeLoreError::Repo(format!("--repo path cannot be read: {repo_path_str}: {e}")),
+        )),
+    }
+}
+
+/// `None` when `parent` is a directory this run can see, otherwise why not,
+/// phrased to follow `--output ` in the error and to stand alone in the
+/// banner's hint. Same `try_exists` reasoning as [`classify_repo_path`]:
+/// an unreadable parent is not a missing one, and the two have different
+/// fixes.
+fn unwritable_parent_reason(parent: &Path) -> Option<String> {
+    match parent.try_exists() {
+        Ok(true) => None,
+        Ok(false) => Some(format!(
+            "parent directory does not exist: {}",
+            parent.display()
+        )),
+        Err(e) => Some(format!(
+            "cannot access parent directory {}: {e}",
+            parent.display()
+        )),
+    }
+}
+
 /// Pre-flight: cheap validations BEFORE the expensive ingest. Builds the
 /// Style-B banner from `Options` + `GixRepo` state, prints to stderr (always
 /// on failure, conditionally on success per `should_print`), and either
 /// returns the opened repo (Ready) or bails with a clear error.
 ///
 /// Checks run in order:
-/// 1. `--repo` path exists on the filesystem
+/// 1. `--repo` path is present and its metadata readable
 /// 2. Path opens as a git repository (gix-recognised)
 /// 3. Repository has at least one commit (HEAD resolves)
-/// 4. `--output` parent directory exists (catches typos before the 30s ingest)
+/// 4. `--output` parent directory is present and readable (catches typos
+///    before the 30s ingest)
 fn preflight_and_open_repo(
     args: &AnalyzeArgs,
     opts: &Options,
     analysis_name: &str,
     no_banner: bool,
 ) -> Result<GixRepo> {
-    use codelore_lib::cli_api::output::banner::{self, Banner, Preflight};
+    use codelore_lib::cli_api::output::banner::{self, Banner};
     use codelore_lib::cli_api::provenance::{DUCKDB_VERSION, GIX_VERSION};
 
     let repo_path_str = args.repo.display().to_string();
@@ -1312,19 +1364,11 @@ fn preflight_and_open_repo(
     // `invalid_repo_exits_with_code_3` and surprising any orchestrator that
     // dispatches on exit codes.
 
-    // Step 1: does the path even exist on disk?
-    if !args.repo.exists() {
-        let b = make_banner(
-            None,
-            None,
-            Preflight::RepoPathMissing {
-                repo_path: repo_path_str.clone(),
-            },
-        );
+    // Step 1: is the path there at all, and can we tell?
+    if let Some((preflight, err)) = classify_repo_path(&args.repo, &repo_path_str) {
+        let b = make_banner(None, None, preflight);
         eprint!("{}", b.render(banner::should_color()));
-        return Err(
-            CodeLoreError::Repo(format!("--repo path does not exist: {repo_path_str}")).into(),
-        );
+        return Err(err.into());
     }
 
     // Step 2: open as git repo. gix returns an error for non-repo paths;
@@ -1363,22 +1407,18 @@ fn preflight_and_open_repo(
     if let Some(out_path) = &args.output
         && let Some(parent) = out_path.parent()
         && !parent.as_os_str().is_empty()
-        && !parent.exists()
+        && let Some(reason) = unwritable_parent_reason(parent)
     {
         let b = make_banner(
             branch.clone(),
             Some(head_short.clone()),
             Preflight::OutputNotWritable {
                 path: out_path.display().to_string(),
-                reason: format!("parent directory does not exist: {}", parent.display()),
+                reason: reason.clone(),
             },
         );
         eprint!("{}", b.render(banner::should_color()));
-        return Err(CodeLoreError::Output(format!(
-            "--output parent directory does not exist: {}",
-            parent.display()
-        ))
-        .into());
+        return Err(CodeLoreError::Output(format!("--output {reason}")).into());
     }
 
     // All green — print the Ready banner if conditions allow (TTY + not
@@ -2488,6 +2528,98 @@ mod registration_surfaces {
             derived, documented,
             "html: the bespoke-HTML-emitter set drifted from HTML_WIRED — reconcile \
              `supported_formats` with the analyses whose dispatch arm wires a real `write_html`",
+        );
+    }
+}
+
+#[cfg(test)]
+mod preflight_path_classification {
+    use codelore_lib::cli_api::output::banner::Preflight;
+
+    use super::{classify_repo_path, unwritable_parent_reason};
+
+    /// Build `parent/child`, close the parent, run `probe` against the child,
+    /// then reopen the parent so teardown can recurse into it.
+    ///
+    /// The parent is what gets closed, not the child: `chmod 000` on a
+    /// directory blocks entering it but not `stat`-ing it, so closing the
+    /// child leaves `try_exists` answering `Ok(true)` and probes nothing.
+    /// Getting this backwards yields a test that passes against the bug.
+    #[cfg(unix)]
+    fn with_unreadable_parent<T>(probe: impl FnOnce(&std::path::Path) -> T) -> T {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("closed");
+        let child = parent.join("target");
+        std::fs::create_dir_all(&child).expect("create");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).expect("close");
+        let out = probe(&child);
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).expect("reopen");
+        out
+    }
+
+    /// Anti-vacuity anchor for the two fault tests below: a path that is
+    /// simply there must produce no fault at all, so their `Some` cannot be
+    /// a classifier that faults unconditionally.
+    #[test]
+    fn a_readable_directory_is_not_a_fault() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            classify_repo_path(dir.path(), "d").is_none(),
+            "a readable directory must pass the gate"
+        );
+        assert!(
+            unwritable_parent_reason(dir.path()).is_none(),
+            "a readable parent must yield no reason"
+        );
+    }
+
+    #[test]
+    fn an_absent_repo_path_is_reported_as_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (preflight, err) =
+            classify_repo_path(&dir.path().join("gone"), "gone").expect("a fault");
+        assert!(matches!(preflight, Preflight::RepoPathMissing { .. }));
+        assert!(err.to_string().contains("does not exist"), "{err}");
+    }
+
+    /// The regression this pair exists for. The pre-flight used to answer
+    /// `exists()`, which reports unreadable metadata as absence — so `analyze`
+    /// called this path missing while `check`, reaching `GixRepo::open`
+    /// directly, called it a permission error. One tool, one path, two
+    /// contradictory diagnoses.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_repo_path_is_not_reported_as_missing() {
+        let (preflight, err) =
+            with_unreadable_parent(|p| classify_repo_path(p, "repo")).expect("a fault");
+        assert!(
+            matches!(preflight, Preflight::RepoPathUnreadable { .. }),
+            "an unreadable path must not be classified as an absent one"
+        );
+        assert!(err.to_string().contains("cannot be read"), "{err}");
+    }
+
+    /// The reason is interpolated straight after `--output `, so this wording
+    /// is the user-facing error and not merely a hint.
+    #[test]
+    fn an_absent_output_parent_keeps_the_wording_the_error_is_built_from() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reason = unwritable_parent_reason(&dir.path().join("gone")).expect("a reason");
+        assert!(
+            reason.starts_with("parent directory does not exist: "),
+            "{reason}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_output_parent_is_not_reported_as_absent() {
+        let reason = with_unreadable_parent(unwritable_parent_reason).expect("a reason");
+        assert!(
+            reason.starts_with("cannot access parent directory "),
+            "{reason}"
         );
     }
 }

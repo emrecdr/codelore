@@ -54,6 +54,11 @@ pub enum Preflight {
     OutputNotWritable { path: String, reason: String },
     /// `--repo PATH` doesn't exist on the filesystem.
     RepoPathMissing { repo_path: String },
+    /// `--repo PATH` cannot be read at all — its metadata is unavailable,
+    /// so whether a repository sits there is unknown. Distinct from
+    /// [`Preflight::RepoPathMissing`] because "create it" and "fix the
+    /// permissions" are different instructions.
+    RepoPathUnreadable { repo_path: String, reason: String },
 }
 
 impl Preflight {
@@ -183,6 +188,12 @@ impl Banner<'_> {
                 "✗",
                 "repo path does not exist".to_string(),
                 Some(format!("no such directory: {repo_path}")),
+            ),
+            Preflight::RepoPathUnreadable { repo_path, reason } => (
+                s(fail),
+                "✗",
+                "repo path cannot be read".to_string(),
+                Some(format!("{repo_path}: {reason}")),
             ),
         };
         let _ = writeln!(
@@ -413,6 +424,27 @@ mod tests {
         assert!(out.contains("repository has no commits"));
         assert!(out.contains("Hint:"));
         assert!(out.contains("at least one commit"));
+    }
+
+    /// The unreadable case must not borrow the missing case's wording: the
+    /// two are rendered from the same banner and differ only here, so a
+    /// reader distinguishes "create it" from "fix the permissions" by this
+    /// line alone.
+    #[test]
+    fn repo_path_unreadable_renders_distinctly_from_missing() {
+        let mut b = ready_fixture();
+        b.preflight = Preflight::RepoPathUnreadable {
+            repo_path: "/closed/repo".to_string(),
+            reason: "Permission denied (os error 13)".to_string(),
+        };
+        let out = b.render(false);
+        assert!(out.contains("repo path cannot be read"), "{out}");
+        assert!(out.contains("/closed/repo"), "{out}");
+        assert!(out.contains("Permission denied"), "{out}");
+        assert!(
+            !out.contains("does not exist"),
+            "must not reuse the missing-path wording: {out}"
+        );
     }
 
     #[test]
