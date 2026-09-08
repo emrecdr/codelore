@@ -376,6 +376,18 @@ fn module_dir(importer_path: &str) -> PathBuf {
     }
 }
 
+/// The index of the rightmost `src` segment: the crate boundary that both
+/// `crate::` resolution and sibling-member lookup anchor on. Walking
+/// right-to-left keeps a nested module tree (`crates/foo/src/bar/src/baz.rs`
+/// is theoretical but safe) anchored at the crate's own `src`.
+///
+/// Stated once because both callers below encode the same rule about where a
+/// crate starts, and a layout they disagreed about would resolve `crate::`
+/// against one boundary and siblings against another.
+fn src_boundary(segments: &[&str]) -> Option<usize> {
+    segments.iter().rposition(|s| *s == "src")
+}
+
 /// `crate::` root resolution. For a single-crate repo this is
 /// literally `src`; for a Cargo workspace it's the importer's
 /// containing crate's `src/` directory. We detect the crate root by
@@ -383,10 +395,7 @@ fn module_dir(importer_path: &str) -> PathBuf {
 /// preserving every segment up to (and including) the `src` segment.
 fn crate_src_root(importer_path: &str) -> PathBuf {
     let segments: Vec<&str> = importer_path.split('/').collect();
-    // Walk right-to-left to find the LAST `src` segment so nested
-    // module trees (`crates/foo/src/bar/src/baz.rs` is theoretical but
-    // safe) anchor at the crate's `src`.
-    if let Some(idx) = segments.iter().rposition(|s| *s == "src") {
+    if let Some(idx) = src_boundary(&segments) {
         let prefix = &segments[..=idx];
         let mut p = PathBuf::new();
         for seg in prefix {
@@ -503,7 +512,7 @@ pub fn resolve_js_relative<S: std::hash::BuildHasher>(
 /// usage that no production change can propagate through.
 fn workspace_sibling_src_roots(importer_path: &str, crate_name: &str) -> Vec<PathBuf> {
     let segments: Vec<&str> = importer_path.split('/').collect();
-    let Some(src_idx) = segments.iter().rposition(|s| *s == "src") else {
+    let Some(src_idx) = src_boundary(&segments) else {
         return Vec::new();
     };
     // `src/...` at the repository root is a single-crate layout: there is no
