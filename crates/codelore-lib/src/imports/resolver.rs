@@ -515,11 +515,16 @@ fn workspace_sibling_src_roots(importer_path: &str, crate_name: &str) -> Vec<Pat
     for seg in &segments[..src_idx - 1] {
         base.push(seg);
     }
+    // A member's directory is conventionally hyphenated where the crate name
+    // in code is underscored, so both spellings are offered and the live-path
+    // match decides. They coincide for a name with no underscore, and the
+    // second lookup would then be the first one repeated.
     let hyphenated = crate_name.replace('_', "-");
-    let mut dirs = vec![hyphenated];
-    if !dirs.contains(&crate_name.to_string()) {
-        dirs.push(crate_name.to_string());
+    let mut dirs = Vec::with_capacity(2);
+    if hyphenated != crate_name {
+        dirs.push(hyphenated);
     }
+    dirs.push(crate_name.to_string());
     dirs.into_iter()
         .map(|dir| {
             let mut root = base.clone();
