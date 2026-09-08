@@ -65,7 +65,10 @@ COPY --from=planner /src/recipe.json recipe.json
 # dashboard out of the box.
 RUN cargo chef cook --release --features spa --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --features spa -p codelore && \
+# `--locked` so the image is reproducible from the tag: without it a
+# manifest/lock inconsistency lets this resolve transitive versions the
+# `deny` job never audited.
+RUN cargo build --locked --release --features spa -p codelore && \
     strip target/release/codelore
 
 #─── runtime stage ──────────────────────────────────────────────────────────

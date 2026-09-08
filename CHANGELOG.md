@@ -36,6 +36,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **`codelore-cli` declared `tempfile` twice.** It is a genuine runtime dependency — four `src/` modules use it for the throwaway worktree and corpus checkouts — and a `[dependencies]` entry is already in scope for test targets, so the duplicate `[dev-dependencies]` line bought nothing and offered a second version constraint to drift out of step with the first. Removed; `Cargo.lock` is unchanged, since the package itself was never dropped.
 
+- **The Windows release archive could ship empty and still be attested.** The zip step discarded both 7-Zip's exit code and its stderr, and 7-Zip exits non-zero on non-fatal warnings while still writing an archive — so an archive missing `codelore.exe` would pass the staging check (which counts files, not contents), be hashed into `SHA256SUMS`, receive a genuine and verifiable SLSA attestation, and publish as authentic. Every downstream control validates the archive's *bytes*; none validated what was inside it. The step now asserts the archive contains the binary, which holds regardless of 7-Zip's exit semantics — that status is deliberately still not the gate, because failing on a benign warning would break releases for a non-problem — and stderr is no longer sent to `/dev/null`, so a real failure is diagnosable from the job log. The artifact upload also gains the `if-no-files-found: error` that the container and attestation uploads already set, so an empty upload fails where it happens rather than as a confusing downstream error.
+
+- **Release and container builds now resolve from the audited lockfile.** Neither `cargo build` passed `--locked`, so a manifest/lock inconsistency would let the published binary and the image silently resolve transitive versions the `cargo deny` job never audited, and the image was not reproducible from its tag. The window is narrow — the release script runs `cargo update` and commits the result — but it costs nothing to close.
+
 ## [0.29.1] - 2026-09-04
 
 ### Added
