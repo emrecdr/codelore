@@ -94,6 +94,17 @@ impl GixBlobReader {
         }
         Ok(Some(entry.id().detach()))
     }
+
+    /// Fetch `id`'s bytes. Shared by both read paths for the same reason
+    /// [`Self::blob_id`] is: they would otherwise report an identical failure
+    /// through two copies of one error string, and a caller matching on that
+    /// text would depend on which method it happened to call.
+    fn object_bytes(&self, id: gix::ObjectId, path: &str) -> Result<Vec<u8>> {
+        let mut obj = self.repo.find_object(id).map_err(|e| {
+            CodeLoreError::Repo(format!("read_blob_at find_object {}:{path}: {e}", self.rev))
+        })?;
+        Ok(std::mem::take(&mut obj.data))
+    }
 }
 
 impl BlobReader for GixBlobReader {
@@ -101,10 +112,7 @@ impl BlobReader for GixBlobReader {
         let Some(id) = self.blob_id(path)? else {
             return Ok(None);
         };
-        let mut obj = self.repo.find_object(id).map_err(|e| {
-            CodeLoreError::Repo(format!("read_blob_at find_object {}:{path}: {e}", self.rev))
-        })?;
-        Ok(Some(std::mem::take(&mut obj.data)))
+        Ok(Some(self.object_bytes(id, path)?))
     }
 
     /// Consults the object header before deciding, so an oversize blob is
@@ -124,10 +132,7 @@ impl BlobReader for GixBlobReader {
         {
             return Ok(Some(crate::repo::BlobRead::Oversize(header.size())));
         }
-        let mut obj = self.repo.find_object(id).map_err(|e| {
-            CodeLoreError::Repo(format!("read_blob_at find_object {}:{path}: {e}", self.rev))
-        })?;
-        let bytes = std::mem::take(&mut obj.data);
+        let bytes = self.object_bytes(id, path)?;
         let len = bytes.len() as u64;
         Ok(Some(if len > cap {
             crate::repo::BlobRead::Oversize(len)
