@@ -4261,4 +4261,88 @@ would be an abstraction ahead of its use.
 Found by a cleanup pass over the range that added the second degrading state.
 
 
-The next sweep re-opens at **F384**.
+### F384 (Active) — four copies of one coverage-accounting policy, and arm four is where it stopped paying
+
+`facts/ingest/complexity_head.rs`, `at_rev.rs`, `clones_head.rs` and
+`imports_head.rs` each match the blob read into the same four outcomes, with the
+same mapping: bytes proceed, `Oversize` becomes `SkippedOversize`, `Ok(None)`
+becomes `NotCounted`, and an error warns and becomes `Lost(REASON_BLOB_READ)`.
+Verified across all four: there is no differing reason constant in these blocks
+and no per-site counter — counting happens downstream in `ScanCoverage::tally`
+over the collected outcomes. Only three things differ, and all three are
+parameters: the log label, `at_rev` appending its rev to that label, and
+`clones_head` returning through a `Result` because its closure does.
+
+What is duplicated is not boilerplate but a policy: which failure enters the
+coverage denominator, which leaves it, and which is tallied apart. That mapping
+is the sole input to the coverage numbers the quality gate reads, so editing one
+copy shifts a coverage percentage with no compile error — and no test asserts on
+these blocks' log strings, so there is no incidental guard either.
+
+The duplication predates the change that surfaced it; the three-arm form was
+already there and following it was correct. The observation is that adding a
+fourth arm required the same edit four times, which is the point at which the
+codebase's own convention applies: `analyses::clones::scan_one` and
+`analyses::architecture_trend::classify_import_file` were both factored out for
+exactly this reason, and both say so in their doc comments — the difference
+between a counted loss and a silent drop is invisible to a caller, so it is named
+rather than inlined. A shared helper returning `Result<Vec<u8>, ScanOutcome<T>>`
+collapses all four call sites to two lines each; the non-`Scored` variants are
+`T`-free, so the generic is clean.
+
+Recorded rather than fixed because the duplication is pre-existing rather than
+introduced, and because the edit touches the ingest hot path and the gate's
+coverage inputs together — it wants its own change with an equivalence proof over
+the coverage counts, not a ride along a cleanup pass.
+
+Found by a reuse review of the range that added the fourth arm.
+
+### F385 (Active) — the cheap blob read landed in four places and three siblings kept the expensive one
+
+`BlobReader::read_capped` exists because every size-capped scan used to learn a
+blob's size by reading the whole blob; its own doc says so. Three sites still do:
+`analyses/effort_exposure.rs`, `analyses/architecture_trend.rs` and
+`analyses/function_xray.rs`. The first already takes a `&mut dyn BlobReader` and
+`read_capped` is object-safe, so it is a one-line change for the same memory win.
+The second is the scan `at_rev`'s own comment names as the one it mirrors, which
+is what makes the split awkward: the two now read blobs differently while
+claiming to be the same pass. The third is the weakest case — it reaches for
+`read_blob_at` rather than a reader, and its cap raises an error rather than
+skipping, so its mapping legitimately differs.
+
+Out of scope on purpose, so it is not "fixed" later by mistake:
+`analyses/clones.rs` and `change_set.rs` read the working tree through
+`std::fs::read`, where an object-header probe has nothing to consult.
+
+The cost is a rule with two spellings in-tree: a reader is asked for its size
+before its bytes in the HEAD scans and after them everywhere else, with nothing
+naming which is current.
+
+Found by a reuse review of the range that introduced `read_capped`.
+
+### F386 (Active) — the named-input existence check is a second hand-maintained list, and only the first one is guarded
+
+`Options::validate` checks that `--group-file`, `--team-map-file`,
+`--calibration` and `--defect-calibration` name existing files. The same four
+fields are also enumerated in `canonical_json`'s digest block, and that
+enumeration sits behind an exhaustive destructure: a new `Options` field does not
+compile until it is classified there, and `every_canonical_key_is_classified`
+then forces it into ingest-affecting or analysis-only.
+
+The validation list participates in none of that. A fifth explicitly-named input
+file would therefore be *forced* into the cache-key classification and *silently*
+omitted from the existence check — the guarded half and the unguarded half of the
+same fact, where the failure mode of the unguarded half is the one that already
+happened once.
+
+Recorded rather than fixed because the obvious repair does not survive contact
+with the digest block: those four are not computed uniformly — `team_map_file`
+falls back to an auto-discovered sibling and the others do not — so folding both
+uses onto one shared list would flatten a distinction that is deliberate. A guard
+that asserts the two lists agree needs a runtime list on the digest side that
+does not currently exist, which is a larger change than the hazard justifies
+today.
+
+Found by a reuse review of the range that added the existence check.
+
+The next sweep re-opens at **F387**.
