@@ -55,10 +55,15 @@ impl GixBlobReader {
             .map_err(|e| CodeLoreError::Repo(format!("read_blob_at tree {}: {e}", self.rev)))?;
         Ok(tree.id)
     }
-}
 
-impl BlobReader for GixBlobReader {
-    fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
+    /// Resolve `path` to the id of the blob it names at this reader's rev,
+    /// or `None` when the path is not a tracked blob there.
+    ///
+    /// Shared by [`BlobReader::read`] and [`BlobReader::read_capped`] so the
+    /// two can never disagree about which paths exist: everything up to the
+    /// point of touching the object's bytes is this one walk, and the two
+    /// callers differ only in what they ask for once they hold the id.
+    fn blob_id(&mut self, path: &str) -> Result<Option<gix::ObjectId>> {
         let tree_id = if let Some(id) = self.root_tree_id {
             id
         } else {
@@ -87,16 +92,119 @@ impl BlobReader for GixBlobReader {
         if !entry.mode().is_blob() {
             return Ok(None);
         }
-        let mut obj = self.repo.find_object(entry.id()).map_err(|e| {
+        Ok(Some(entry.id().detach()))
+    }
+}
+
+impl BlobReader for GixBlobReader {
+    fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
+        let Some(id) = self.blob_id(path)? else {
+            return Ok(None);
+        };
+        let mut obj = self.repo.find_object(id).map_err(|e| {
             CodeLoreError::Repo(format!("read_blob_at find_object {}:{path}: {e}", self.rev))
         })?;
         Ok(Some(std::mem::take(&mut obj.data)))
+    }
+
+    /// Consults the object header before deciding, so an oversize blob is
+    /// rejected without its bytes ever being allocated — the same
+    /// `find_header` probe the history walker uses to keep a large diff blob
+    /// out of memory.
+    ///
+    /// A header lookup that fails falls through to the read path rather than
+    /// erroring: the size check there still holds the line, so a backend
+    /// quirk costs the allocation this was avoiding rather than the file.
+    fn read_capped(&mut self, path: &str, cap: u64) -> Result<Option<crate::repo::BlobRead>> {
+        let Some(id) = self.blob_id(path)? else {
+            return Ok(None);
+        };
+        if let Ok(header) = self.repo.find_header(id)
+            && header.size() > cap
+        {
+            return Ok(Some(crate::repo::BlobRead::Oversize(header.size())));
+        }
+        let mut obj = self.repo.find_object(id).map_err(|e| {
+            CodeLoreError::Repo(format!("read_blob_at find_object {}:{path}: {e}", self.rev))
+        })?;
+        let bytes = std::mem::take(&mut obj.data);
+        let len = bytes.len() as u64;
+        Ok(Some(if len > cap {
+            crate::repo::BlobRead::Oversize(len)
+        } else {
+            crate::repo::BlobRead::Data(bytes)
+        }))
     }
 }
 
 #[cfg(all(test, feature = "test-support"))]
 mod tests {
     use crate::repo::{GixRepo, Repo};
+
+    /// The header-probe `read_capped` override must agree with `read` about
+    /// every path: which paths exist, how large each blob is, and what its
+    /// bytes are. The probe skips materialising oversize blobs, so a probe
+    /// that reported the wrong size — or disagreed about existence — would
+    /// silently drop real files from the HEAD scan.
+    #[test]
+    fn capped_read_agrees_with_read_on_size_bytes_and_existence() {
+        use crate::repo::BlobRead;
+
+        let fixture = crate::test_support::differential_repo::build();
+        let repo = GixRepo::open(fixture.dir.path()).expect("open repo");
+        let head_rev = repo.head_sha().expect("head_sha");
+        let tracked = repo.tracked_paths_at_head().expect("tracked paths");
+        assert!(!tracked.is_empty(), "fixture must have tracked files");
+
+        let nested = tracked
+            .iter()
+            .find(|p| p.contains('/'))
+            .expect("fixture should have a file nested in a directory");
+        let dir = &nested[..nested.rfind('/').unwrap()];
+
+        let mut reader = repo.blob_reader_at(&head_rev);
+        let mut saw_nonempty = false;
+        for path in &tracked {
+            let truth = reader.read(path).expect("read").expect("tracked blob");
+
+            // Generous cap: must hand back exactly the same bytes.
+            match reader.read_capped(path, u64::MAX).expect("capped read") {
+                Some(BlobRead::Data(b)) => assert_eq!(b, truth, "byte mismatch for {path}"),
+                other => panic!("{path} must read as Data under an unlimited cap, got {other:?}"),
+            }
+
+            // Cap below the real size: must report oversize, and report the
+            // true length — that number is what the scan logs and what proves
+            // the header probe is not guessing.
+            if truth.is_empty() {
+                continue;
+            }
+            saw_nonempty = true;
+            let cap = (truth.len() - 1) as u64;
+            match reader.read_capped(path, cap).expect("capped read") {
+                Some(BlobRead::Oversize(size)) => {
+                    assert_eq!(size, truth.len() as u64, "wrong reported size for {path}");
+                }
+                other => panic!("{path} must read as Oversize under a cap below it, got {other:?}"),
+            }
+        }
+        assert!(
+            saw_nonempty,
+            "fixture must contain at least one non-empty file, or the oversize arm never ran"
+        );
+
+        // Non-blob and absent paths resolve the same way as `read`.
+        for path in [dir, "this-path-does-not-exist-anywhere.zzz"] {
+            assert!(
+                reader
+                    .read_capped(path, u64::MAX)
+                    .expect("capped")
+                    .is_none(),
+                "{path} must be None, matching read()"
+            );
+            assert!(reader.read(path).expect("read").is_none(), "{path} sanity");
+        }
+    }
 
     /// `blob_reader_at(rev).read(path)` must return byte-identical
     /// `Ok(Some)`/`Ok(None)` to `read_blob_at(rev, path)` for every tracked
