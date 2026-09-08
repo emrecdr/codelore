@@ -54,8 +54,14 @@ pub fn resolve_by_extension<S: std::hash::BuildHasher>(
 /// `src/foo/bar/mod.rs` mapping. `self::` and `super::` resolve
 /// relative to the importer's module directory (see [`module_dir`]),
 /// which is the sibling `foo/` for a non-`mod.rs` `foo.rs`; each leading
-/// `super` climbs one further level. External crates (anything not
-/// starting with `crate::`/`self::`/`super::`) return `None`.
+/// `super` climbs one further level.
+///
+/// A bare path (`foo::bar`) is an extern crate in Rust 2018+, which is
+/// usually a `Cargo.toml` dependency with no source here — but in a
+/// workspace it may equally name a sibling member whose source *is*
+/// tracked, so those are resolved against that member's `src/` (see
+/// [`workspace_sibling_src_roots`]). Anything with no matching tracked
+/// file, sibling or not, still returns `None`.
 #[must_use]
 pub fn resolve_rust_path<S: std::hash::BuildHasher>(
     importer_path: &str,
@@ -76,9 +82,9 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
     // importer path backward from its `src/` boundary, NOT a literal
     // top-level `src/`. `self::` anchors at the importer's module
     // directory; each leading `super::` climbs one level above it.
-    let (rest, root): (&[&str], PathBuf) = match segments[0] {
-        "crate" => (&segments[1..], crate_src_root(importer_path)),
-        "self" => (&segments[1..], module_dir(importer_path)),
+    let (rest, roots): (&[&str], Vec<PathBuf>) = match segments[0] {
+        "crate" => (&segments[1..], vec![crate_src_root(importer_path)]),
+        "self" => (&segments[1..], vec![module_dir(importer_path)]),
         "super" => {
             // Each leading `super` climbs one module level from the
             // importer's own module directory, so `super::super::x`
@@ -91,12 +97,23 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
             for _ in 0..climbed {
                 base.pop();
             }
-            (&segments[climbed..], base)
+            (&segments[climbed..], vec![base])
         }
         // Bare module paths (`foo::bar`) refer to extern crates in
-        // Rust 2018+ — not the same crate. Skip resolution; these
-        // come from `Cargo.toml` dependencies.
-        _ => return None,
+        // Rust 2018+ — not the same crate. Usually that means a
+        // `Cargo.toml` dependency with no source in this repository, but a
+        // Cargo workspace's own members are extern crates too, and their
+        // sources ARE here: `use codelore_lib::analyses::hotspots` from the
+        // CLI crate names a file three directories away. Left unresolved,
+        // every edge between workspace members is dropped and the import
+        // graph is severed at each crate boundary.
+        name => {
+            let roots = workspace_sibling_src_roots(importer_path, name);
+            if roots.is_empty() {
+                return None;
+            }
+            (&segments[1..], roots)
+        }
     };
     if rest.is_empty() {
         return None;
@@ -112,33 +129,40 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
         return None;
     }
     // The terminal segment may be an item INSIDE a module rather than
-    // the module itself — try both shapes.
-    let mut joined = root.clone();
-    for part in &path_parts {
-        joined.push(part);
-    }
-    let candidates = [
-        format!("{}.rs", to_posix(&joined)),
-        format!("{}/mod.rs", to_posix(&joined)),
-    ];
-    for c in &candidates {
-        if live_paths.contains(c) {
-            return Some(c.clone());
+    // the module itself — try both shapes. `roots` holds one entry for
+    // `crate`/`self`/`super`; the workspace-sibling arm offers both
+    // spellings of the member directory, and only one of them is ever
+    // present in the live-path set.
+    for root in &roots {
+        let mut joined = root.clone();
+        for part in &path_parts {
+            joined.push(part);
+        }
+        let candidates = [
+            format!("{}.rs", to_posix(&joined)),
+            format!("{}/mod.rs", to_posix(&joined)),
+        ];
+        for c in &candidates {
+            if live_paths.contains(c) {
+                return Some(c.clone());
+            }
         }
     }
     // Drop the trailing identifier (item-inside-module case).
     path_parts.pop()?;
-    let mut joined2 = root;
-    for part in &path_parts {
-        joined2.push(part);
-    }
-    let candidates2 = [
-        format!("{}.rs", to_posix(&joined2)),
-        format!("{}/mod.rs", to_posix(&joined2)),
-    ];
-    for c in &candidates2 {
-        if live_paths.contains(c) {
-            return Some(c.clone());
+    for root in &roots {
+        let mut joined2 = root.clone();
+        for part in &path_parts {
+            joined2.push(part);
+        }
+        let candidates2 = [
+            format!("{}.rs", to_posix(&joined2)),
+            format!("{}/mod.rs", to_posix(&joined2)),
+        ];
+        for c in &candidates2 {
+            if live_paths.contains(c) {
+                return Some(c.clone());
+            }
         }
     }
     None
@@ -451,6 +475,61 @@ pub fn resolve_js_relative<S: std::hash::BuildHasher>(
     None
 }
 
+/// Candidate `src/` roots for a sibling workspace member named
+/// `crate_name`, derived from the importer's own position in the tree.
+///
+/// The importer already encodes the layout: a file at
+/// `crates/codelore-cli/src/analyze.rs` sits in a member directory whose
+/// parent holds the other members, so `codelore_lib` resolves against
+/// `crates/codelore-lib/src`. Reading the importer path rather than the
+/// workspace manifest keeps this module pure and lexical, and keeps the
+/// lookup O(1) — scanning the live-path set per import would be quadratic
+/// on a large repository.
+///
+/// A crate's name and its directory may differ by the underscore/hyphen
+/// swap (`codelore_lib` ↔ `codelore-lib`) and both spellings occur in the
+/// wild, so both are returned. Nothing here asserts either exists: the
+/// caller matches each assembled path against the live-path set, so a real
+/// third-party dependency finds no candidate and stays unresolved, exactly
+/// as before.
+///
+/// Anchoring on the importer's own `src/` also scopes this to crate
+/// *sources*, which is the intended boundary rather than a side effect. A
+/// file under `tests/` or `benches/` has no `src` segment and so gains no
+/// sibling root: an integration test importing the library it exercises is
+/// a build-time fact, not an architectural dependency, and counting those
+/// edges would give every library file afferent coupling from its own test
+/// suite — flattening `instability` and inflating propagation cost with
+/// usage that no production change can propagate through.
+fn workspace_sibling_src_roots(importer_path: &str, crate_name: &str) -> Vec<PathBuf> {
+    let segments: Vec<&str> = importer_path.split('/').collect();
+    let Some(src_idx) = segments.iter().rposition(|s| *s == "src") else {
+        return Vec::new();
+    };
+    // `src/...` at the repository root is a single-crate layout: there is no
+    // enclosing directory that could hold a sibling.
+    if src_idx == 0 {
+        return Vec::new();
+    }
+    let mut base = PathBuf::new();
+    for seg in &segments[..src_idx - 1] {
+        base.push(seg);
+    }
+    let hyphenated = crate_name.replace('_', "-");
+    let mut dirs = vec![hyphenated];
+    if !dirs.contains(&crate_name.to_string()) {
+        dirs.push(crate_name.to_string());
+    }
+    dirs.into_iter()
+        .map(|dir| {
+            let mut root = base.clone();
+            root.push(dir);
+            root.push("src");
+            root
+        })
+        .collect()
+}
+
 /// Collapse `./foo/../bar` → `bar` etc. without touching the
 /// filesystem. `Path::canonicalize` would but it requires the file
 /// to exist; this works purely lexically.
@@ -570,6 +649,64 @@ mod tests {
         let live = live(&["src/app.ts", "src/other.ts"]);
         let got = resolve_js_relative("src/app.ts", "./foo.js", &live);
         assert!(got.is_none(), "strip-retry must stay existence-guarded");
+    }
+
+    #[test]
+    fn rust_workspace_sibling_crate_resolves_across_the_member_boundary() {
+        // The shape this repository is: a CLI member importing the library
+        // member. Before, every such edge was dropped as "extern crate".
+        let live = live(&[
+            "crates/codelore-cli/src/analyze.rs",
+            "crates/codelore-lib/src/analyses/hotspots.rs",
+        ]);
+        let got = resolve_rust_path(
+            "crates/codelore-cli/src/analyze.rs",
+            "codelore_lib::analyses::hotspots",
+            &live,
+        );
+        assert_eq!(
+            got,
+            Some("crates/codelore-lib/src/analyses/hotspots.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn rust_workspace_sibling_resolves_with_an_underscore_directory() {
+        // Cargo permits the member directory to keep the underscores the
+        // crate name uses; both spellings are offered and only the one that
+        // exists can match.
+        let live = live(&["crates/app/src/main.rs", "crates/my_lib/src/util.rs"]);
+        let got = resolve_rust_path("crates/app/src/main.rs", "my_lib::util", &live);
+        assert_eq!(got, Some("crates/my_lib/src/util.rs".to_string()));
+    }
+
+    #[test]
+    fn rust_third_party_crate_stays_unresolved() {
+        // The anti-false-positive case: a real dependency has no source in
+        // the tree, so no assembled candidate is live and the import stays
+        // external — exactly the pre-change behaviour.
+        let live = live(&[
+            "crates/codelore-cli/src/analyze.rs",
+            "crates/codelore-lib/src/lib.rs",
+        ]);
+        for target in ["serde::Deserialize", "std::fs::read_to_string", "anyhow"] {
+            assert!(
+                resolve_rust_path("crates/codelore-cli/src/analyze.rs", target, &live).is_none(),
+                "{target} must stay unresolved",
+            );
+        }
+    }
+
+    #[test]
+    fn rust_single_crate_layout_has_no_siblings() {
+        // `src/...` at the repository root: there is no enclosing directory
+        // that could hold a sibling member, so a bare path is still extern.
+        let live = live(&["src/main.rs", "src/other/src/thing.rs"]);
+        let got = resolve_rust_path("src/main.rs", "other::thing", &live);
+        assert!(
+            got.is_none(),
+            "single-crate layout must not invent a sibling"
+        );
     }
 
     #[test]
