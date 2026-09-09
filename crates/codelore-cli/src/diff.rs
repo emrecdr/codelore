@@ -37,6 +37,16 @@ pub struct DiffOutput {
     pub base_sha: String,
     pub head_sha: String,
     pub merge_base_used: bool,
+    /// How many files the range actually touches, straight from the
+    /// `git diff --name-only` set the analyses are filtered against.
+    ///
+    /// The text header used to compute this by adding up three finding
+    /// lists, which counts something else entirely: a pull request touching
+    /// forty files none of which are known hotspots reported "0 files
+    /// changed", and the same range reported a different count as `--top-n`
+    /// moved. Findings are already reported per section; the header answers
+    /// the question it asks.
+    pub pr_file_count: usize,
     pub hotspots: HotspotsDelta,
     pub coupling_absences: Vec<CouplingAbsence>,
     pub clones: ClonesDelta,
@@ -234,9 +244,16 @@ fn git_rev_parse(repo: &Path, rev: &str) -> Result<String> {
         .output()
         .with_context(|| format!("git rev-parse {rev}"))?;
     if !out.status.success() {
-        // Exit 3: the rev did not resolve against this repository.
+        // Exit 3: the rev did not resolve against this repository. git's own
+        // "Needed a single revision" says nothing about why, and the two
+        // common causes in CI need opposite fixes — a base branch the runner
+        // never fetched, and a checkout too shallow to contain the rev — so
+        // name both rather than forwarding a bare message the reader cannot
+        // act on.
         return Err(CodeLoreError::Repo(format!(
-            "git rev-parse failed for {rev:?}: {}",
+            "git rev-parse failed for {rev:?}: {}. The rev must exist in this \
+             checkout: fetch the base branch (`git fetch origin <branch>`) if it \
+             is a remote ref, and use `fetch-depth: 0` if the checkout is shallow",
             String::from_utf8_lossy(&out.stderr).trim()
         ))
         .into());
@@ -880,6 +897,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
             base_sha,
             head_sha,
             merge_base_used,
+            pr_file_count: pr_files.len(),
             hotspots,
             coupling_absences,
             clones,

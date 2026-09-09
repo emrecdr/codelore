@@ -520,7 +520,35 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
         )
     })?;
 
-    if diff::should_fail(args, &output) {
+    // Verdict line, on stderr, in every format — the contract `check` and
+    // `gate` already keep. Without it a failing run with `--output FILE` put
+    // the whole report in the file and exited 1 with nothing on stderr at all:
+    // in the Action the step turned red with an empty log, and the reason was
+    // only visible to whoever opened the artifact. Stdout stays the document.
+    let findings = output.hotspots.rank_entrants.len()
+        + output.hotspots.score_increased.len()
+        + output.coupling_absences.len()
+        + output.clones.new_families.len();
+    let failing = diff::should_fail(args, &output);
+    if failing {
+        let where_to_look = args.output.as_ref().map_or_else(
+            || " — see the report above".to_string(),
+            |p| format!(" — see the report in {}", p.display()),
+        );
+        eprintln!(
+            "❌ codelore diff: FAIL — {} gate violation(s), {findings} finding(s){where_to_look}",
+            output.gate_violations.len()
+        );
+    } else if args.thresholds_file.is_some()
+        || !matches!(args.fail_on, crate::args::DiffFailOn::None)
+    {
+        // Only when something was actually gated. An advisory run (no
+        // thresholds file, `--fail-on none`) has no verdict to report, and a
+        // PASS line there would be noise on the most common invocation.
+        eprintln!("✅ codelore diff: PASS — {findings} finding(s), no gate violation(s)");
+    }
+
+    if failing {
         // A `[diff]` gate violation (or a skip failed under `fail_on_skipped`)
         // is a gate failure, not an analysis crash — exit 1, matching the
         // `bail!` path in `check`/`gate`.
