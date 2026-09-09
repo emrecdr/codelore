@@ -345,8 +345,11 @@ pub struct CheckArgs {
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
     /// Optional explicit thresholds file. When omitted, the
-    /// `.codelore-thresholds.toml` at the repo root is auto-discovered.
-    /// Empty/missing file → empty rule set → check passes vacuously.
+    /// `.codelore-thresholds.toml` at the repo root is auto-discovered, and
+    /// an absent one leaves an empty rule set that check passes vacuously.
+    /// A file named here explicitly must exist: a path you typed that is not
+    /// there is a typo, and reporting it as "no gates configured" would turn
+    /// it into a green run.
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
     /// Print the last 20 gate-run records from the local ledger, grouped
@@ -408,9 +411,11 @@ pub struct GateArgs {
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
     /// Optional explicit thresholds file. When omitted,
-    /// `.codelore-thresholds.toml` at the repo root is auto-
-    /// discovered. Empty/missing file → empty rule set → gate
-    /// passes vacuously.
+    /// `.codelore-thresholds.toml` at the repo root is auto-discovered, and
+    /// an absent one leaves an empty rule set that gate passes vacuously.
+    /// A file named here explicitly must exist: a path you typed that is not
+    /// there is a typo, and reporting it as "no gates configured" would turn
+    /// it into a green run.
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
     /// Suppress diagnostic noise (vacuous-pass messages, per-violation detail

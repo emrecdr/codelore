@@ -562,19 +562,30 @@ impl Options {
             ..self.clone()
         }
     }
-
-    /// Check cross-field invariants. Caller (typically the CLI boundary)
-    /// runs this once after constructing `Options` so pathological flag
-    /// combinations fail loudly instead of silently producing empty
-    /// output. Each invariant catches a real footgun from the CLI
-    /// surface.
+    /// Per-flag range checks: every one of these asks whether a value is
+    /// inside the interval its own flag's semantics allow, independently of
+    /// every other field. Split out from [`validate`] so the cross-field
+    /// rules there stay readable as a list of relationships.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::CodeLoreError::InvalidOptions`] (exit-2
-    /// configuration-error category) with a message naming the offending
-    /// field pair.
-    pub fn validate(&self) -> crate::Result<()> {
+    /// [`crate::CodeLoreError::InvalidOptions`] naming the offending flag.
+    fn validate_ranges(&self) -> crate::Result<()> {
+        // Both are percentages held as `u8`, so clap accepts anything up to
+        // 255 and the ordering check below is satisfied by nonsense like
+        // `--min-coupling 150 --max-coupling 200`. A coupling degree cannot
+        // exceed 100, so that pair selects no pair at all and the run reports
+        // a clean empty table.
+        for (flag, value) in [
+            ("--min-coupling", self.min_coupling_pct),
+            ("--max-coupling", self.max_coupling_pct),
+        ] {
+            if value > 100 {
+                return Err(crate::CodeLoreError::InvalidOptions(format!(
+                    "{flag} is a percentage and must be in [0, 100]; got {value}"
+                )));
+            }
+        }
         if self.min_coupling_pct > self.max_coupling_pct {
             return Err(crate::CodeLoreError::InvalidOptions(format!(
                 "--min-coupling ({}) must be <= --max-coupling ({})",
@@ -606,6 +617,38 @@ impl Options {
                 self.window_days
             )));
         }
+        if self.rows_limit == Some(0) {
+            return Err(crate::CodeLoreError::InvalidOptions(
+                "--rows must be at least 1; a limit of 0 asks for a report with no rows"
+                    .to_string(),
+            ));
+        }
+        // The same globs `PathsFilter` compiles at ingest time. Compiling them
+        // here too costs a few microseconds and moves a malformed pattern from
+        // an analysis error raised part-way through the walk to an argument
+        // error refused before it — the user typed the glob, so they should
+        // not pay an ingest to hear that a bracket is unclosed.
+        for pat in &self.exclude_patterns {
+            globset::Glob::new(pat).map_err(|e| {
+                crate::CodeLoreError::InvalidOptions(format!("--exclude {pat:?}: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Check cross-field invariants. Caller (typically the CLI boundary)
+    /// runs this once after constructing `Options` so pathological flag
+    /// combinations fail loudly instead of silently producing empty
+    /// output. Each invariant catches a real footgun from the CLI
+    /// surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::CodeLoreError::InvalidOptions`] (exit-2
+    /// configuration-error category) with a message naming the offending
+    /// field pair.
+    pub fn validate(&self) -> crate::Result<()> {
+        self.validate_ranges()?;
         if !matches!(self.knowledge_model.as_str(), "commits" | "doe") {
             return Err(crate::CodeLoreError::InvalidOptions(format!(
                 "--knowledge-model must be 'commits' or 'doe'; got '{}'",
