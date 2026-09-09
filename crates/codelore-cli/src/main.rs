@@ -117,6 +117,20 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
 
+    // The sidecar is addressed by a hash of the repository path, so a typo'd
+    // `--repo` does not fail — it stores the findings under a repository that
+    // does not exist, reports success, and leaves every later
+    // `finding-hotspot-overlap` and `max_findings_in_hot_files` gate saying
+    // nothing was ingested. Same guard `check` and `gate` grew when a missing
+    // repository read as a passing gate; the banner half of the classifier is
+    // unused because this command prints none.
+    let repo_path_str = args.repo.display().to_string();
+    if let Some((_preflight, err)) = analyze::classify_repo_path(&args.repo, &repo_path_str) {
+        return Err(err.into());
+    }
+    codelore_lib::cli_api::repo::GixRepo::open(&args.repo)
+        .with_context(|| format!("open repo {repo_path_str}"))?;
+
     let store = ExternalStore::open_or_create(&cache_root, &args.repo)
         .context("open external findings store")?;
 
