@@ -162,7 +162,7 @@ impl FactsDb {
         live_paths: &[String],
         head_rev: &str,
     ) -> Result<usize> {
-        use crate::imports::resolve_by_extension;
+        use crate::imports::resolve_by_extension_indexed;
 
         // 1. Pull every unresolved import row scoped to a language the
         //    multi-language resolver supports. The extension allow-list
@@ -200,10 +200,14 @@ impl FactsDb {
         //    resolver call instead of rebuilding it per row.
         let live_paths_owned: std::collections::HashSet<String> =
             live_paths.iter().cloned().collect();
+        // One suffix index for the whole batch. The two suffix-matching
+        // resolvers (Python absolute, Java FQN) otherwise walk every live path
+        // per edge, which is quadratic in a large polyglot repository.
+        let index = crate::imports::LivePathIndex::build(live_paths_owned.iter());
         let mut hits: Vec<(String, String, String)> = Vec::new();
         for (src_path, target) in candidates {
             if let Some(resolved_target_path) =
-                resolve_by_extension(&src_path, &target, &live_paths_owned)
+                resolve_by_extension_indexed(&src_path, &target, &live_paths_owned, &index)
             {
                 hits.push((resolved_target_path, src_path, target));
             }

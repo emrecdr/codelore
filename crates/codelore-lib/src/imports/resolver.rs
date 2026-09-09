@@ -12,7 +12,7 @@
 //! The ingest layer iterates rows and calls the right resolver per
 //! language; on hit it issues an UPDATE.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// JS/TS extension candidates checked in resolution order. `.ts` /
@@ -45,6 +45,38 @@ pub fn resolve_by_extension<S: std::hash::BuildHasher>(
             resolve_js_relative(importer_path, target, live_paths)
         }
         Some("java") => resolve_java(target, live_paths),
+        _ => None,
+    }
+}
+
+/// [`resolve_by_extension`] with the suffix index built once by the caller.
+///
+/// Every in-crate caller resolves many edges against one live-path set, so
+/// building the index per edge would throw away the whole saving — hence a
+/// second entry point rather than a cheaper body for the first, whose
+/// signature is a published contract.
+///
+/// The two are kept as a specification and an optimisation of it, not as a
+/// wrapper pair: `resolve_by_extension` above still scans, and
+/// `the_suffix_index_answers_exactly_as_the_full_scan_does` asserts they
+/// agree on every shape either resolver has a branch for. A delegating
+/// wrapper would make that test tautological.
+pub(crate) fn resolve_by_extension_indexed<S: std::hash::BuildHasher>(
+    importer_path: &str,
+    target: &str,
+    live_paths: &HashSet<String, S>,
+    index: &LivePathIndex<'_>,
+) -> Option<String> {
+    let ext = Path::new(importer_path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str);
+    match ext {
+        Some("rs") => resolve_rust_path(importer_path, target, live_paths),
+        Some("py" | "pyi") => resolve_python_indexed(importer_path, target, live_paths, index),
+        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
+            resolve_js_relative(importer_path, target, live_paths)
+        }
+        Some("java") => resolve_java_indexed(target, index),
         _ => None,
     }
 }
@@ -168,6 +200,75 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
     None
 }
 
+/// Live paths grouped by their final path segment.
+///
+/// Two of the resolvers — Python absolute imports and Java FQNs — answer
+/// "which tracked file ends with this suffix, and is it unique?". Both did
+/// that by walking the whole live-path set once per import edge, which is
+/// `O(edges x files)`: on a fifty-thousand-file Java repository with half a
+/// million import statements that is tens of billions of string comparisons,
+/// and `import os` in every Python file pays it too.
+///
+/// Only a path whose final segment equals the target's final segment can
+/// possibly match, and that segment is known before the search. Grouping by
+/// it turns the scan into a hash lookup plus a walk of the few files sharing
+/// a basename. The predicate applied to each candidate is unchanged, so the
+/// uniqueness refusal — two matches yield `None` rather than a guess — is
+/// preserved exactly.
+///
+/// Internal on purpose: `codelore-lib` is published, so its `pub` surface is
+/// a semver contract, and whether that surface is supported at all is an open
+/// question for the maintainer. The published resolvers keep their signatures
+/// and their behaviour; only the in-crate callers, which are the ones running
+/// over whole repositories, take the indexed path.
+pub(crate) struct LivePathIndex<'a> {
+    by_basename: HashMap<&'a str, Vec<&'a str>>,
+}
+
+impl<'a> LivePathIndex<'a> {
+    /// Group `paths` by final segment. Built once per resolution pass.
+    pub(crate) fn build<I>(paths: I) -> Self
+    where
+        I: IntoIterator<Item = &'a String>,
+    {
+        let mut by_basename: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        for p in paths {
+            let base = p.rsplit('/').next().unwrap_or(p.as_str());
+            by_basename.entry(base).or_default().push(p.as_str());
+        }
+        Self { by_basename }
+    }
+
+    /// The tracked paths whose final segment is `basename`, in arbitrary
+    /// order — the same order-independence the full scan had, since both
+    /// refuse on more than one match rather than picking one.
+    fn candidates(&self, basename: &str) -> &[&'a str] {
+        self.by_basename
+            .get(basename)
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The unique tracked path equal to `file` or ending in `/file`, or
+    /// `None` when there is no match or more than one.
+    ///
+    /// This is the predicate both scanners applied, lifted verbatim; the only
+    /// change is which paths it is applied to.
+    fn unique_suffix_match(&self, file: &str) -> Option<String> {
+        let basename = file.rsplit('/').next().unwrap_or(file);
+        let suffix = format!("/{file}");
+        let mut found: Option<&str> = None;
+        for path in self.candidates(basename) {
+            if *path == file || path.ends_with(&suffix) {
+                if found.is_some() {
+                    return None; // ambiguous suffix — refuse to guess
+                }
+                found = Some(path);
+            }
+        }
+        found.map(ToString::to_string)
+    }
+}
+
 /// Resolve a Python relative-import target (e.g. `.foo.bar`,
 /// `..pkg.x`) against the live-at-HEAD path set. Handles both
 /// `from . import foo` and `from .foo import bar` shapes via the
@@ -238,6 +339,10 @@ pub fn resolve_python_relative<S: std::hash::BuildHasher>(
 /// Resolve a Python import `target` by shape: a leading-dot target is
 /// relative (delegated to [`resolve_python_relative`]); everything else
 /// is an absolute dotted module path resolved by suffix match.
+///
+/// The scanning counterpart of [`resolve_python_indexed`]. Both are kept:
+/// this one is the specification the equivalence test checks the indexed
+/// path against, and it is what the published dispatcher still calls.
 fn resolve_python<S: std::hash::BuildHasher>(
     importer_path: &str,
     target: &str,
@@ -263,35 +368,57 @@ pub fn resolve_python_absolute<S: std::hash::BuildHasher>(
     target: &str,
     live_paths: &HashSet<String, S>,
 ) -> Option<String> {
+    let rel = python_module_to_rel(target)?;
+    python_absolute_from_index(&rel, &LivePathIndex::build(live_paths.iter()))
+}
+
+/// The body of [`resolve_python_absolute`], against a prepared index.
+///
+/// A module can be a file or a package `__init__.py`, and either match must be
+/// unique *across both shapes* — a repository holding both `a/b/c.py` and
+/// `a/b/c/__init__.py` is ambiguous, exactly as it was under the full scan.
+fn python_absolute_from_index(rel: &str, index: &LivePathIndex<'_>) -> Option<String> {
+    let module = index.unique_suffix_match(&format!("{rel}.py"));
+    let package = index.unique_suffix_match(&format!("{rel}/__init__.py"));
+    match (module, package) {
+        (Some(hit), None) | (None, Some(hit)) => Some(hit),
+        // Both shapes present, or neither: no unique answer.
+        _ => None,
+    }
+}
+
+/// [`resolve_python_absolute`] against a prepared index.
+fn resolve_python_absolute_indexed(target: &str, index: &LivePathIndex<'_>) -> Option<String> {
+    let rel = python_module_to_rel(target)?;
+    python_absolute_from_index(&rel, index)
+}
+
+/// Python's dotted module path as a `/`-joined relative path, or `None` when
+/// the target carries nothing usable. Shared so the scanning and indexed
+/// entry points cannot disagree about what a module name means.
+fn python_module_to_rel(target: &str) -> Option<String> {
     let rel: String = target
         .split('.')
         .filter(|s| !s.is_empty() && !s.contains(' '))
         .collect::<Vec<_>>()
         .join("/");
-    if rel.is_empty() {
-        return None;
+    (!rel.is_empty()).then_some(rel)
+}
+
+/// [`resolve_python`] against a prepared index.
+fn resolve_python_indexed<S: std::hash::BuildHasher>(
+    importer_path: &str,
+    target: &str,
+    live_paths: &HashSet<String, S>,
+    index: &LivePathIndex<'_>,
+) -> Option<String> {
+    if target.starts_with('.') {
+        // Relative imports resolve by constructing candidate paths and
+        // hashing them, which is already constant-time per candidate.
+        resolve_python_relative(importer_path, target, live_paths)
+    } else {
+        resolve_python_absolute_indexed(target, index)
     }
-    let module = format!("{rel}.py");
-    let package = format!("{rel}/__init__.py");
-    // The leading `/` guards against partial-segment hits such as
-    // `notmypkg/utils.py` for `mypkg.utils`; the `==` arms cover a
-    // module that lives at the repo root.
-    let module_suffix = format!("/{module}");
-    let package_suffix = format!("/{package}");
-    let mut found: Option<&String> = None;
-    for path in live_paths {
-        if path == &module
-            || path == &package
-            || path.ends_with(&module_suffix)
-            || path.ends_with(&package_suffix)
-        {
-            if found.is_some() {
-                return None; // ambiguous suffix — refuse to guess
-            }
-            found = Some(path);
-        }
-    }
-    found.cloned()
 }
 
 /// Resolve a Java `import` FQN (`com.foo.Bar`) to a tracked `.java` file
@@ -341,18 +468,36 @@ fn java_suffix_match<S: std::hash::BuildHasher>(
     segments: &[&str],
     live_paths: &HashSet<String, S>,
 ) -> Option<String> {
-    let file = format!("{}.java", segments.join("/"));
-    let file_suffix = format!("/{file}");
-    let mut found: Option<&String> = None;
-    for path in live_paths {
-        if path == &file || path.ends_with(&file_suffix) {
-            if found.is_some() {
-                return None; // ambiguous suffix — refuse to guess
-            }
-            found = Some(path);
-        }
+    java_suffix_match_indexed(segments, &LivePathIndex::build(live_paths.iter()))
+}
+
+/// [`java_suffix_match`] against a prepared index.
+fn java_suffix_match_indexed(segments: &[&str], index: &LivePathIndex<'_>) -> Option<String> {
+    index.unique_suffix_match(&format!("{}.java", segments.join("/")))
+}
+
+/// [`resolve_java`] against a prepared index. Keeps the inner-class retry:
+/// a static-member import strips its trailing member and asks once more
+/// against the enclosing class file.
+fn resolve_java_indexed(target: &str, index: &LivePathIndex<'_>) -> Option<String> {
+    if target.contains('*') {
+        return None;
     }
-    found.cloned()
+    let mut segments: Vec<&str> = target
+        .split('.')
+        .filter(|s| !s.is_empty() && !s.contains(' '))
+        .collect();
+    if segments.is_empty() {
+        return None;
+    }
+    if let Some(hit) = java_suffix_match_indexed(&segments, index) {
+        return Some(hit);
+    }
+    segments.pop();
+    if segments.is_empty() {
+        return None;
+    }
+    java_suffix_match_indexed(&segments, index)
 }
 
 fn parent_dir(path: &str) -> PathBuf {
@@ -567,6 +712,106 @@ mod tests {
 
     fn live(paths: &[&str]) -> HashSet<String> {
         paths.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// The equivalence proof for the suffix index: over a live set built to
+    /// exercise every branch the two suffix resolvers have — a repo-root
+    /// module, a nested one, a package `__init__.py`, a Java class under a
+    /// deep source root, an inner-class import, a partial-segment near-miss
+    /// (`notmypkg/` must not answer for `mypkg`), and two genuine ambiguities
+    /// that must be refused — the indexed answer equals the scanning answer
+    /// for every importer and target.
+    ///
+    /// Written as an agreement test rather than a table of expected values so
+    /// it cannot drift from the behaviour it is protecting: the scanning
+    /// functions are the specification, and they stay in the crate as the
+    /// published entry points.
+    #[test]
+    fn the_suffix_index_answers_exactly_as_the_full_scan_does() {
+        let paths = live(&[
+            "root_module.py",
+            "src/mypkg/utils.py",
+            "src/mypkg/__init__.py",
+            "src/notmypkg/utils.py",
+            "vendor/mypkg/utils.py",
+            "src/pkg/both.py",
+            "src/pkg/both/__init__.py",
+            "services/api/src/main/java/com/foo/Bar.java",
+            "services/web/src/main/java/com/foo/Baz.java",
+            "libs/a/src/main/java/com/dup/Same.java",
+            "libs/b/src/main/java/com/dup/Same.java",
+        ]);
+        let index = LivePathIndex::build(paths.iter());
+
+        let python_targets = [
+            "root_module",
+            "mypkg.utils", // ambiguous: src/ and vendor/ both carry it
+            "mypkg",       // package __init__
+            "pkg.both",    // ambiguous across module and package shapes
+            "notmypkg.utils",
+            "os",        // stdlib: no tracked file
+            "",          // degenerate
+            ".relative", // relative shape, handled by the other resolver
+        ];
+        for target in python_targets {
+            assert_eq!(
+                resolve_python_absolute(target, &paths),
+                resolve_python_absolute_indexed(target, &index),
+                "python absolute disagreed on {target:?}"
+            );
+        }
+
+        let java_targets = [
+            "com.foo.Bar",
+            "com.foo.Baz",
+            "com.dup.Same",      // ambiguous: two source roots carry it
+            "com.foo.Bar.INNER", // inner-class retry
+            "com.foo.*",         // wildcard: refused
+            "com.absent.Thing",
+            "",
+        ];
+        for target in java_targets {
+            assert_eq!(
+                resolve_java(target, &paths),
+                resolve_java_indexed(target, &index),
+                "java disagreed on {target:?}"
+            );
+        }
+
+        // And through the dispatcher, which is what every caller uses.
+        for (importer, target) in [
+            ("src/mypkg/app.py", "root_module"),
+            ("src/mypkg/app.py", "mypkg.utils"),
+            ("services/api/src/main/java/com/foo/App.java", "com.foo.Bar"),
+            (
+                "services/api/src/main/java/com/foo/App.java",
+                "com.dup.Same",
+            ),
+            ("src/lib.rs", "crate::thing"),
+        ] {
+            assert_eq!(
+                resolve_by_extension(importer, target, &paths),
+                resolve_by_extension_indexed(importer, target, &paths, &index),
+                "dispatch disagreed on {importer:?} -> {target:?}"
+            );
+        }
+    }
+
+    /// The property the index must not quietly lose: two files with the same
+    /// basename under different roots are ambiguous, and an ambiguous suffix
+    /// is refused rather than guessed. Asserted directly, because grouping by
+    /// basename is exactly the operation that could have collapsed them.
+    #[test]
+    fn an_ambiguous_suffix_is_still_refused_under_the_index() {
+        let paths = live(&[
+            "libs/a/src/main/java/com/dup/Same.java",
+            "libs/b/src/main/java/com/dup/Same.java",
+            "src/mypkg/utils.py",
+            "vendor/mypkg/utils.py",
+        ]);
+        let index = LivePathIndex::build(paths.iter());
+        assert_eq!(resolve_java_indexed("com.dup.Same", &index), None);
+        assert_eq!(resolve_python_absolute_indexed("mypkg.utils", &index), None);
     }
 
     #[test]
