@@ -450,11 +450,31 @@ impl FactsDb {
                      `analyze`, to have both halves agree."
                 );
             }
-            let db = Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir))?;
-            if let Some(msg) = db.cached_scan_thin_warning() {
-                tracing::warn!("{msg}");
+            match Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir)) {
+                Ok(db) => {
+                    if let Some(msg) = db.cached_scan_thin_warning() {
+                        tracing::warn!("{msg}");
+                    }
+                    return Ok(db);
+                }
+                Err(e) => {
+                    // A cache entry that will not open is a damaged file, not a
+                    // reason to fail the run: everything in it is derived from
+                    // HEAD and the options, so it can simply be recomputed.
+                    // Propagating the error instead made the damage permanent —
+                    // the key is a pure function of its inputs, so every later
+                    // run on that HEAD reopened the same broken file and failed
+                    // identically, with nothing in the message to suggest that
+                    // deleting a file would fix it. The entry goes, and the run
+                    // continues into the ingest below.
+                    tracing::warn!(
+                        "cache entry {} could not be opened ({e}); discarding it and \
+                         re-ingesting",
+                        cache_p.display()
+                    );
+                    crate::cache::delete_duckdb_with_companion(&cache_p, "damaged cache entry");
+                }
             }
-            return Ok(db);
         }
 
         tracing::info!("cache miss: ingesting to {}", cache_p.display());
@@ -485,15 +505,27 @@ impl FactsDb {
                 .map_err(|e| CodeLoreError::Analysis(format!("create cache dir: {e}")))?;
         }
 
-        // Write to a process-unique .tmp file first; atomic-rename on
-        // success. The PID suffix prevents two concurrent runs on the same
-        // cache key (e.g. parallel CI jobs, multiple terminals) from
-        // clobbering each other's in-flight writes — DuckDB would either
-        // refuse the file lock or produce a partially-written cache file.
-        // Stale `.tmp.<dead_pid>` artifacts from crashed runs are swept by
-        // `cache::cleanup_stale_tmp_files` during prune.
-        let tmp = cache_p.with_extension(format!("duckdb.tmp.{}", std::process::id()));
-        // Remove any leftover .tmp from a prior aborted run by THIS PID.
+        // Write to a run-unique .tmp file first; atomic-rename on success.
+        // The suffix prevents two concurrent runs on the same cache key
+        // (parallel CI jobs, multiple terminals) from clobbering each other's
+        // in-flight writes — DuckDB would either refuse the file lock or
+        // produce a partially-written cache file.
+        //
+        // It carries a timestamp as well as the PID because a PID is only
+        // unique within one PID namespace, and the line below deletes whatever
+        // already holds the name: two containers sharing a mounted cache
+        // volume routinely run as the same low PID, and there the delete would
+        // land on another container's live database rather than on a leftover
+        // of this run's own. Stale artifacts from crashed runs are swept by
+        // `cache::cleanup_stale_tmp_files` during prune, which matches on the
+        // `.duckdb.tmp` infix and so is unaffected by the longer suffix.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let tmp = cache_p.with_extension(format!("duckdb.tmp.{}.{unique}", std::process::id()));
+        // Remove any leftover .tmp under this exact name. With the timestamp
+        // above nothing else can hold it, so this only cleans up after an
+        // aborted run of this very process.
         let _ = std::fs::remove_file(&tmp);
 
         let db = Self::open_file(&tmp, &spill_dir)?;

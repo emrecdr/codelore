@@ -1117,6 +1117,61 @@ fn parquet_requires_output_flag() {
         .stderr(predicate::str::contains("requires --output"));
 }
 
+/// A cache entry that will not open must be discarded and recomputed, not
+/// propagated. The key is a pure function of the repository, HEAD and the
+/// options, so a damaged file used to be permanent: every later run on that
+/// HEAD reopened it and failed identically, with nothing in the message to
+/// suggest that deleting a file would fix it.
+#[test]
+fn a_damaged_cache_entry_is_discarded_and_re_ingested() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let run = || {
+        codelore_cmd()
+            .args([
+                "analyze",
+                "--analysis",
+                "revisions",
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--cache-dir",
+                cache_dir.path().to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    };
+
+    // Warm the cache, then find the entry it wrote.
+    assert!(run().status.success(), "first run must populate the cache");
+    let entry = walkdir::WalkDir::new(cache_dir.path())
+        .into_iter()
+        .flatten()
+        .map(|e| e.path().to_path_buf())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("duckdb"))
+        .expect("a .duckdb cache entry must exist after the first run");
+
+    // Damage it the way a killed writer or a full disk would: the file is
+    // present, so the key still hits, and DuckDB cannot open it.
+    std::fs::write(&entry, b"this is not a duckdb file").unwrap();
+
+    let second = run();
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        second.status.success(),
+        "a damaged entry must be recovered from, not propagated; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("discarding it and re-ingesting"),
+        "the recovery must be disclosed rather than silent; stderr: {stderr}"
+    );
+    assert!(
+        String::from_utf8_lossy(&second.stdout).contains("entity,n-revs"),
+        "the re-ingested run must produce real output"
+    );
+}
+
 #[test]
 fn sarif_rejects_unsupported_analysis() {
     // SARIF support covers {hotspots, clones}.
