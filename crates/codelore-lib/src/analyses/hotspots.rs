@@ -236,7 +236,12 @@ pub(crate) fn warn_on_unscanned_files(db: &FactsDb, opts: &Options, cm_src: &str
     }
     let excluded = eligible.saturating_sub(scanned);
     tracing::warn!(
-        "hotspots ranked {scanned} of {eligible} file(s) with enough history —          {excluded} have no complexity measurement (language without a grammar,          unreadable blob, or past the AST size cap) and are absent from the          ranking rather than scored at zero. At this share the ranking          describes a minority of what changed here; a file it omits has no          health verdict, not a good one."
+        "hotspots ranked {scanned} of {eligible} file(s) with enough history — \
+         {excluded} have no complexity measurement (language without a grammar, \
+         unreadable blob, or past the AST size cap) and are absent from the \
+         ranking rather than scored at zero. At this share the ranking \
+         describes a minority of what changed here; a file it omits has no \
+         health verdict, not a good one."
     );
     Ok(())
 }
