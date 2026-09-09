@@ -494,7 +494,7 @@ fn collect_duckdb_files_inner(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
 /// pruner's `.duckdb`-only extension filter would leave it behind.
 ///
 /// Failures are logged but not propagated — partial cleanup beats abort.
-fn delete_duckdb_with_companion(path: &Path, ctx: &str) {
+pub(crate) fn delete_duckdb_with_companion(path: &Path, ctx: &str) {
     match fs::remove_file(path) {
         Ok(()) => tracing::info!("{ctx}: removed {}", path.display()),
         Err(e) => {
