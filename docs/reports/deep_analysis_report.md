@@ -4427,4 +4427,76 @@ choice is between adopting it and keeping the current explicit list.
 
 Found by an audit that read the module header against the function beneath it.
 
-The next sweep re-opens at **F389**.
+### F389 (Active) — HEAD-time rows are stamped with the newest non-merge commit, not HEAD
+
+`current_head_rev` (`facts/ingest/mod.rs`) resolves the rev that stamps every
+row the HEAD-time passes write — `complexity_metrics`, `entities`, `clones`,
+`imports` — by asking the fact store: `SELECT rev FROM commits ORDER BY date
+DESC, rowid ASC LIMIT 1`.
+
+`commits` excludes merge commits under the default `include_merges = false`.
+So whenever HEAD *is* a merge commit — the ordinary state of a
+merge-based `main` — HEAD is absent from that table and the stamp is the tip
+of the last pull request instead. A future-dated or rebased commit wins the
+same sort, which is the case the neighbouring `future_dated_commit_warning`
+already exists to flag.
+
+The blobs those rows describe are HEAD's: every HEAD-time pass reads through
+`blob_reader_at("HEAD")`. Only the label is wrong.
+
+The second half is the sharper one: `ingest_head_only` does not use this
+function. It stamps `repo.head_sha()` directly. So the two ingest modes
+disagree about what the HEAD stamp means, and nothing asserts they agree.
+
+**Why this is recorded rather than fixed.** It is latent. No analysis joins
+these tables to `commits` on `rev` — checked directly; the only rev comparison
+between them is `entities.rev_last_seen = complexity_metrics.rev`, an internal
+lockstep between two tables that receive the same stamp either way. So the
+error has no consumer today, and the fix (pass the already-resolved
+`head_sha` into both modes and delete `current_head_rev`) costs a
+`CACHE_EPOCH` bump, which re-ingests every user's stores.
+
+It also cannot be tested with the fixtures this repository has. Every one of
+them has a non-merge HEAD, so the correct and incorrect implementations agree
+on all of them — a test written today would pass against the bug. Closing this
+means first building a merge-tip fixture, which is the part worth doing
+deliberately rather than in passing.
+
+Found by an engine audit, and the join question checked before deciding not to
+act on it.
+
+### F390 (Active) — `--group-file` collapses a group's change type lexicographically
+
+`materialize_grouping`'s `_changes_grouped` table (`facts/ingest/grouping.rs`)
+aggregates every path in a group to one row per commit with
+`MAX(c.change_type)`. That is a lexicographic maximum over
+`added`/`copied`/`deleted`/`modified`/`renamed`, so a commit that deletes one
+file in a group and adds another collapses to `deleted` — `MAX('added',
+'deleted')` is `'deleted'`.
+
+Downstream that reads as the whole group disappearing in that commit:
+liveness rules test `change_type != 'deleted'`, so the group drops out of the
+live set for every path-aggregating analysis, and the lineage seed keys on
+`change_type = 'renamed'`, which the same collapse can hide.
+
+Its immediate sibling twenty lines away was already fixed: the bucketed table
+uses `arg_max(c.change_type, ROW(m.date, -m.rowid))` to collapse
+chronologically. That fix does not transfer, and this is why the entry is a
+finding rather than a patch: the bucketed table aggregates *across commits*,
+where chronology decides. This one aggregates *within one commit*, where every
+row shares a rev and a date, so there is no chronology to order by.
+
+Fixing it means answering a question the code has never stated: what *is* a
+group's change type when its members disagree in a single commit? "Deleted
+only when every member was deleted" is defensible and would fix the liveness
+error. Whether the survivor should then read `added`, `modified` or `renamed`
+is a real semantic choice that reaches the lineage seed, and guessing at it
+would be worse than the current, at least consistent, wrongness.
+
+Reachable only under `--group-file`, which bounds the blast radius but does
+not shrink it: a grouped run is exactly the one where a group is the unit of
+analysis.
+
+Found while validating the fixed bucketed sibling against its unfixed twin.
+
+The next sweep re-opens at **F391**.
