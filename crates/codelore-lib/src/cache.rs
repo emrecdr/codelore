@@ -78,7 +78,7 @@ use crate::Options;
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v24";
+pub const CACHE_EPOCH: &str = "schema_v25";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
