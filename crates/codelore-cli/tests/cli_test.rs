@@ -2386,6 +2386,98 @@ fn diff_delta_health_gate_fails_the_run() {
     );
 }
 
+/// A failing gate must say so on stderr, in every format and whether or not
+/// the report went to a file. `--output` used to take the whole story with it:
+/// the run exited 1 with an empty stderr, so a red Action step carried a blank
+/// log and the reason was visible only to whoever opened the artifact.
+#[test]
+fn diff_failing_gate_prints_a_verdict_to_stderr_with_output_to_a_file() {
+    let (dir, base, head) = delta_health_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(&thresholds, "[diff]\ndeny_degrading_verdict = true\n").unwrap();
+    let report = dir.path().join("report.md");
+    let output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "markdown",
+            "--output",
+            report.to_str().unwrap(),
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("codelore diff: FAIL"),
+        "a failing gate must report its verdict on stderr; got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(report.to_str().unwrap()),
+        "the verdict must point at the report it wrote; got: {stderr:?}"
+    );
+    // Stdout stays the document channel: nothing went there, because the
+    // report went to the file.
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay clean when --output names a file"
+    );
+}
+
+/// The passing counterpart, so the verdict line cannot pass by being printed
+/// unconditionally — and an advisory run (no thresholds, `--fail-on none`)
+/// stays quiet, since it gated nothing and is the common invocation.
+#[test]
+fn diff_reports_pass_only_when_something_was_gated() {
+    let (dir, base, head) = delta_health_fixture();
+    let gated = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--fail-on",
+            "rank-entrant",
+            "--format",
+            "text",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&gated.stderr).contains("codelore diff: PASS"),
+        "a gated run that passes must say so"
+    );
+
+    let advisory = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "text",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(advisory.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&advisory.stderr).contains("codelore diff: PASS"),
+        "an advisory run gated nothing and has no verdict to report"
+    );
+}
+
 #[test]
 fn diff_degenerate_thresholds_file_exits_with_config_code() {
     // A thresholds file with an out-of-range value is a configuration error →
