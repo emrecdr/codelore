@@ -246,8 +246,9 @@ fn classify_import_file(
     read: crate::Result<Option<Vec<u8>>>,
     lang: crate::imports::ImportLanguage,
     live_set: &HashSet<String>,
+    index: &crate::imports::LivePathIndex<'_>,
 ) -> ScanOutcome<Vec<(String, String)>> {
-    use crate::imports::{extract_imports, resolve_by_extension};
+    use crate::imports::{extract_imports, resolve_by_extension_indexed};
 
     let code = match read {
         Ok(Some(code)) => code,
@@ -268,7 +269,7 @@ fn classify_import_file(
     };
     let mut out: Vec<(String, String)> = Vec::new();
     for imp in imports {
-        if let Some(target_path) = resolve_by_extension(rel, &imp.target, live_set) {
+        if let Some(target_path) = resolve_by_extension_indexed(rel, &imp.target, live_set, index) {
             out.push((rel.to_string(), target_path));
         }
     }
@@ -291,6 +292,8 @@ fn resolve_imports_at_rev<R: Repo>(
     use rayon::prelude::*;
 
     let live_set: HashSet<String> = live_paths.iter().cloned().collect();
+    // One suffix index per rev, shared by every file scanned at it.
+    let index = crate::imports::LivePathIndex::build(live_set.iter());
     let candidates: Vec<(String, ImportLanguage)> = live_paths
         .iter()
         .filter_map(|rel| {
@@ -312,7 +315,9 @@ fn resolve_imports_at_rev<R: Repo>(
         .into_par_iter()
         .map_init(
             || repo.blob_reader_at(rev),
-            |reader, (rel, lang)| classify_import_file(&rel, reader.read(&rel), lang, &live_set),
+            |reader, (rel, lang)| {
+                classify_import_file(&rel, reader.read(&rel), lang, &live_set, &index)
+            },
         )
         .collect();
 
@@ -349,8 +354,9 @@ mod tests {
         use std::collections::HashSet;
 
         let live: HashSet<String> = HashSet::new();
+        let index = crate::imports::LivePathIndex::build(live.iter());
         let err = Err(crate::CodeLoreError::Repo("simulated odb failure".into()));
-        let outcome = classify_import_file("src/a.rs", err, ImportLanguage::Rust, &live);
+        let outcome = classify_import_file("src/a.rs", err, ImportLanguage::Rust, &live, &index);
         assert!(
             matches!(outcome, ScanOutcome::Lost(_)),
             "a failed blob read must be counted as lost — the trend chart seeds \
@@ -361,7 +367,8 @@ mod tests {
         // Absent at this rev is NOT a loss: `live_paths_at` is derived from
         // history, so a path the rev does not carry is expected. Counting it
         // would mark healthy repositories degraded.
-        let absent = classify_import_file("src/a.rs", Ok(None), ImportLanguage::Rust, &live);
+        let absent =
+            classify_import_file("src/a.rs", Ok(None), ImportLanguage::Rust, &live, &index);
         assert!(matches!(absent, ScanOutcome::NotCounted));
 
         // Read and parsed with no resolvable imports is still full coverage.
@@ -370,6 +377,7 @@ mod tests {
             Ok(Some(b"fn main() {}\n".to_vec())),
             ImportLanguage::Rust,
             &live,
+            &index,
         );
         assert!(
             matches!(empty, ScanOutcome::Scored(ref e) if e.is_empty()),
