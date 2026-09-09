@@ -1894,7 +1894,7 @@ that switching the workflow before that configuration exists breaks the next
 release. Sequencing, not incompatibility. Recorded so the next cycle does not
 re-derive a resolved argument.
 
-### F308 (Fixed — Unreleased) — the comment-hygiene guard cannot see manifests, and phase markers live there
+### F308 (Fixed — v0.30.0) — the comment-hygiene guard cannot see manifests, and phase markers live there
 
 Found while validating cycle 19, whose §3 concerns a scanner that is blind to
 one syntactic form. The same shape appears one layer over: the comment-hygiene
@@ -2174,7 +2174,7 @@ no call site outside the crate, so those impls are dead as produced values.
     dispatch layer both of those sit inside. If the fork's divergence budget is
     opened for one, it should be opened for both in the same cut.
 
-### F313 (Fixed — Unreleased) — `tempfile` is declared twice in `codelore-cli`
+### F313 (Fixed — v0.30.0) — `tempfile` is declared twice in `codelore-cli`
 
 `codelore-cli` declares `tempfile = "3"` in `[dependencies]` and again in
 `[dev-dependencies]`. Normal dependencies are already available to test and bench
@@ -2237,7 +2237,7 @@ not run.
     than at review time, and the honest response then is to port the code rather
     than to downgrade the lint.
 
-### F315 (Fixed — Unreleased) — scan coverage is disclosed but not gated
+### F315 (Fixed — v0.30.0) — scan coverage is disclosed but not gated
 
 The HEAD complexity scan now tallies eligible-but-skipped files and warns below a
 90% floor. The `degraded` verdict still does not consume it. `eval_code_health_gate`
@@ -2744,7 +2744,7 @@ touched files are exactly the analysis's subject. Three other analyses carry
 a uniform field.
 
 
-### F330 (Fixed — Unreleased) — the knowledge-shares guard ignores the options it was built under
+### F330 (Fixed — v0.30.0) — the knowledge-shares guard ignores the options it was built under
 
 `is_knowledge_shares_built` is a bare bool: the first caller's `opts`
 (window, lineage source) bake the temp tables, and later callers with
@@ -3774,7 +3774,7 @@ statement examined was false. A check can be carried out correctly and
 still answer a question other than the one that mattered.
 
 
-### F373 (Fixed — Unreleased) — the code-maat parity test can pass with neither value read
+### F373 (Fixed — v0.30.0) — the code-maat parity test can pass with neither value read
 
 `code_maat_parity_test`'s summary comparison reads both sides through
 `unwrap_or(-1)`, then compares the results:
@@ -3926,7 +3926,7 @@ that needs it is exactly the HEAD-time three.
 Noted by a cleanup pass over the change that instrumented the complexity scan.
 
 
-### F376 (Fixed — Unreleased) — the degraded-coverage counts survive only on the path that was already failing
+### F376 (Fixed — v0.30.0) — the degraded-coverage counts survive only on the path that was already failing
 
 A cleanup pass over the coverage instrumentation removed the `tracing::warn!`
 that `eval_code_health_gate` fired whenever the HEAD complexity scan came back
@@ -3994,7 +3994,7 @@ describe the same scan differently, and the message itself is built by a pure
 function so the magnitude it must carry is asserted rather than assumed.
 
 
-### F377 (Fixed — Unreleased) — the scan detects two kinds of blindness and persists only one
+### F377 (Fixed — v0.30.0) — the scan detects two kinds of blindness and persists only one
 
 `ScanCoverage::tally` computes `eligible = scored + lost` and keeps
 `skipped_oversize` in a separate field, deliberately outside the loss ratio. The
@@ -4049,7 +4049,7 @@ the testing-constraint note under [F378] predicted: the size cap is applied from
 the cap ingests to `OversizeMajority { scored: 1, oversize: 2 }` deterministically.
 The loss paths remain unreachable from content.
 
-### F378 (Fixed — Unreleased) — the coverage floor is enforced only when one particular gate is configured
+### F378 (Fixed — v0.30.0) — the coverage floor is enforced only when one particular gate is configured
 
 The verdict is read inside `eval_code_health_gate`, *after* its own early
 return:
@@ -4115,7 +4115,7 @@ file larger than `DEFAULT_MAX_AST_FILE_BYTES` yields `SkippedOversize`
 deterministically from content alone, so the oversize-majority case *is*
 testable end to end whenever that finding is taken up.
 
-### F379 (Fixed — Unreleased) — one command reads the coverage the store now records; three do not
+### F379 (Fixed — v0.30.0) — one command reads the coverage the store now records; three do not
 
 The premise for persisting the counts was that a cache hit never re-runs the
 scan, so the ingest-time warning never fires. That premise is true of every
@@ -4149,7 +4149,7 @@ message is returned rather than printed so its counts are asserted against a
 real store, since a disclosure that stops naming its magnitude fails the same
 way as the absent one it replaces.
 
-### F380 (Fixed — Unreleased) — the knowledge-shares idempotence test cannot fail
+### F380 (Fixed — v0.30.0) — the knowledge-shares idempotence test cannot fail
 
 `knowledge_shares_materialize_is_idempotent` calls `materialize_knowledge_shares`
 twice and asserts `COUNT(*)` is unchanged. Step one of that function is
@@ -4171,7 +4171,7 @@ REPLACE` was deterministic, which was the one real property it looked like it
 carried. It paid a full `coupling_repo` ingest to assert that a no-op changed
 no rows.
 
-### F381 (Fixed — Unreleased) — the parity suite's other shared helper has the vacuity that was just closed next door
+### F381 (Fixed — v0.30.0) — the parity suite's other shared helper has the vacuity that was just closed next door
 
 `parse_summary_csv` gained a cardinality floor because both sides of the
 comparison run through it, so a parser break is a shared failure that leaves both

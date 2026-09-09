@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-09-09
+
 ### Added
 
 - **A security policy and a contributing guide.** `SECURITY.md` states where to send a vulnerability report and what is in scope for a local, network-free analysis tool — repository content reaching the machine or an output in a form that executes or misleads, secrets escaping into a report or the fact store, and the integrity of what we publish — and says plainly that analysing an untrusted repository is not a supported use until that question is settled, since a repository controls the file contents, paths, author names and root configuration files the parsers read. `CONTRIBUTING.md` covers the build, the two feature flags a first `cargo test` runs into, and the three conventions a first patch meets: both `Repo` backends change together, no version history outside the changelog, and no `unsafe`.
