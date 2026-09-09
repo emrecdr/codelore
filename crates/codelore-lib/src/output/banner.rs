@@ -12,7 +12,9 @@
 //! Industry-standard styling choices applied:
 //! - **stderr** output. Stdout stays clean for CSV/JSON/SARIF piping.
 //! - **Auto-disable on non-TTY stderr** (CI logs, file redirects). Override via
-//!   `--banner` (clap layer) or by setting `CLICOLOR_FORCE=1`.
+//!   `CLICOLOR_FORCE=1`. (There is no `--banner` flag; the only flag here is
+//!   `--no-banner`, which suppresses the success banner and never the
+//!   failure one.)
 //! - **`NO_COLOR` respected** (per <https://no-color.org/>) — env-var presence
 //!   strips all ANSI escapes regardless of TTY status.
 //! - **Unicode box drawing** (`─`). Assumes UTF-8 terminal — every macOS, Linux,

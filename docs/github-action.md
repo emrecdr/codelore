@@ -43,8 +43,18 @@ The findings appear in the PR's **Security** tab and the **Files changed** view,
 | `format` | `sarif` | `csv \| json \| ndjson \| sarif \| markdown \| gha \| html \| parquet \| sqlite \| spa \| step-summary`. Applies to `command: analyze` only |
 | `output` | `codelore-result` | Output file path relative to `GITHUB_WORKSPACE`. Empty string = stdout. Applies to `command: analyze` only |
 | `repo` | `.` | Path to repository to analyse (defaults to the checked-out workspace) |
-| `args` | (empty) | Extra CLI flags appended verbatim. For `analyze`: `--rows`, `--min-revs`, `--departed-threshold-days`, etc. For `check`/`gate`/`diff`: the command-specific flags (`--thresholds-file`, `--ratchet`, `--fail-on`, and diff's `<base>..<head>` range) |
+| `args` | (empty) | Extra CLI flags appended verbatim, **split on whitespace with no quote handling** — see the note below. For `analyze`: `--rows`, `--min-revs`, `--departed-threshold-days`, etc. For `check`/`gate`/`diff`: the command-specific flags (`--thresholds-file`, `--ratchet`, `--fail-on`, and diff's `<base>..<head>` range) |
 | `version` | `latest` | `latest` follows the most recent v* release; `vX.Y.Z` pins to a specific version |
+
+
+> **`args` values cannot contain spaces.** The Action splits this input on
+> whitespace before building the command, and it does not honour quotes — so
+> `args: '--exclude "some dir/**"'` arrives as three separate arguments and
+> the flag is rejected. Globbing is disabled during the split, so a bare `*`
+> is safe. Where a value needs a space, use a flag whose value can avoid one
+> (repeat `--exclude` with a glob per pattern), or run the binary directly in
+> a `run:` step instead of through this Action.
+
 
 ## Outputs
 
