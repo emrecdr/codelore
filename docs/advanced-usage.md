@@ -1473,6 +1473,18 @@ directory is a permission fault, not an absent one, and telling you to create a
 path that already exists would send you the wrong way. (`check --history` prints the gate-run ledger without
 evaluating anything and returns before that check.)
 
+That is a property of `check` and `gate`, not a rule that holds across the CLI.
+`analyze --analysis clones` deliberately accepts a directory that is **not** a
+git repository: clone detection is a working-tree walk over the files at
+`--repo` and needs no history, so it short-circuits before the repository is
+opened and reports the clones it finds. The carve-out covers exactly the four
+row formats clones emits — `csv`, `json`, `markdown`, `sarif`. The composite
+emitters (`--format spa`, `--format step-summary`) bypass `--analysis` and
+build from the fact store, so they open the repository and do fail with exit 3
+on a directory that is not one. A `--repo` that is missing or unreadable is an
+exit-3 error for clones as well: the short-circuit skips the repository checks,
+not the path checks.
+
 Two out-of-band terminations sit outside this 0–5 contract:
 
 - **Broken pipe → exit 0.** A reader closing stdout early (`codelore … | head`, or quitting a pager) surfaces as a `BrokenPipe` I/O error on the next write. That is a normal way to consume partial output, not a failure, so codelore recognises it in its cause chain and exits **0** silently (no error line).
