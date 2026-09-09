@@ -1117,6 +1117,11 @@ codelore analyze --analysis hotspots --no-cache
 # Override the XDG root (useful in CI with per-job caches)
 codelore analyze --analysis hotspots --cache-dir /tmp/codelore-cache
 
+# Or set it once for every command in the environment. Precedence is
+# --cache-dir, then CODELORE_CACHE_DIR, then the OS cache location. This
+# is the only way to move `diff`, which has no --cache-dir flag.
+export CODELORE_CACHE_DIR=/tmp/codelore-cache
+
 # Inspect the cache — `profile` prints the resolved root, the current
 # size and the eviction cap, on every platform
 codelore profile
