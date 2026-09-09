@@ -20,6 +20,9 @@ mod resolver;
 
 pub use extractor::{ImportKind, RawImport, extract_imports};
 pub use language::ImportLanguage;
+/// In-crate only: the suffix index and the entry point that takes it. Not
+/// re-exported publicly, so the published resolver surface is unchanged.
+pub(crate) use resolver::{LivePathIndex, resolve_by_extension_indexed};
 pub use resolver::{
     resolve_by_extension, resolve_java, resolve_js_relative, resolve_python_absolute,
     resolve_python_relative, resolve_rust_path,
