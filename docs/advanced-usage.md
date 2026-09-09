@@ -1385,7 +1385,16 @@ See [`examples/.github/workflows/codelore-pr.yml`](../examples/.github/workflows
 - **`fetch-depth: 0`** in `actions/checkout` is mandatory. Without full history, hotspot scores are truncated to one commit and become meaningless. This is the single most common failure mode.
 - **Three-dot merge-base notation** (`origin/main...HEAD`) scopes correctly to PR-only commits even when the base branch has moved since branch creation.
 - **`security-events: write` permission** is required for SARIF upload to Code Scanning.
-- **GHA cache integration** — pass `--cache-dir ${{ runner.temp }}/codelore-cache` and wrap with `actions/cache@v4` to persist across PRs.
+- **Caching across runs** — the fact-store cache key includes the HEAD SHA, so a restored `--cache-dir` misses on every new push and helps only a re-run of the *same* commit. Caching it across pull requests does not work and is not worth the upload. What does persist is `codelore diff --base-cache PATH`: it is keyed on the base revision, so every pull request against an unchanged base reuses the base-side analysis. Wrap that file with `actions/cache` keyed on the base SHA:
+
+  ```yaml
+  - uses: actions/cache@v4
+    with:
+      path: ${{ runner.temp }}/codelore-base.json
+      key: codelore-base-${{ github.event.pull_request.base.sha }}
+  - run: codelore diff origin/${{ github.base_ref }}...HEAD
+           --base-cache ${{ runner.temp }}/codelore-base.json
+  ```
 
 ### Quality gate rollout
 
