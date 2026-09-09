@@ -61,9 +61,29 @@ fn changed_files_for_commit(
         .parent_ids()
         .next()
         .map(|pid| {
-            let parent_commit = repo
-                .find_commit(pid)
-                .map_err(|e| CodeLoreError::Repo(format!("find_parent_commit {rev}: {e}")))?;
+            let parent_commit = repo.find_commit(pid).map_err(|e| {
+                // A parent that is not in the object database is a corrupt
+                // repository in general, and something else entirely on a
+                // shallow clone: it is the boundary the fetch depth cut, and
+                // the two have nothing in common but the symptom. This is the
+                // most common way a CI run meets codelore — `actions/checkout`
+                // fetches depth 1 by default — and gix's own "an object with
+                // id … could not be found" sends the reader looking for a
+                // damaged repository instead of at the checkout step. Only the
+                // failure path pays for the shallow probe.
+                if repo.is_shallow() {
+                    CodeLoreError::Repo(format!(
+                        "history is truncated at {rev}: its parent {pid} is not in this \
+                         checkout. That is a shallow clone (git fetch-depth, e.g. \
+                         actions/checkout's default fetch-depth: 1), and behavioural \
+                         analysis reads the commits behind HEAD. Re-run against full \
+                         history: `git fetch --unshallow` locally, or fetch-depth: 0 in \
+                         actions/checkout."
+                    ))
+                } else {
+                    CodeLoreError::Repo(format!("find_parent_commit {rev}: {e}"))
+                }
+            })?;
             parent_commit
                 .tree()
                 .map_err(|e| CodeLoreError::Repo(format!("parent tree {rev}: {e}")))
