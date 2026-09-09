@@ -4388,4 +4388,43 @@ Found by a docs-currency audit that read the licence section to check whether
 "bca" was defined anywhere for a public reader.
 
 
-The next sweep re-opens at **F388**.
+### F388 (Active) — gitignore discovery is root-only, and a monorepo's vendored trees ride in
+
+`PathsFilter::from_opts` adds exactly three files to its matcher, each resolved
+against the repository root: `.gitignore`, `.git/info/exclude` and
+`.codeloreignore`. There is no walk, so a `.gitignore` in a subdirectory is
+never read.
+
+That is the ordinary shape of a monorepo. A repository whose root
+`.gitignore` is thin and whose real exclusions live in
+`packages/*/.gitignore` or `services/*/.gitignore` has every one of those
+trees analysed — vendored dependencies, generated clients, build output — and
+they arrive as ordinary source. The effect is not a warning but a set of
+numbers: the file census, hotspot rankings, the clone families, the complexity
+distribution and every gate reading them describe a population the user
+believes they excluded.
+
+The module documentation asserted the opposite until now, claiming
+"parent-directory `.gitignore`s" and "per-directory inheritance". That prose
+is corrected in the same change that files this; the behaviour is not, because
+fixing it is not a local edit.
+
+The obstacle is the cache key, and it is the interesting part. The key folds
+in a *content digest of each ignore file*, precisely so that editing one
+invalidates the store — `.git/info/exclude` is untracked, so nothing else
+about a run moves when it changes. Reading nested files would mean the set of
+digested paths becomes a function of the tree walk rather than a fixed list,
+and a newly-added nested `.gitignore` must invalidate the cache as reliably as
+an edit to the root one does. That is a design question about what the key
+covers, not a matter of pointing the builder at more files.
+
+Two smaller consequences ride along and should be settled with it. A linked
+worktree has `.git` as a *file*, so `<root>/.git/info/exclude` does not exist
+there and the user's local-only ignore list is silently skipped, though git
+itself honours it from the common directory. And the `ignore` crate's
+`WalkBuilder` implements the full semantics already, so the implementation
+choice is between adopting it and keeping the current explicit list.
+
+Found by an audit that read the module header against the function beneath it.
+
+The next sweep re-opens at **F389**.
