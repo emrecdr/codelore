@@ -124,21 +124,12 @@ fn serialize_capped_rows<T: Serialize>(
 /// a typo or an absolute path where a repo-relative one is expected otherwise
 /// reads as an empty result. Mirrors how `explain_file`'s fact sheet rejects an
 /// unknown path.
+///
+/// The check itself lives with `analyze`'s other argument validation, so this
+/// surface and the CLI cannot drift on what counts as a known path; only the
+/// protocol-shaped error is built here.
 fn require_tracked_path(repo: &GixRepo, path: &str) -> std::result::Result<(), ErrorData> {
-    match repo
-        .read_blob_at("HEAD", path)
-        .map_err(|e| map_lib_err(&e))?
-    {
-        Some(_) => Ok(()),
-        None => Err(ErrorData::invalid_params(
-            format!(
-                "path not found among files tracked at HEAD: {path:?} — paths are \
-                 repo-relative; `hotspots` returns analysed file paths (ranked, and \
-                 limited to files the complexity scan could measure)"
-            ),
-            None,
-        )),
-    }
+    crate::analyze::require_tracked_at_head(repo, path).map_err(|e| map_lib_err(&e))
 }
 
 /// Resolve a revision string against `repo` via `git rev-parse`.

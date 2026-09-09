@@ -262,6 +262,10 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     if matches!(analysis, AnalysisName::Clones)
         && matches!(format, "csv" | "json" | "markdown" | "sarif")
     {
+        // Everything the full pre-flight checks that does not require an
+        // opened repository. Skipping the repository checks is the point of
+        // this branch; skipping the path checks was an oversight.
+        preflight_paths(args, &opts, analysis_name)?;
         let rows =
             codelore_lib::cli_api::analyses::clones::run_clones(&opts).context("run clones")?;
         emit_to_output_or_stdout(dest, |out| {
@@ -303,6 +307,33 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         let _span = tracing::info_span!(target: "codelore::bench", "bench.open_repo").entered();
         preflight_and_open_repo(args, &opts, analysis_name, no_banner)?
     };
+
+    // `--target` is checked here, against the opened repository and before the
+    // ingest, for both reasons the exit-code contract cares about: a missing
+    // flag is an argument error (2), not an analysis error (4), and neither
+    // mistake should cost the user a 5–30 s ingest to discover. An untracked
+    // path is the sharper case — the analyses answer it with an empty table,
+    // which is correct for a tracked file that has no functions and silent for
+    // a typo.
+    if matches!(
+        analysis,
+        AnalysisName::FunctionXray | AnalysisName::FunctionCoupling
+    ) {
+        use codelore_lib::complexity::Tier1Language;
+
+        let target = required_target(analysis, &opts)?;
+        require_tracked_at_head(&repo, target)?;
+        if Tier1Language::from_path(target).is_none() {
+            // Tracked but outside the function analyser's languages: a real
+            // empty result rather than a mistake, so say why instead of
+            // leaving the reader with a bare header row.
+            eprintln!(
+                "note: {target} is tracked but not a Tier-1 source file (function analysis \
+                 covers Rust, Python, Java, JavaScript, TypeScript); no per-function \
+                 breakdown is available for it"
+            );
+        }
+    }
 
     // The persistent cache opens its DuckDB file read-only.
     // SQLite output requires `INSTALL sqlite; LOAD sqlite;` which writes
@@ -1209,9 +1240,7 @@ fn run_streaming_dispatch(
             "markdown" => output::markdown::write_function_hotspots_markdown,
         }),
         AnalysisName::FunctionXray => {
-            let target = opts.target.as_deref().ok_or_else(|| {
-                CodeLoreError::Analysis("--target <path> is required for function-xray".to_string())
-            })?;
+            let target = required_target(AnalysisName::FunctionXray, opts)?;
             dispatch!(ctx, format, out,
             analyses::function_xray::run_function_xray(db, repo, opts, target),
             {
@@ -1221,11 +1250,7 @@ fn run_streaming_dispatch(
             })
         }
         AnalysisName::FunctionCoupling => {
-            let target = opts.target.as_deref().ok_or_else(|| {
-                CodeLoreError::Analysis(
-                    "--target <path> is required for function-coupling".to_string(),
-                )
-            })?;
+            let target = required_target(AnalysisName::FunctionCoupling, opts)?;
             dispatch!(ctx, format, out,
             analyses::function_coupling::run_function_coupling(db, repo, opts, target),
             {
@@ -1280,7 +1305,10 @@ fn run_streaming_dispatch(
 /// `open`; this gate runs in front of them purely to render a banner, so
 /// matching their verdict is what stops one command contradicting another
 /// about the same path.
-fn classify_repo_path(path: &Path, repo_path_str: &str) -> Option<(Preflight, CodeLoreError)> {
+pub(crate) fn classify_repo_path(
+    path: &Path,
+    repo_path_str: &str,
+) -> Option<(Preflight, CodeLoreError)> {
     match path.try_exists() {
         Ok(true) => None,
         Ok(false) => Some((
@@ -1316,6 +1344,96 @@ fn unwritable_parent_reason(parent: &Path) -> Option<String> {
             parent.display()
         )),
     }
+}
+
+/// The pre-flight checks that need no repository: `--repo` is present and
+/// readable, and `--output`'s parent directory is there.
+///
+/// [`preflight_and_open_repo`] runs these as its first and last steps, around
+/// the ones that do need an opened repository. The clone short-circuit runs
+/// them alone, because it deliberately accepts a directory that is not a git
+/// repository — and without them a mistyped `--repo` reached the working-tree
+/// walk, found nothing to walk, and emitted a header row with exit 0. That
+/// made `--analysis clones` the one route through `analyze` where a typo was
+/// not an error, on the surface most likely to run unattended in CI.
+fn preflight_paths(args: &AnalyzeArgs, opts: &Options, analysis_name: &str) -> Result<()> {
+    use codelore_lib::cli_api::output::banner::{self, Banner};
+    use codelore_lib::cli_api::provenance::{DUCKDB_VERSION, GIX_VERSION};
+
+    let repo_path_str = args.repo.display().to_string();
+    let render_failure = |preflight| {
+        let b = Banner {
+            codelore_version: env!("CARGO_PKG_VERSION"),
+            gix_version: GIX_VERSION,
+            duckdb_version: DUCKDB_VERSION,
+            repo_path: repo_path_str.clone(),
+            // Nothing is opened on this path, so there is no branch or HEAD to
+            // report; the banner's own `Option` fields already render that.
+            branch: None,
+            head_short: None,
+            analysis: analysis_name,
+            options_summary: format_options_summary(opts),
+            preflight,
+        };
+        // Failure banners print even under `--no-banner`, as everywhere else.
+        eprint!("{}", b.render(banner::should_color()));
+    };
+
+    if let Some((preflight, err)) = classify_repo_path(&args.repo, &repo_path_str) {
+        render_failure(preflight);
+        return Err(err.into());
+    }
+
+    if let Some(out_path) = &args.output
+        && let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Some(reason) = unwritable_parent_reason(parent)
+    {
+        render_failure(Preflight::OutputNotWritable {
+            path: out_path.display().to_string(),
+            reason: reason.clone(),
+        });
+        return Err(CodeLoreError::Output(format!("--output {reason}")).into());
+    }
+
+    Ok(())
+}
+
+/// `Ok(())` when `path` names a file tracked at HEAD, otherwise the argument
+/// error that says so.
+///
+/// The analyses that take a single file answer an untracked path with an empty
+/// table, which is the right contract for them — a tracked file can genuinely
+/// have no functions — but the wrong answer for a typo. This is the boundary
+/// check that tells the two apart, and it is shared with the MCP tools, which
+/// have refused an untracked path since they were written.
+pub(crate) fn require_tracked_at_head(
+    repo: &GixRepo,
+    path: &str,
+) -> std::result::Result<(), CodeLoreError> {
+    match repo.read_blob_at("HEAD", path)? {
+        Some(_) => Ok(()),
+        None => Err(CodeLoreError::InvalidOptions(format!(
+            "path not found among files tracked at HEAD: {path:?} — paths are \
+             repo-relative; `hotspots` returns analysed file paths (ranked, and \
+             limited to files the complexity scan could measure)"
+        ))),
+    }
+}
+
+/// The `--target` the single-file analyses need, or the argument error naming
+/// the flag. Stated once so the pre-ingest check and the dispatch arms cannot
+/// disagree about which flag is missing or what it costs the user to find out.
+fn required_target(
+    analysis: AnalysisName,
+    opts: &Options,
+) -> std::result::Result<&str, CodeLoreError> {
+    opts.target.as_deref().ok_or_else(|| {
+        CodeLoreError::InvalidOptions(format!(
+            "--target <path> is required for {}",
+            analysis.as_str()
+        ))
+    })
 }
 
 /// Pre-flight: cheap validations BEFORE the expensive ingest. Builds the
