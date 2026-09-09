@@ -276,6 +276,47 @@ fn analyze_exits_3_on_truncated_shallow_checkout() {
     );
 }
 
+/// The witness above only fires when the shallow tip is a merge commit, which
+/// ingests zero history under the default merge filter. On ordinary linear
+/// history the walk gets further and dies at the boundary instead, where gix
+/// reports a missing object — a message that reads as a corrupt repository and
+/// sends the reader nowhere near the checkout step that caused it. Both shapes
+/// of the same truncation must name the same remedy.
+#[test]
+fn analyze_names_the_fetch_depth_remedy_on_a_linear_shallow_checkout() {
+    let full = codelore_lib::test_support::tiny_repo::build();
+    let shallow = tempfile::tempdir().unwrap();
+    let source_url = format!("file://{}", full.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(shallow.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            shallow.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--no-cache",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("truncated") && stderr.contains("fetch-depth"),
+        "the boundary failure must name the truncation and its remedy, not a \
+         missing object; got stderr: {stderr}"
+    );
+}
+
 /// The shallow-checkout witness must survive a date filter. Under
 /// `--after`/`--before`, a zero-commit walk on a FULL clone is a legitimate
 /// empty selection (warn + exit 0), but on a shallow/truncated checkout it is
