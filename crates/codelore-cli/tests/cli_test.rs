@@ -496,6 +496,76 @@ fn function_coupling_without_a_target_is_an_argument_error() {
     assert_eq!(output.status.code(), Some(2));
 }
 
+/// The documented table reserves exit 2 for CLI and argument mistakes. Five
+/// of them used to arrive as something else — an output error, an analysis
+/// error, or an unknown-topic error naming the wrong argument — and two of
+/// those were charged only after the ingest had run.
+#[test]
+fn argument_mistakes_exit_two() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = tiny.dir.path().to_str().unwrap().to_string();
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "parquet without --output is an argument error, like its `--output -` sibling",
+            vec!["analyze", "--analysis", "hotspots", "--format", "parquet"],
+        ),
+        (
+            "a malformed --exclude glob is refused before the ingest, not during it",
+            vec!["analyze", "--analysis", "hotspots", "--exclude", "["],
+        ),
+        (
+            "--time-bucket on an analysis that cannot bucket, matching its composite twin",
+            vec![
+                "analyze",
+                "--analysis",
+                "ownership",
+                "--time-bucket",
+                "month",
+            ],
+        ),
+        (
+            "a coupling percentage above 100 selects nothing and is not a threshold",
+            vec!["analyze", "--analysis", "coupling", "--min-coupling", "150"],
+        ),
+        (
+            "--rows 0 asks for a report with no rows",
+            vec!["analyze", "--analysis", "hotspots", "--rows", "0"],
+        ),
+    ];
+    for (why, mut args) in cases {
+        args.extend_from_slice(&["--repo", &repo]);
+        let output = codelore_cmd().args(&args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{why}\n  args: {args:?}\n  stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `explain` resolves its argument as a topic, then as a file under `--repo`.
+/// When `--repo` does not exist no path can resolve under it, so reporting an
+/// unknown topic named the wrong argument and pointed at the topic list.
+#[test]
+fn explain_with_a_missing_repo_reports_the_repo_not_the_topic() {
+    let output = codelore_cmd()
+        .args([
+            "explain",
+            "src/main.rs",
+            "--repo",
+            "/tmp/definitely-does-not-exist-codelore-explain",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("does not exist") && !stderr.contains("unknown topic"),
+        "the error must name the repository, not the topic; got: {stderr}"
+    );
+}
+
 #[test]
 fn analyze_hotspots_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -1024,8 +1094,11 @@ fn analyze_skips_sidecar_for_stdout() {
 
 #[test]
 fn parquet_requires_output_flag() {
-    // A binary format with no --output is an output-side usage error →
-    // CodeLoreError::Output → spec §6.6 exit 5 (not the generic 1).
+    // A binary format with no --output is an argument mistake → exit 2. It
+    // was classified as an output error (5) until the sibling check on the
+    // same flag — `--output -` for the same formats — was found to call the
+    // same mistake an argument error. Nothing is written or attempted here,
+    // so 2 is the code the documented table gives it.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     codelore_cmd()
         .args([
@@ -1040,7 +1113,7 @@ fn parquet_requires_output_flag() {
             "1",
         ])
         .assert()
-        .code(5)
+        .code(2)
         .stderr(predicate::str::contains("requires --output"));
 }
 
@@ -1186,10 +1259,13 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ])
         .assert()
         .failure()
-        // Exit 4: the late per-analysis gate reports this as an analysis failure. Pinned rather than left as a bare
-        // failure, which accepts ANY nonzero status — including the 101 a
-        // panic yields under this workspace's unwind strategy.
-        .code(4)
+        // Exit 2: an unsupported flag/analysis pairing is an argument
+        // mistake, and this gate now agrees with its composite-format twin,
+        // which rejected the same flag for the same reason with a different
+        // code. Pinned rather than left as a bare failure, which accepts ANY
+        // nonzero status — including the 101 a panic yields under this
+        // workspace's unwind strategy.
+        .code(2)
         .stderr(predicate::str::contains("--time-bucket is not supported"))
         .stderr(predicate::str::contains(
             "coupling, soc, hotspots, code-health",
