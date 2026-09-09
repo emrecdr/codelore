@@ -533,6 +533,37 @@ impl Thresholds {
             Err(problems.join("; "))
         }
     }
+
+    /// Resolve the effective defect-calibration artifact against this
+    /// already-loaded threshold set: an explicit flag wins; otherwise the
+    /// `[calibration] defect_artifact` this file declares, confined to
+    /// `repo_root` by [`repo_declared_artifact`]; otherwise `None`
+    /// (uncalibrated).
+    ///
+    /// `check` and `gate` hold the parsed thresholds already, so they call
+    /// this rather than [`resolve_defect_calibration`], which re-reads the
+    /// file to obtain them. Both the precedence and the containment live
+    /// here, so no command can resolve this path by a rule the others do
+    /// not share.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeLoreError::InvalidOptions`] when the declared path escapes the
+    /// repository.
+    pub fn resolve_defect_calibration(
+        &self,
+        cli_flag: Option<PathBuf>,
+        repo_root: &Path,
+    ) -> Result<Option<PathBuf>> {
+        if let Some(flag) = cli_flag {
+            return Ok(Some(flag));
+        }
+        self.calibration
+            .defect_artifact
+            .as_deref()
+            .map(|p| repo_declared_artifact(repo_root, p))
+            .transpose()
+    }
 }
 
 /// Join a repository-declared artifact path to the repository that declared
@@ -585,10 +616,10 @@ pub fn repo_declared_artifact(repo_root: &Path, declared: &Path) -> Result<PathB
     Ok(repo_root.join(declared))
 }
 
-/// Resolve the effective defect-calibration artifact path for a repo:
-/// an explicit flag wins; otherwise the discovered thresholds file's
-/// `[calibration] defect_artifact`, joined to the repo root and confined
-/// to it by [`repo_declared_artifact`]; otherwise `None` (uncalibrated).
+/// Resolve the effective defect-calibration artifact path for a repo, for
+/// callers that do not already hold the thresholds: discovers the file, then
+/// defers to [`Thresholds::resolve_defect_calibration`], which owns both the
+/// precedence and the containment.
 ///
 /// # Errors
 ///
@@ -600,16 +631,12 @@ pub fn resolve_defect_calibration(
     cli_flag: Option<PathBuf>,
     repo_root: &Path,
 ) -> Result<Option<PathBuf>> {
+    // Answered without touching the filesystem when the flag already decides
+    // it: this runs at MCP startup, before any analysis.
     if cli_flag.is_some() {
         return Ok(cli_flag);
     }
-    let thresholds = Thresholds::discover(repo_root)?;
-    thresholds
-        .calibration
-        .defect_artifact
-        .as_deref()
-        .map(|p| repo_declared_artifact(repo_root, p))
-        .transpose()
+    Thresholds::discover(repo_root)?.resolve_defect_calibration(cli_flag, repo_root)
 }
 
 #[cfg(all(test, feature = "test-support"))]
@@ -875,6 +902,10 @@ new_hotspot_max = 0
     #[cfg(feature = "test-support")]
     #[test]
     fn resolve_defect_calibration_prefers_cli_flag_over_section() {
+        // Also the control for the confinement tests further down: the flag
+        // names an absolute path outside the repo and must come back
+        // untouched, because the confinement is about the path's source and
+        // not its shape. A guard that confined by shape would fail here.
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join(THRESHOLDS_FILENAME),
@@ -938,19 +969,6 @@ new_hotspot_max = 0
         let dotted = repo_declared_artifact(root, Path::new("./ci/defects.calib.json"))
             .expect("a `.`-prefixed in-repo path must resolve");
         assert_eq!(dotted, root.join("ci/defects.calib.json"));
-    }
-
-    #[test]
-    fn the_operator_flag_still_reaches_an_artifact_outside_the_repository() {
-        // The confinement is about the path's source, not its shape: a value
-        // the operator typed is trusted and must still resolve untouched, or
-        // the fix would have removed a documented workflow rather than an
-        // attack. This is the control for the two tests above.
-        let dir = tempfile::tempdir().expect("temp dir");
-        let outside = dir.path().join("outside.calib.json");
-        let resolved = resolve_defect_calibration(Some(outside.clone()), Path::new("/repo"))
-            .expect("an operator-supplied path is not confined");
-        assert_eq!(resolved, Some(outside));
     }
 
     #[test]

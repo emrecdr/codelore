@@ -1501,21 +1501,14 @@ fn check_gates_honors_calibration_section() {
     // elsewhere is reached with `--defect-calibration`, which is the operator
     // path rather than the repo-declared one this test exercises.
     let artifact_path = write_foreign_defect_artifact(repo.dir.path());
-    let artifact_name = artifact_path
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .expect("artifact file name is UTF-8")
-        .to_string();
 
     // A gate that must be evaluated (non-empty thresholds) plus the
-    // calibration section naming the artifact. A TOML *literal*
-    // (single-quoted) string takes the value verbatim, so no character in the
-    // name is read as an escape.
+    // calibration section naming the artifact by the bare name the fixture
+    // writes it under — the same name the missing-artifact assertion below
+    // looks for in the error.
     std::fs::write(
         repo.dir.path().join(".codelore-thresholds.toml"),
-        format!(
-            "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = '{artifact_name}'\n"
-        ),
+        "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = 'defects.calib.json'\n",
     )
     .unwrap();
 
