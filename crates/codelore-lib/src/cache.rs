@@ -170,8 +170,27 @@ fn repo_hash_short(repo_path: &Path) -> String {
 /// suffix if none are set (the latter case is essentially
 /// containers/sandboxes where the OS already provides isolation, so PID
 /// only needs to avoid same-process collisions).
+/// Environment override for the cache root, consulted before the OS
+/// location. Named like the `--cache-dir` flag it mirrors.
+///
+/// The flag alone was not enough for two audiences. An operator running in a
+/// container or a shared CI image wants one place to point every command,
+/// including `diff`, which has no `--cache-dir` flag at all. And this
+/// repository's own test suite had no way to isolate itself: a test that
+/// forgot the flag wrote into the developer's real cache, keyed by a fixture
+/// path in a temporary directory that no longer exists, and nothing can
+/// reclaim those entries afterwards because the eviction policy counts fact
+/// stores and the directory name is a hash nobody can map back to a path.
+pub const CACHE_DIR_ENV: &str = "CODELORE_CACHE_DIR";
+
 #[must_use]
 pub fn default_cache_root() -> PathBuf {
+    // An explicit `--cache-dir` still wins: callers resolve the flag first and
+    // only fall back to this function, so the precedence is flag, environment,
+    // OS location, namespaced temp directory.
+    if let Some(dir) = std::env::var_os(CACHE_DIR_ENV).filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
+    }
     dirs::cache_dir().unwrap_or_else(fallback_tmp_root)
 }
 
@@ -494,7 +513,7 @@ fn collect_duckdb_files_inner(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
 /// pruner's `.duckdb`-only extension filter would leave it behind.
 ///
 /// Failures are logged but not propagated — partial cleanup beats abort.
-fn delete_duckdb_with_companion(path: &Path, ctx: &str) {
+pub(crate) fn delete_duckdb_with_companion(path: &Path, ctx: &str) {
     match fs::remove_file(path) {
         Ok(()) => tracing::info!("{ctx}: removed {}", path.display()),
         Err(e) => {

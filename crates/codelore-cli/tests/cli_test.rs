@@ -16,7 +16,29 @@ fn codelore_cmd() -> Command {
     ] {
         cmd.env_remove(var);
     }
+    // Point every subprocess at a scratch cache root. Tests that pass
+    // `--cache-dir` explicitly still win, and the ones that do not — the
+    // majority — used to write into the developer's real cache directory,
+    // keyed on a fixture path in a temporary directory that is deleted
+    // moments later. Nothing reclaims those entries: eviction counts fact
+    // stores, and most of what a `check` or `gate` test leaves behind is a
+    // gate ledger, so they accumulate one hashed directory per fixture per
+    // run, permanently.
+    cmd.env(
+        codelore_lib::cli_api::cache::CACHE_DIR_ENV,
+        test_cache_root(),
+    );
     cmd
+}
+
+/// One scratch cache root for the whole test binary, kept alive for its
+/// lifetime. Shared rather than per-test so warm-cache behaviour stays
+/// reachable; the keys are per-fixture, so tests still cannot collide.
+fn test_cache_root() -> &'static std::path::Path {
+    use std::sync::OnceLock;
+    static ROOT: OnceLock<tempfile::TempDir> = OnceLock::new();
+    ROOT.get_or_init(|| tempfile::tempdir().expect("test cache root"))
+        .path()
 }
 
 #[test]
@@ -494,6 +516,76 @@ fn function_coupling_without_a_target_is_an_argument_error() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
+}
+
+/// The documented table reserves exit 2 for CLI and argument mistakes. Five
+/// of them used to arrive as something else — an output error, an analysis
+/// error, or an unknown-topic error naming the wrong argument — and two of
+/// those were charged only after the ingest had run.
+#[test]
+fn argument_mistakes_exit_two() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = tiny.dir.path().to_str().unwrap().to_string();
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "parquet without --output is an argument error, like its `--output -` sibling",
+            vec!["analyze", "--analysis", "hotspots", "--format", "parquet"],
+        ),
+        (
+            "a malformed --exclude glob is refused before the ingest, not during it",
+            vec!["analyze", "--analysis", "hotspots", "--exclude", "["],
+        ),
+        (
+            "--time-bucket on an analysis that cannot bucket, matching its composite twin",
+            vec![
+                "analyze",
+                "--analysis",
+                "ownership",
+                "--time-bucket",
+                "month",
+            ],
+        ),
+        (
+            "a coupling percentage above 100 selects nothing and is not a threshold",
+            vec!["analyze", "--analysis", "coupling", "--min-coupling", "150"],
+        ),
+        (
+            "--rows 0 asks for a report with no rows",
+            vec!["analyze", "--analysis", "hotspots", "--rows", "0"],
+        ),
+    ];
+    for (why, mut args) in cases {
+        args.extend_from_slice(&["--repo", &repo]);
+        let output = codelore_cmd().args(&args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{why}\n  args: {args:?}\n  stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `explain` resolves its argument as a topic, then as a file under `--repo`.
+/// When `--repo` does not exist no path can resolve under it, so reporting an
+/// unknown topic named the wrong argument and pointed at the topic list.
+#[test]
+fn explain_with_a_missing_repo_reports_the_repo_not_the_topic() {
+    let output = codelore_cmd()
+        .args([
+            "explain",
+            "src/main.rs",
+            "--repo",
+            "/tmp/definitely-does-not-exist-codelore-explain",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("does not exist") && !stderr.contains("unknown topic"),
+        "the error must name the repository, not the topic; got: {stderr}"
+    );
 }
 
 #[test]
@@ -1024,8 +1116,11 @@ fn analyze_skips_sidecar_for_stdout() {
 
 #[test]
 fn parquet_requires_output_flag() {
-    // A binary format with no --output is an output-side usage error →
-    // CodeLoreError::Output → spec §6.6 exit 5 (not the generic 1).
+    // A binary format with no --output is an argument mistake → exit 2. It
+    // was classified as an output error (5) until the sibling check on the
+    // same flag — `--output -` for the same formats — was found to call the
+    // same mistake an argument error. Nothing is written or attempted here,
+    // so 2 is the code the documented table gives it.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     codelore_cmd()
         .args([
@@ -1040,8 +1135,63 @@ fn parquet_requires_output_flag() {
             "1",
         ])
         .assert()
-        .code(5)
+        .code(2)
         .stderr(predicate::str::contains("requires --output"));
+}
+
+/// A cache entry that will not open must be discarded and recomputed, not
+/// propagated. The key is a pure function of the repository, HEAD and the
+/// options, so a damaged file used to be permanent: every later run on that
+/// HEAD reopened it and failed identically, with nothing in the message to
+/// suggest that deleting a file would fix it.
+#[test]
+fn a_damaged_cache_entry_is_discarded_and_re_ingested() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let run = || {
+        codelore_cmd()
+            .args([
+                "analyze",
+                "--analysis",
+                "revisions",
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--cache-dir",
+                cache_dir.path().to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    };
+
+    // Warm the cache, then find the entry it wrote.
+    assert!(run().status.success(), "first run must populate the cache");
+    let entry = walkdir::WalkDir::new(cache_dir.path())
+        .into_iter()
+        .flatten()
+        .map(|e| e.path().to_path_buf())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("duckdb"))
+        .expect("a .duckdb cache entry must exist after the first run");
+
+    // Damage it the way a killed writer or a full disk would: the file is
+    // present, so the key still hits, and DuckDB cannot open it.
+    std::fs::write(&entry, b"this is not a duckdb file").unwrap();
+
+    let second = run();
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        second.status.success(),
+        "a damaged entry must be recovered from, not propagated; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("discarding it and re-ingesting"),
+        "the recovery must be disclosed rather than silent; stderr: {stderr}"
+    );
+    assert!(
+        String::from_utf8_lossy(&second.stdout).contains("entity,n-revs"),
+        "the re-ingested run must produce real output"
+    );
 }
 
 #[test]
@@ -1186,10 +1336,13 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ])
         .assert()
         .failure()
-        // Exit 4: the late per-analysis gate reports this as an analysis failure. Pinned rather than left as a bare
-        // failure, which accepts ANY nonzero status — including the 101 a
-        // panic yields under this workspace's unwind strategy.
-        .code(4)
+        // Exit 2: an unsupported flag/analysis pairing is an argument
+        // mistake, and this gate now agrees with its composite-format twin,
+        // which rejected the same flag for the same reason with a different
+        // code. Pinned rather than left as a bare failure, which accepts ANY
+        // nonzero status — including the 101 a panic yields under this
+        // workspace's unwind strategy.
+        .code(2)
         .stderr(predicate::str::contains("--time-bucket is not supported"))
         .stderr(predicate::str::contains(
             "coupling, soc, hotspots, code-health",
@@ -3882,7 +4035,11 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     std::fs::write(&thresholds, "[gates]\nmax_findings_in_hot_files = 0\n").unwrap();
 
     // Compute the sidecar path the binary would use — same logic as the CLI.
-    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    // The same root `codelore_cmd` points the subprocess at. Calling
+    // `default_cache_root()` here instead would resolve in *this* process,
+    // which has no override set, and look for the ledger somewhere the
+    // binary never wrote.
+    let cache_root = test_cache_root().to_path_buf();
     let sidecar_path = codelore_lib::cli_api::cache::repo_cache_dir(&cache_root, repo_path)
         .join("external-findings.duckdb-ext");
 
@@ -3940,7 +4097,11 @@ fn check_corpus_percentile_gate_skips_when_no_health_rows() {
         .success();
 
     // The ledger must record a skipped verdict for this gate.
-    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    // The same root `codelore_cmd` points the subprocess at. Calling
+    // `default_cache_root()` here instead would resolve in *this* process,
+    // which has no override set, and look for the ledger somewhere the
+    // binary never wrote.
+    let cache_root = test_cache_root().to_path_buf();
     let records =
         codelore_lib::cli_api::quality_gates::ledger::read_gate_runs(&cache_root, repo_path)
             .expect("read ledger");

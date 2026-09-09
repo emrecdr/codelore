@@ -427,6 +427,16 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
                 None => {
                     if let Some(repo_relative) = resolve_explain_file(&args.repo, topic) {
                         run_explain_file(args, &repo_relative)
+                    } else if let Some((_preflight, err)) = crate::analyze::classify_repo_path(
+                        &args.repo,
+                        &args.repo.display().to_string(),
+                    ) {
+                        // The argument is not a known topic and did not resolve
+                        // as a file — but `--repo` does not exist, so no path
+                        // could have resolved under it. Reporting an unknown
+                        // topic there names the wrong argument entirely and
+                        // sends the reader to the topic list.
+                        Err(err.into())
                     } else {
                         let hint = crate::suggest::nearest(topic, topics.iter().map(|(n, ..)| *n))
                             .map(|s| format!(" (did you mean `{s}`?)"))
