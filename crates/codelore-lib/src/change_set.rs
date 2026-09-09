@@ -53,7 +53,7 @@ use crate::complexity::{ComplexityEntity, Tier1Language, compute_for_file};
 use crate::constants::{DEFAULT_FISHER_SIGNIFICANCE, DEFAULT_MIN_SHARED_REVS};
 use crate::facts::FactsDb;
 use crate::facts::ingest::consumer::{dedup_entities, f64_to_i32_clamped};
-use crate::imports::{ImportLanguage, extract_imports, resolve_by_extension};
+use crate::imports::{ImportLanguage, extract_imports, resolve_by_extension_indexed};
 use crate::repo::{WorktreeChange, WorktreeChangeKind};
 use crate::{CodeLoreError, Options, Result};
 
@@ -697,6 +697,11 @@ fn project_cycles<R: crate::Repo>(
         }
     }
 
+    // One suffix index for both resolution passes below — the projection
+    // resolves every changed file's imports and then sweeps the previously
+    // unresolved ones, all against this same live set.
+    let index = crate::imports::LivePathIndex::build(live.iter());
+
     populate_path_table(db, CHANGED_PATHS_TABLE, changed_set_paths(changes))?;
     populate_path_table(db, DELETED_PATHS_TABLE, deleted_set_paths(changes))?;
 
@@ -739,7 +744,9 @@ fn project_cycles<R: crate::Repo>(
             }
         };
         for import in imports {
-            if let Some(target_path) = resolve_by_extension(&change.path, &import.target, &live) {
+            if let Some(target_path) =
+                resolve_by_extension_indexed(&change.path, &import.target, &live, &index)
+            {
                 edges.push((change.path.clone(), target_path));
             }
         }
@@ -758,7 +765,7 @@ fn project_cycles<R: crate::Repo>(
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
     for (src_path, target) in unresolved {
-        if let Some(target_path) = resolve_by_extension(&src_path, &target, &live) {
+        if let Some(target_path) = resolve_by_extension_indexed(&src_path, &target, &live, &index) {
             edges.push((src_path, target_path));
         }
     }
