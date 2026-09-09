@@ -23,25 +23,41 @@ pub const DEFAULT_BOT_PATTERNS: &[&str] = &[
 /// AI coding assistants that publish a Co-Authored-By trailer or in-message
 /// tag.
 ///
-/// Patterns are stored lowercased here; the matcher lowercases the message
-/// once and uses plain `str::contains` (no regex crate needed).
-const AI_ASSIST_PATTERNS: &[&str] = &[
-    // Co-Authored-By trailers, lowercased
-    "co-authored-by: claude",
-    "co-authored-by: copilot",
-    "co-authored-by: github copilot",
-    "co-authored-by: cursor",
-    "co-authored-by: sourcegraph cody",
-    "co-authored-by: cody",
-    "co-authored-by: continue",
-    "co-authored-by: codeium",
-    "co-authored-by: windsurf",
-    "co-authored-by: devin",
-    "co-authored-by: tabnine",
-    "co-authored-by: amazon q",
-    // Aider tags its message body rather than using a trailer.
-    "(aider)",
+/// Assistant product names, matched against the NAME field of a
+/// `Co-authored-by:` trailer and required to *be* that name rather than
+/// merely begin it.
+///
+/// The distinction is the whole point. These were once matched as
+/// `"co-authored-by: claude"` against the raw message, which reads
+/// `Co-authored-by: Claude Dubois <claude.dubois@example.com>` as an
+/// Anthropic trailer — and Claude, Devin and Cody are all ordinary given
+/// names, so a team with one of them had every pair-authored commit counted
+/// as AI-assisted. `commits.ai_attribution` feeds the dashboard's AI lens and
+/// every AI split in the author-aggregating analyses, so the error was
+/// invisible and load-bearing at once.
+const AI_ASSIST_COAUTHORS: &[&str] = &[
+    "claude",
+    "copilot",
+    "github copilot",
+    "cursor",
+    "sourcegraph cody",
+    "cody",
+    "continue",
+    "codeium",
+    "windsurf",
+    "devin",
+    "tabnine",
+    "amazon q",
 ];
+
+/// Words an assistant's trailer name may carry after its product name, as in
+/// `Cursor Agent` or `Claude Code`. A remainder that is anything else — a
+/// surname — means the trailer names a person.
+const AI_AGENT_NAME_SUFFIXES: &[&str] = &["agent", "ai", "assistant", "bot", "code"];
+
+/// AI signatures that are not trailers: Aider tags the message body instead.
+/// These stay plain substring matches, since no person is called `(aider)`.
+const AI_ASSIST_BODY_MARKERS: &[&str] = &["(aider)"];
 
 /// True if the email or name matches any default bot pattern. Comparison
 /// is case-insensitive — `Dependabot[Bot]@noreply.github.com` matches.
@@ -74,6 +90,66 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
         return false;
     }
     hay.windows(ndl.len()).any(|w| w.eq_ignore_ascii_case(ndl))
+}
+
+/// ASCII-case-insensitive prefix strip, for reading a git trailer key off a
+/// line whose capitalisation is not standardised (`Co-authored-by:`,
+/// `Co-Authored-By:` and `CO-AUTHORED-BY:` all occur in the wild).
+fn strip_prefix_ignore_ascii_case<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    let (head, rest) = line.split_at_checked(prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then_some(rest)
+}
+
+/// The `(name, email)` of every `Co-authored-by:` trailer in `message`.
+///
+/// `Co-authored-by: Claude <noreply@anthropic.com>` yields
+/// `("Claude", "noreply@anthropic.com")`; a trailer with no angle-bracketed
+/// address yields an empty email, which is the shape git accepts and several
+/// tools emit.
+fn co_authored_identities(message: &str) -> impl Iterator<Item = (&str, &str)> {
+    message.lines().filter_map(|line| {
+        let rest = strip_prefix_ignore_ascii_case(line.trim(), "co-authored-by:")?;
+        let (name, email) = rest.split_once('<').map_or((rest, ""), |(n, e)| {
+            (n, e.split_once('>').map_or(e, |(addr, _)| addr))
+        });
+        Some((name.trim(), email.trim()))
+    })
+}
+
+/// True when `name_lc` (ASCII-lowercased, trimmed) is an assistant's own name
+/// rather than a person's name that happens to begin with one.
+fn is_assistant_name(name_lc: &str) -> bool {
+    AI_ASSIST_COAUTHORS.iter().any(|token| {
+        name_lc.strip_prefix(token).is_some_and(|rest| {
+            rest.is_empty()
+                || (rest.starts_with(' ')
+                    && rest
+                        .split_whitespace()
+                        .all(|word| AI_AGENT_NAME_SUFFIXES.contains(&word)))
+        })
+    })
+}
+
+/// True when `message` carries an assistant's signature: a body marker, or a
+/// `Co-authored-by:` trailer naming an assistant.
+///
+/// `is_bot` is applied to each trailer identity as well, which is what keeps
+/// bot-account co-authors (`devin-ai-integration[bot]`) detected now that the
+/// name match is anchored — those names carry the product token as a prefix of
+/// a longer machine name, exactly the shape the anchoring rejects.
+fn message_signals_ai_assist<F>(message: &str, is_bot_identity: F) -> bool
+where
+    F: Fn(&str, &str) -> bool,
+{
+    if AI_ASSIST_BODY_MARKERS
+        .iter()
+        .any(|marker| contains_ignore_ascii_case(message, marker))
+    {
+        return true;
+    }
+    co_authored_identities(message).any(|(name, email)| {
+        is_bot_identity(email, name) || is_assistant_name(&name.to_ascii_lowercase())
+    })
 }
 
 /// User-extensible bot-pattern set. Merges built-in [`DEFAULT_BOT_PATTERNS`]
@@ -158,8 +234,7 @@ pub fn ai_attribution(email: &str, name: &str, message: &str) -> &'static str {
     if is_bot(email, name) {
         return "ai-authored";
     }
-    let msg_lc = message.to_lowercase();
-    if AI_ASSIST_PATTERNS.iter().any(|p| msg_lc.contains(p)) {
+    if message_signals_ai_assist(message, is_bot) {
         return "ai-assisted";
     }
     "human"
@@ -167,8 +242,10 @@ pub fn ai_attribution(email: &str, name: &str, message: &str) -> &'static str {
 
 /// User-extensible variant of [`ai_attribution`]: routes the bot check
 /// through a [`BotPatterns`] instance so a project-level `.codelorebots`
-/// file participates. AI-assist message-pattern detection is unchanged
-/// (the assist patterns are not user-extensible by design).
+/// file participates — for the commit's own author, and for the identity in
+/// each `Co-authored-by:` trailer. The assistant *product* names remain
+/// built-in and not user-extensible; a project's own AI account is expressed
+/// as a bot pattern, which is the mechanism that already exists for it.
 #[must_use]
 pub fn ai_attribution_with(
     patterns: &BotPatterns,
@@ -179,8 +256,7 @@ pub fn ai_attribution_with(
     if patterns.is_bot(email, name) {
         return "ai-authored";
     }
-    let msg_lc = message.to_lowercase();
-    if AI_ASSIST_PATTERNS.iter().any(|p| msg_lc.contains(p)) {
+    if message_signals_ai_assist(message, |e, n| patterns.is_bot(e, n)) {
         return "ai-assisted";
     }
     "human"
@@ -232,6 +308,92 @@ mod tests {
         assert_eq!(
             ai_attribution("alice@example.com", "Alice", "fix typo"),
             "human"
+        );
+    }
+
+    /// The reason the trailer match is anchored on the whole name. Claude,
+    /// Devin and Cody are ordinary given names, and a prefix match read every
+    /// commit they co-authored as AI-assisted.
+    #[test]
+    fn a_human_co_author_named_after_an_assistant_stays_human() {
+        for (name, email) in [
+            ("Claude Dubois", "claude.dubois@example.com"),
+            ("Devin Smith", "devin@example.com"),
+            ("Cody Fisher", "cody.fisher@example.com"),
+            ("Claudia Rossi", "claudia@example.com"),
+        ] {
+            let message = format!("feat: pair on the parser\n\nCo-authored-by: {name} <{email}>");
+            assert_eq!(
+                ai_attribution("alice@example.com", "Alice", &message),
+                "human",
+                "{name} is a person, not an assistant"
+            );
+        }
+    }
+
+    /// The control for the test above: the assistants themselves must still
+    /// be detected, in the trailer shapes they actually publish — the product
+    /// name alone, the product name with an agent suffix, and the bot account
+    /// whose longer machine name only the bot patterns can recognise.
+    #[test]
+    fn assistant_co_author_trailers_are_still_detected() {
+        for trailer in [
+            "Co-Authored-By: Claude",
+            "Co-authored-by: Claude <noreply@anthropic.com>",
+            "Co-authored-by: Claude Code <noreply@anthropic.com>",
+            "Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>",
+            "Co-authored-by: Cursor Agent <cursoragent@cursor.com>",
+            "CO-AUTHORED-BY: Amazon Q <q@amazon.com>",
+            "Co-authored-by: devin-ai-integration[bot] <devin@example.com>",
+        ] {
+            let message = format!("feat: do stuff\n\n{trailer}");
+            assert_eq!(
+                ai_attribution("alice@example.com", "Alice", &message),
+                "ai-assisted",
+                "trailer must still be detected: {trailer}"
+            );
+        }
+    }
+
+    /// Aider tags the body rather than adding a trailer, so it stays a plain
+    /// substring match and must keep working.
+    #[test]
+    fn aider_body_marker_is_still_detected() {
+        assert_eq!(
+            ai_attribution("alice@example.com", "Alice", "refactor the loop (aider)"),
+            "ai-assisted"
+        );
+    }
+
+    /// An assistant's name in prose is not a trailer. The old matcher keyed
+    /// on the whole message, so quoting the trailer — in a revert, a commit
+    /// that documents the convention, or a merge of such a commit — counted.
+    #[test]
+    fn an_assistant_name_outside_a_trailer_is_not_a_signature() {
+        assert_eq!(
+            ai_attribution(
+                "alice@example.com",
+                "Alice",
+                "docs: explain that we no longer add Co-authored-by: Claude trailers"
+            ),
+            "human",
+            "the trailer must be a trailer, not a mention inside a sentence"
+        );
+    }
+
+    /// `.codelorebots` reaches co-author identities too, so a project's own
+    /// AI account is classified by the mechanism that already exists for it.
+    #[test]
+    fn project_bot_patterns_reach_co_author_trailers() {
+        let patterns = BotPatterns::from_text("our-ai-helper\n");
+        assert_eq!(
+            ai_attribution_with(
+                &patterns,
+                "alice@example.com",
+                "Alice",
+                "feat: x\n\nCo-authored-by: our-ai-helper <ai@example.com>"
+            ),
+            "ai-assisted"
         );
     }
 
