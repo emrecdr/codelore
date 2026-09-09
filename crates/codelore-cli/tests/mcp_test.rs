@@ -1495,20 +1495,26 @@ fn mcp_refuses_to_start_on_foreign_artifact_without_override() {
 fn check_gates_honors_calibration_section() {
     let repo = delivery_repo::build();
     let repo_path = repo.dir.path().to_str().unwrap();
-    let artifact_dir = tempfile::tempdir().expect("artifact dir");
-    let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
+    // The artifact sits inside the repository: a repo-declared
+    // `defect_artifact` is confined to the tree that declared it, so the
+    // section cannot name a path outside it. An artifact that genuinely lives
+    // elsewhere is reached with `--defect-calibration`, which is the operator
+    // path rather than the repo-declared one this test exercises.
+    let artifact_path = write_foreign_defect_artifact(repo.dir.path());
+    let artifact_name = artifact_path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .expect("artifact file name is UTF-8")
+        .to_string();
 
     // A gate that must be evaluated (non-empty thresholds) plus the
-    // calibration section naming the artifact.
-    // A TOML *literal* (single-quoted) string: a Windows absolute path
-    // contains backslashes, which a double-quoted TOML string would read as
-    // escape sequences (e.g. `\U`), making the thresholds file unparseable and
-    // the server refuse to start. A literal string takes the path verbatim.
+    // calibration section naming the artifact. A TOML *literal*
+    // (single-quoted) string takes the value verbatim, so no character in the
+    // name is read as an escape.
     std::fs::write(
         repo.dir.path().join(".codelore-thresholds.toml"),
         format!(
-            "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = '{}'\n",
-            artifact_path.display()
+            "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = '{artifact_name}'\n"
         ),
     )
     .unwrap();
