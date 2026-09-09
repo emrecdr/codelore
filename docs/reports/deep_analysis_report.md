@@ -4345,4 +4345,47 @@ today.
 
 Found by a reuse review of the range that added the existence check.
 
-The next sweep re-opens at **F387**.
+### F387 (Active) — the vendored fork publishes a copyleft term no file in it appears to carry
+
+`crates/codelore-rca/Cargo.toml` declares `license = "MPL-2.0 AND GPL-3.0-only"`,
+with the comment above it reading "Original files retain MPL-2.0; new files we
+add are GPL-3.0-only." `UPSTREAM.md` states the same thing as "New files added
+by bca contributors carry GPL-3.0-only headers."
+
+No such headers were found. Across all forty-two tracked files in the crate —
+thirty-nine of them `.rs` — the only two that mention GPL at all are that
+manifest and that readme, i.e. the declaration itself. No source file carries a
+GPL notice, and no file in the crate carries an `SPDX-License-Identifier` header
+of any kind. The one place "General Public License" appears in prose is inside
+`LICENSE-MPL`, in MPL-2.0's own definition of a Secondary License — boilerplate
+that ships with every copy of the MPL and grants nothing.
+
+Two readings fit, and they need different fixes. Either the GPL-licensed
+additions were removed and the declaration was not revisited — the unreachable-
+grammar excision did delete whole modules, so this is plausible — or the term
+was inherited from the vendoring document this one was adapted from and never
+applied to a file here. The undefined "bca" points at the second: the manifest
+says "we", the readme says "bca contributors", and `bca-tree-sitter-*` names
+real upstream packages that this crate no longer depends on.
+
+The direction of the error is the unusual part, and the reason it is worth
+recording rather than leaving. Over-declaring is the safe failure for the
+project and the costly one for everybody downstream: `readme = "UPSTREAM.md"`
+makes this the crates.io page, so every consumer's licence scanner reads a
+strong-copyleft obligation on a dependency that may carry only MPL-2.0 files.
+Nothing breaks loudly; adoption is discouraged quietly, which is why it can sit
+unexamined.
+
+Deliberately not changed. Narrowing a published licence claim is a
+provenance question rather than a code question — establishing that no
+GPL-licensed contribution was ever made requires history this audit did not
+walk, and being wrong in the narrowing direction strips a term that a
+contributor may have relied on. What can be said without that history is only
+what is recorded above: the declaration and the file inventory disagree, and
+the readme names a party it never identifies.
+
+Found by a docs-currency audit that read the licence section to check whether
+"bca" was defined anywhere for a public reader.
+
+
+The next sweep re-opens at **F388**.
