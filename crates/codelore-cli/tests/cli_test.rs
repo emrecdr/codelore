@@ -344,6 +344,117 @@ fn invalid_options_exit_with_code_2() {
     assert_eq!(output.status.code(), Some(2));
 }
 
+/// `--analysis clones` short-circuits before the repository is opened so that
+/// it works on a directory that is not a git repository. That deliberately
+/// skips the git checks; it must not skip the path checks, or a mistyped
+/// `--repo` walks nothing and emits a header row with exit 0 — a green CI step
+/// over a repository that was never read.
+#[test]
+fn clones_on_a_missing_repo_path_is_a_repo_error() {
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "clones",
+            "--repo",
+            "/tmp/definitely-does-not-exist-codelore-clones",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+}
+
+/// The same short-circuit must also refuse an `--output` whose parent
+/// directory is absent, with the documented output code rather than the
+/// unclassified failure a raw `File::create` produces.
+#[test]
+fn clones_with_a_missing_output_parent_is_an_output_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let missing_parent = tiny.dir.path().join("no-such-dir").join("out.csv");
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "clones",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--output",
+            missing_parent.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+}
+
+/// The external-findings sidecar is addressed by a hash of the repository
+/// path, so a typo'd `--repo` used to store findings under a repository that
+/// does not exist and report success — leaving every later overlap analysis
+/// and findings gate saying nothing had been ingested.
+#[test]
+fn ingest_sarif_on_a_missing_repo_path_is_a_repo_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sarif = tmp.path().join("findings.sarif.json");
+    std::fs::write(&sarif, sarif_zero_findings("semgrep")).unwrap();
+
+    let output = codelore_cmd()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            "/tmp/definitely-does-not-exist-codelore-sarif",
+            "--cache-dir",
+            tmp.path().to_str().unwrap(),
+            sarif.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+}
+
+/// A `--target` that names no tracked file is an argument mistake, not an
+/// empty result. The MCP tools have refused one since they were written; the
+/// CLI printed a header row and exited 0.
+#[test]
+fn function_xray_with_an_untracked_target_is_an_argument_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-xray",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--target",
+            "src/does_not_exist.rs",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found among files tracked at HEAD"),
+        "error must name the failure; got: {stderr}"
+    );
+}
+
+/// A missing `--target` is an argument error too, and is caught before the
+/// ingest: it used to surface as an analysis error only after the walk had
+/// been paid for.
+#[test]
+fn function_coupling_without_a_target_is_an_argument_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-coupling",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
 #[test]
 fn analyze_hotspots_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
