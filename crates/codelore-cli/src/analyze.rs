@@ -47,7 +47,12 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // to ./.codelore/spa.html under the current directory when --output is
     // omitted (handled in the spa block below).
     if matches!(format, "parquet" | "sqlite") && args.output.is_none() {
-        return Err(CodeLoreError::Output(format!(
+        // An argument error, not an I/O one: nothing was written or attempted.
+        // The sibling check immediately below — the same flag, the same
+        // format list — already classifies it that way, so the two disagreed
+        // about the same mistake depending on whether `--output` was absent
+        // or present-but-`-`.
+        return Err(CodeLoreError::InvalidOptions(format!(
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         ))
         .into());
@@ -177,8 +182,11 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // against the date-string-keyed bucketed table fails). Reject
     // at the CLI boundary with a descriptive error rather than letting
     // either failure mode surprise the user downstream.
+    // `InvalidOptions`, matching its composite-format twin below: both reject
+    // the same flag for the same reason before anything runs, and they used to
+    // return different exit codes for it.
     if opts.time_bucket.is_some() && !analysis.supports_time_bucket() {
-        return Err(CodeLoreError::Analysis(format!(
+        return Err(CodeLoreError::InvalidOptions(format!(
             "--time-bucket is not supported for analysis {:?}. \
              Bucketing only applies to co-change analyses; supported: \
              coupling, soc, hotspots, code-health. Remove --time-bucket \
