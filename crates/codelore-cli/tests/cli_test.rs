@@ -16,7 +16,29 @@ fn codelore_cmd() -> Command {
     ] {
         cmd.env_remove(var);
     }
+    // Point every subprocess at a scratch cache root. Tests that pass
+    // `--cache-dir` explicitly still win, and the ones that do not — the
+    // majority — used to write into the developer's real cache directory,
+    // keyed on a fixture path in a temporary directory that is deleted
+    // moments later. Nothing reclaims those entries: eviction counts fact
+    // stores, and most of what a `check` or `gate` test leaves behind is a
+    // gate ledger, so they accumulate one hashed directory per fixture per
+    // run, permanently.
+    cmd.env(
+        codelore_lib::cli_api::cache::CACHE_DIR_ENV,
+        test_cache_root(),
+    );
     cmd
+}
+
+/// One scratch cache root for the whole test binary, kept alive for its
+/// lifetime. Shared rather than per-test so warm-cache behaviour stays
+/// reachable; the keys are per-fixture, so tests still cannot collide.
+fn test_cache_root() -> &'static std::path::Path {
+    use std::sync::OnceLock;
+    static ROOT: OnceLock<tempfile::TempDir> = OnceLock::new();
+    ROOT.get_or_init(|| tempfile::tempdir().expect("test cache root"))
+        .path()
 }
 
 #[test]
@@ -4013,7 +4035,11 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     std::fs::write(&thresholds, "[gates]\nmax_findings_in_hot_files = 0\n").unwrap();
 
     // Compute the sidecar path the binary would use — same logic as the CLI.
-    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    // The same root `codelore_cmd` points the subprocess at. Calling
+    // `default_cache_root()` here instead would resolve in *this* process,
+    // which has no override set, and look for the ledger somewhere the
+    // binary never wrote.
+    let cache_root = test_cache_root().to_path_buf();
     let sidecar_path = codelore_lib::cli_api::cache::repo_cache_dir(&cache_root, repo_path)
         .join("external-findings.duckdb-ext");
 
@@ -4071,7 +4097,11 @@ fn check_corpus_percentile_gate_skips_when_no_health_rows() {
         .success();
 
     // The ledger must record a skipped verdict for this gate.
-    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    // The same root `codelore_cmd` points the subprocess at. Calling
+    // `default_cache_root()` here instead would resolve in *this* process,
+    // which has no override set, and look for the ledger somewhere the
+    // binary never wrote.
+    let cache_root = test_cache_root().to_path_buf();
     let records =
         codelore_lib::cli_api::quality_gates::ledger::read_gate_runs(&cache_root, repo_path)
             .expect("read ledger");
