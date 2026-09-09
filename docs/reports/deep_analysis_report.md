@@ -4499,4 +4499,70 @@ analysis.
 
 Found while validating the fixed bucketed sibling against its unfixed twin.
 
-The next sweep re-opens at **F391**.
+### F391 (Active) — the calibration-path containment is lexical, and a committed symlink walks through it
+
+`repo_declared_artifact` (`quality_gates/config.rs`) confines a
+repository-declared `[calibration] defect_artifact` by requiring every
+component to be `Normal` or `CurDir`, which rejects a root, a drive prefix and
+`..` on every platform. It then joins and returns without resolving what the
+result points at. The consumer, `defect_calibration::load`, reads it with
+`std::fs::read`, which follows symlinks.
+
+Git stores a symlink as a mode-120000 entry and checks it out as a real
+symlink on Unix, so a repository can commit `cal.json -> /etc/hosts`, declare
+`defect_artifact = 'cal.json'`, and pass the component allowlist with a
+single-component relative name. The read then leaves the tree, which reopens
+the same exit-code split the containment was added to close: a target that
+exists but does not parse reports `Analysis`, an absent one reports `RepoIo`.
+The blast radius is every consumer — `analyze --repo <clone>`, `check`,
+`gate`, `explain`, and the MCP server at startup. On Windows the checkout only
+materialises a symlink under `core.symlinks` or developer mode, so the reach
+is platform-dependent, not absent.
+
+This is a finding rather than a patch because closing it means deciding what
+"inside the repository" means once the tree contains links, and every obvious
+answer costs something real. `canonicalize` on both sides followed by
+`starts_with` is the standard shape, but it requires the file to *exist* at
+check time, so a repository whose declared artifact is simply missing would
+stop reporting a missing artifact and start reporting a containment refusal —
+trading one confusing diagnosis for another. It also resolves the repository
+root, which legitimately is a symlink on plenty of setups, and it rejects an
+in-tree symlink pointing at another in-tree file, which is not an escape at
+all. Choosing between "no symlinks in this position", "symlinks that stay
+inside the tree are fine", and "resolve only the final component" is a
+semantic call, and guessing at it would be worse than a stated lexical
+guarantee.
+
+Until then the guarantee the code actually provides is lexical containment of
+the *declared string*, not of the bytes eventually read. Found by the cleanup
+review of the commit that added the containment.
+
+### F392 (Active) — `--thresholds-file` is operator input, but the artifact it declares is confined as if the repository had declared it
+
+`check` and `gate` load thresholds from either `--thresholds-file <path>` or
+discovery at the repo root (`check.rs`, `gate.rs`), and both branches feed the
+same confining resolve. So a thresholds file the operator named explicitly on
+the command line has its `[calibration] defect_artifact` confined to `--repo`,
+and an absolute value in it is now refused with exit 2 where it previously
+resolved. A shared CI thresholds file at `/ci/shared.toml` naming
+`/opt/calib/defects.calib.json` is the shape that regresses.
+
+The containment's own stated principle is that trust follows the path's
+*source*: `--defect-calibration` is typed by the operator and stays
+unrestricted. By that rule `--thresholds-file` looks like operator input too,
+and the confinement looks one step too wide.
+
+It is recorded rather than fixed because the rule does not actually settle it.
+`--defect-calibration` names the artifact itself, so the operator authored the
+value. `--thresholds-file` names a *file whose contents someone else may have
+written* — pointed at a path inside an untrusted clone, it is exactly the
+attacker-controlled channel the confinement exists to close, and exempting it
+would reopen the hole through a second door. The two readings disagree about
+whether naming a config file's location vouches for its contents, and that is
+a policy question rather than a defect. Whichever way it is settled,
+`--defect-calibration` remains the unambiguous escape hatch, so no workflow is
+blocked, only made more verbose.
+
+Found by the cleanup review of the commit that added the containment.
+
+The next sweep re-opens at **F393**.
