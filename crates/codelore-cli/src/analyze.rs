@@ -2142,6 +2142,31 @@ fn build_spa_dashboard(
 }
 
 #[cfg(feature = "spa")]
+/// A repository's `(name, full path)` for the composite report headers.
+///
+/// `--repo` is usually `.`, and that string went straight into the dashboard:
+/// every generated report was titled "CodeLore Dashboard" over a header
+/// reading `.`, so a dashboard published to a Pages site, attached to a build,
+/// or opened beside three others could not be told apart from any other
+/// repository's. Canonicalising gives a header that names the repository, and
+/// its final component gives the document a title distinctive enough to pick
+/// out of a row of browser tabs.
+///
+/// Canonicalisation can fail (a path removed between the walk and the render);
+/// the argument as given is the right fallback, since it is what the user
+/// typed and is never worse than what was printed before.
+fn repo_identity(repo_path: &Path) -> (String, String) {
+    let canonical = std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let full = canonical.display().to_string();
+    let name = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| full.clone());
+    (name, full)
+}
+
+#[cfg(feature = "spa")]
 fn run_spa_dispatch(
     db: &codelore_lib::cli_api::facts::FactsDb,
     opts: &codelore_lib::cli_api::Options,
@@ -2162,8 +2187,9 @@ fn run_spa_dispatch(
         now.minute(),
         now.second(),
     );
-    let title = "CodeLore Dashboard";
-    let repo_display = repo_path.display().to_string();
+    let (name, repo_display) = repo_identity(repo_path);
+    let title = format!("{name} — CodeLore Dashboard");
+    let title = title.as_str();
 
     // Atomic publish: an interrupted or failing write never truncates a
     // previous good dashboard, and the file is renamed into place (so the
@@ -2223,8 +2249,9 @@ fn run_step_summary_dispatch(
         now.minute(),
         now.second(),
     );
-    let title = "CodeLore Analysis";
-    let repo_display = repo_path.display().to_string();
+    let (name, repo_display) = repo_identity(repo_path);
+    let title = format!("{name} — CodeLore Analysis");
+    let title = title.as_str();
 
     // step-summary streams to stdout by default so CI workflows can
     // `codelore ... --format step-summary >> $GITHUB_STEP_SUMMARY`
@@ -2647,6 +2674,44 @@ mod registration_surfaces {
             "html: the bespoke-HTML-emitter set drifted from HTML_WIRED — reconcile \
              `supported_formats` with the analyses whose dispatch arm wires a real `write_html`",
         );
+    }
+}
+
+#[cfg(all(test, feature = "spa"))]
+mod repo_identity_tests {
+    use super::repo_identity;
+
+    /// The case every generated dashboard hit: `--repo .` put a literal `.`
+    /// in the header and left the document titled after the tool rather than
+    /// the repository.
+    #[test]
+    fn a_relative_path_resolves_to_a_name_and_a_full_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("my-project");
+        std::fs::create_dir(&nested).expect("mkdir");
+
+        let (name, full) = repo_identity(&nested);
+        assert_eq!(name, "my-project");
+        assert!(
+            full.ends_with("my-project") && full != "my-project",
+            "the full path must stay absolute; got {full}"
+        );
+
+        // And the shape that produced the bug: a dot must not survive as the
+        // name of anything.
+        let (dot_name, dot_full) = repo_identity(std::path::Path::new("."));
+        assert_ne!(dot_name, ".", "`.` is not a repository name");
+        assert_ne!(dot_full, ".", "`.` is not a path a reader can use");
+    }
+
+    /// A path that cannot be canonicalised falls back to what the user typed,
+    /// which is never worse than the previous behaviour.
+    #[test]
+    fn an_unresolvable_path_falls_back_to_the_argument() {
+        let missing = std::path::Path::new("/tmp/codelore-no-such-directory-xyz");
+        let (name, full) = repo_identity(missing);
+        assert_eq!(name, "codelore-no-such-directory-xyz");
+        assert_eq!(full, missing.display().to_string());
     }
 }
 
