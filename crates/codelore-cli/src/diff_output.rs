@@ -79,9 +79,7 @@ fn emit_text(
             ".."
         },
         &output.head_sha[..8.min(output.head_sha.len())],
-        output.hotspots.pr_touched_existing.len()
-            + output.coupling_absences.len()
-            + output.clones.pr_touched_existing.len(),
+        output.pr_file_count,
     )?;
     writeln!(out)?;
 
@@ -451,7 +449,27 @@ fn emit_markdown(
         && output.coupling_absences.is_empty()
         && output.clones.new_families.is_empty()
     {
-        writeln!(out, "✅ No new behavioral findings.")?;
+        // "No findings" is about the four behavioural lists above; the
+        // delta-health verdict is a fifth signal that `--fail-on` deliberately
+        // does not gate on (`[diff] deny_degrading_verdict` does). Printing the
+        // green check under a `degrading` verdict told a reviewer the run was
+        // clean while the table directly above listed the functions that
+        // degraded — and a check mark is the part of a PR comment people act on.
+        let degrading_ungated = output
+            .delta_health
+            .as_ref()
+            .is_some_and(|d| d.verdict == "degrading")
+            && output.gate_violations.is_empty();
+        if degrading_ungated {
+            writeln!(
+                out,
+                "⚠️ No new behavioral findings, but delta health is **degrading** — \
+                 see the table above. That verdict is not gated: set \
+                 `deny_degrading_verdict = true` under `[diff]` to fail on it."
+            )?;
+        } else {
+            writeln!(out, "✅ No new behavioral findings.")?;
+        }
         writeln!(out)?;
     }
 
@@ -827,6 +845,81 @@ mod tests {
     use super::*;
     use crate::diff::DiffOutput;
     use codelore_lib::cli_api::analyses::coupling::CouplingAbsence;
+
+    /// Build the "nothing in the four behavioural lists" shape, optionally
+    /// carrying a delta-health verdict.
+    fn output_with_verdict(verdict: Option<&str>) -> DiffOutput {
+        use codelore_lib::cli_api::analyses::delta_health::{
+            DeltaHealthCounts, DeltaHealthSection,
+        };
+        DiffOutput {
+            base_sha: "deadbeef".into(),
+            head_sha: "cafef00d".into(),
+            delta_health: verdict.map(|v| DeltaHealthSection {
+                ratio: Some(0.0),
+                verdict: v.to_string(),
+                counts: DeltaHealthCounts::default(),
+                functions: Vec::new(),
+            }),
+            ..DiffOutput::default()
+        }
+    }
+
+    fn markdown_of(output: &DiffOutput) -> String {
+        let mut buf = Vec::new();
+        emit_markdown(&mut buf, output, None).expect("emit_markdown");
+        String::from_utf8(buf).expect("utf8")
+    }
+
+    /// A `degrading` verdict with no behavioural findings must not print the
+    /// clean-run check mark: the functions that degraded are listed directly
+    /// above it, and a check mark is the part of a PR comment people act on.
+    #[test]
+    fn markdown_does_not_report_clean_under_a_degrading_verdict() {
+        let md = markdown_of(&output_with_verdict(Some("degrading")));
+        assert!(
+            !md.contains("✅ No new behavioral findings"),
+            "must not claim a clean run while reporting degradation; got:\n{md}"
+        );
+        assert!(
+            md.contains("degrading") && md.contains("deny_degrading_verdict"),
+            "must name the verdict and how to gate on it; got:\n{md}"
+        );
+    }
+
+    /// The control that keeps the assertion above honest: without a degrading
+    /// verdict the clean-run line is exactly what should print, so the test
+    /// cannot pass by the line having been deleted.
+    #[test]
+    fn markdown_still_reports_clean_when_health_is_not_degrading() {
+        for verdict in [None, Some("improving"), Some("stable")] {
+            let md = markdown_of(&output_with_verdict(verdict));
+            assert!(
+                md.contains("✅ No new behavioral findings"),
+                "clean run must still say so for verdict {verdict:?}; got:\n{md}"
+            );
+        }
+    }
+
+    /// The text header answers "how many files did this range touch", which is
+    /// the changed-file set — not the sum of three finding lists, which is a
+    /// different number and was zero for a range full of unremarkable files.
+    #[test]
+    fn text_header_counts_changed_files_rather_than_findings() {
+        let output = DiffOutput {
+            base_sha: "deadbeef".into(),
+            head_sha: "cafef00d".into(),
+            pr_file_count: 7,
+            ..DiffOutput::default()
+        };
+        let mut buf = Vec::new();
+        emit_text(&mut buf, &output, None).expect("emit_text");
+        let text = String::from_utf8(buf).expect("utf8");
+        assert!(
+            text.contains("(7 files changed)"),
+            "header must report the changed-file count; got:\n{text}"
+        );
+    }
 
     #[test]
     fn emit_sarif_includes_missing_cochange_rule_and_results() {
