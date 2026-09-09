@@ -314,31 +314,6 @@ fn finite_min(problems: &mut Vec<String>, key: &str, value: Option<f64>, min: f6
     }
 }
 
-/// Push a problem when `path` is present and would resolve outside the
-/// repository that declared it.
-///
-/// These paths are read out of the analysed repository's own file, so they are
-/// attacker-controlled whenever that repository is untrusted — and they are
-/// read on the plain `analyze --repo <clone>` path as well as by `check`,
-/// `gate`, `explain` and the MCP server at startup. An absolute path escapes by
-/// definition, and a `..` component escapes once joined to the repo root;
-/// neither has a legitimate use for an artifact a repository declares about
-/// itself.
-///
-/// `..` is rejected outright rather than normalised and re-checked. The lexical
-/// normaliser used for import resolution pops on an empty stack, so
-/// `../secrets` collapses to `secrets` — which would then pass a starts-with
-/// test while naming a file outside the tree.
-fn confined_to_repo(problems: &mut Vec<String>, key: &str, path: Option<&Path>) {
-    let Some(p) = path else { return };
-    if p.is_absolute() || p.components().any(|c| c == std::path::Component::ParentDir) {
-        problems.push(format!(
-            "{key} = {} must be a relative path inside the repository",
-            p.display()
-        ));
-    }
-}
-
 impl Thresholds {
     /// Auto-discover `.codelore-thresholds.toml` at the repo root.
     /// Returns the default (no gates configured) when the file is
@@ -552,12 +527,6 @@ impl Thresholds {
             );
         }
 
-        confined_to_repo(
-            &mut problems,
-            "defect_artifact",
-            self.calibration.defect_artifact.as_deref(),
-        );
-
         if problems.is_empty() {
             Ok(())
         } else {
@@ -566,15 +535,67 @@ impl Thresholds {
     }
 }
 
-/// Resolve the effective defect-calibration artifact path for a repo:
-/// an explicit flag wins; otherwise the discovered thresholds file's
-/// `[calibration] defect_artifact` (relative paths joined to the repo
-/// root); otherwise `None` (uncalibrated).
+/// Join a repository-declared artifact path to the repository that declared
+/// it, refusing a value that would resolve outside it.
+///
+/// This path is read out of the *analysed* repository's own
+/// `.codelore-thresholds.toml`, so it is attacker-controlled whenever that
+/// repository is untrusted, and it is read on the plain `analyze --repo
+/// <clone>` path as well as by `check`, `gate`, `explain` and the MCP server
+/// at startup. Left unconfined it names any file on the host: the reader opens
+/// it and reports a parse failure when it exists and a missing-input error
+/// when it does not, which is an existence oracle over the filesystem.
+///
+/// What separates a legitimate value from a hostile one is the path's
+/// *source*, not its shape. `--defect-calibration` is typed by the operator,
+/// stays trusted and unrestricted, and remains the way to point at an artifact
+/// that genuinely lives outside the tree. A path the repository declares about
+/// itself has no legitimate reason to leave that tree — a committed absolute
+/// path cannot resolve on anyone else's machine anyway.
+///
+/// The test is an allowlist of components rather than `is_absolute`, which is
+/// false on Windows for a rooted path like `/etc/passwd` and would let exactly
+/// the value this guards against through. Requiring every component to be
+/// `Normal` (or a no-op `.`) rejects a root, a drive prefix and `..` alike, on
+/// every platform.
+///
+/// `..` is refused outright rather than normalised and re-checked, because the
+/// lexical normaliser used for import resolution pops on an empty stack:
+/// `../secrets` collapses to `secrets`, which would then pass a
+/// `starts_with(repo_root)` test while naming a file outside the tree.
 ///
 /// # Errors
 ///
-/// [`CodeLoreError::Analysis`] on I/O or parse errors discovering the
-/// thresholds file.
+/// [`CodeLoreError::InvalidOptions`] (exit 2, the configuration bucket) when
+/// the declared path would escape the repository.
+pub fn repo_declared_artifact(repo_root: &Path, declared: &Path) -> Result<PathBuf> {
+    let escapes = declared.components().any(|c| {
+        !matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
+    if escapes {
+        return Err(CodeLoreError::InvalidOptions(format!(
+            "[calibration] defect_artifact = {} must be a relative path inside the repository; \
+             pass --defect-calibration to use an artifact outside it",
+            declared.display()
+        )));
+    }
+    Ok(repo_root.join(declared))
+}
+
+/// Resolve the effective defect-calibration artifact path for a repo:
+/// an explicit flag wins; otherwise the discovered thresholds file's
+/// `[calibration] defect_artifact`, joined to the repo root and confined
+/// to it by [`repo_declared_artifact`]; otherwise `None` (uncalibrated).
+///
+/// # Errors
+///
+/// - [`CodeLoreError::Analysis`] on I/O or parse errors discovering the
+///   thresholds file.
+/// - [`CodeLoreError::InvalidOptions`] when the declared path escapes the
+///   repository.
 pub fn resolve_defect_calibration(
     cli_flag: Option<PathBuf>,
     repo_root: &Path,
@@ -583,13 +604,12 @@ pub fn resolve_defect_calibration(
         return Ok(cli_flag);
     }
     let thresholds = Thresholds::discover(repo_root)?;
-    Ok(thresholds.calibration.defect_artifact.map(|p| {
-        if p.is_absolute() {
-            p
-        } else {
-            repo_root.join(p)
-        }
-    }))
+    thresholds
+        .calibration
+        .defect_artifact
+        .as_deref()
+        .map(|p| repo_declared_artifact(repo_root, p))
+        .transpose()
 }
 
 #[cfg(all(test, feature = "test-support"))]
@@ -885,31 +905,72 @@ new_hotspot_max = 0
     // ───────── value validation ─────────
 
     #[test]
-    fn validate_rejects_a_defect_artifact_that_escapes_the_repo() {
-        // Paths are single-quoted TOML literals so a Windows separator is
-        // not read as an escape.
+    fn a_repo_declared_artifact_that_escapes_the_repository_is_refused() {
+        let root = Path::new("/repo");
+        // Every shape that leaves the tree: a rooted path (which `is_absolute`
+        // reports as false on Windows, so the check is a component allowlist
+        // instead), plain traversal, and traversal that only escapes after a
+        // descent — the case a normalise-then-compare test would let through.
         for bad in ["/etc/passwd", "../../secrets.json", "sub/../../escape.json"] {
-            let text = format!("[calibration]\ndefect_artifact = '{bad}'\n");
-            let t = Thresholds::from_text(&text).expect("well-formed TOML");
-            let Err(err) = t.validate() else {
-                panic!("{bad} must be rejected");
-            };
+            let err = repo_declared_artifact(root, Path::new(bad))
+                .expect_err("a path leaving the repository must be refused");
+            let msg = err.to_string();
             assert!(
-                err.contains("defect_artifact"),
-                "error must name the offending key: {err}"
+                msg.contains("defect_artifact"),
+                "the error must name the offending key: {msg}"
+            );
+            assert!(
+                msg.contains("--defect-calibration"),
+                "the error must point at the flag that legitimately reaches outside: {msg}"
             );
         }
     }
 
     #[test]
-    fn validate_accepts_a_defect_artifact_inside_the_repo() {
-        // Anti-vacuity partner: the rejection above must come from the path
-        // escaping, not from the key being present at all.
-        let t = Thresholds::from_text("[calibration]\ndefect_artifact = 'ci/defects.calib.json'\n")
-            .expect("well-formed TOML");
-        assert!(
-            t.validate().is_ok(),
-            "a relative in-repo artifact path must validate"
+    fn a_repo_declared_artifact_inside_the_repository_resolves_against_it() {
+        // Anti-vacuity partner: the refusals above must come from the path
+        // leaving the tree, not from the function refusing everything.
+        let root = Path::new("/repo");
+        let ok = repo_declared_artifact(root, Path::new("ci/defects.calib.json"))
+            .expect("an in-repo relative path must resolve");
+        assert_eq!(ok, root.join("ci/defects.calib.json"));
+        // A leading `.` is a no-op component, not an escape.
+        let dotted = repo_declared_artifact(root, Path::new("./ci/defects.calib.json"))
+            .expect("a `.`-prefixed in-repo path must resolve");
+        assert_eq!(dotted, root.join("ci/defects.calib.json"));
+    }
+
+    #[test]
+    fn the_operator_flag_still_reaches_an_artifact_outside_the_repository() {
+        // The confinement is about the path's source, not its shape: a value
+        // the operator typed is trusted and must still resolve untouched, or
+        // the fix would have removed a documented workflow rather than an
+        // attack. This is the control for the two tests above.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let outside = dir.path().join("outside.calib.json");
+        let resolved = resolve_defect_calibration(Some(outside.clone()), Path::new("/repo"))
+            .expect("an operator-supplied path is not confined");
+        assert_eq!(resolved, Some(outside));
+    }
+
+    #[test]
+    fn a_repo_declaring_an_escaping_artifact_fails_the_resolve_not_the_parse() {
+        // The value is refused where it is consumed, so a config whose
+        // artifact is overridden by the flag is never punished for it.
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            dir.path().join(THRESHOLDS_FILENAME),
+            "[calibration]\ndefect_artifact = '../escape.json'\n",
+        )
+        .expect("write thresholds");
+        Thresholds::discover(dir.path()).expect("the file itself parses and validates");
+        resolve_defect_calibration(None, dir.path())
+            .expect_err("resolving the declared path must refuse it");
+        let flag = dir.path().join("explicit.json");
+        assert_eq!(
+            resolve_defect_calibration(Some(flag.clone()), dir.path()).expect("flag wins"),
+            Some(flag),
+            "the flag overrides the declared value, so the run must not fail"
         );
     }
 

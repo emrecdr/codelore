@@ -79,18 +79,20 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Mirrors `quality_gates::resolve_defect_calibration`, but reuses the
-    // `thresholds` value already loaded above instead of re-discovering
-    // (and re-parsing) the thresholds file.
-    let resolved_defect_calibration = args.defect_calibration.clone().or_else(|| {
-        thresholds.calibration.defect_artifact.clone().map(|p| {
-            if p.is_absolute() {
-                p
-            } else {
-                args.repo.join(p)
-            }
-        })
-    });
+    // Same precedence as `quality_gates::resolve_defect_calibration`, reusing
+    // the `thresholds` value already loaded above instead of re-discovering
+    // (and re-parsing) the thresholds file. The repo-declared branch goes
+    // through the shared `repo_declared_artifact`, so the containment cannot
+    // be present here and missing in one of the other resolving commands.
+    let resolved_defect_calibration = match args.defect_calibration.clone() {
+        Some(flag) => Some(flag),
+        None => thresholds
+            .calibration
+            .defect_artifact
+            .as_deref()
+            .map(|p| codelore_lib::cli_api::quality_gates::repo_declared_artifact(&args.repo, p))
+            .transpose()?,
+    };
 
     let opts = Options {
         repo_path: args.repo.clone(),

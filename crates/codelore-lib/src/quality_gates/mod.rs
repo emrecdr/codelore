@@ -43,7 +43,7 @@ pub mod ratchet;
 
 pub use config::{
     CalibrationConfig, DiffGates, Gates, NewCodeGates, THRESHOLDS_FILENAME, Thresholds,
-    resolve_defect_calibration,
+    repo_declared_artifact, resolve_defect_calibration,
 };
 pub use evaluators::{
     ArchMeasured, GateViolation, change_set_gate_verdict, diff_gate_verdict,
