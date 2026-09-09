@@ -38,7 +38,98 @@ pub(crate) fn default_spill_dir(cache_root: Option<&Path>) -> PathBuf {
 /// call on a `ReadOnly`-mode connection — both PRAGMAs are session/engine
 /// settings, not writes to the database file.
 pub(crate) fn apply_memory_pragmas(conn: &Connection, temp_dir: &Path) -> Result<()> {
+    // The cap only ever lowers the ceiling. `DuckDB` defaults to a fraction of
+    // detected physical memory, so on any host with less than about five
+    // gigabytes our fixed 4 GB *raised* it — the engine then believed it could
+    // hold four gigabytes of hash-join state, did not spill at the point it
+    // otherwise would have, and the kernel's OOM killer arrived instead of the
+    // spill file. The lever exists to bound large machines; on small ones it
+    // was doing the opposite of its purpose. Small self-hosted runners and
+    // container memory limits are exactly where that bites.
+    let engine_default = current_memory_limit_bytes(conn);
+    let cap = parse_duckdb_bytes(DEFAULT_DUCKDB_MEMORY_LIMIT);
+    let raises_the_ceiling = match (engine_default, cap) {
+        (Some(default), Some(cap)) => cap > default,
+        // An unlimited or unparseable engine default means our cap is the only
+        // bound there is, so apply it; an unparseable cap is a constant this
+        // repository controls and would be a bug, but erring toward applying
+        // the documented value keeps the behaviour it has always had.
+        _ => false,
+    };
+    if raises_the_ceiling {
+        tracing::debug!(
+            "leaving DuckDB's own memory_limit in place: it is below this build's {} cap",
+            DEFAULT_DUCKDB_MEMORY_LIMIT
+        );
+        return apply_temp_directory(conn, temp_dir);
+    }
     apply_memory_pragmas_with_limit(conn, DEFAULT_DUCKDB_MEMORY_LIMIT, temp_dir)
+}
+
+/// `DuckDB`'s currently-effective `memory_limit`, in bytes. `None` when the
+/// setting is unlimited or cannot be read — both mean "no ceiling to compare
+/// against", so the caller applies its own.
+fn current_memory_limit_bytes(conn: &Connection) -> Option<u64> {
+    let raw: String = conn
+        .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+        .ok()?;
+    parse_duckdb_bytes(&raw)
+}
+
+/// Parse a `DuckDB` byte-size setting (`"3.7 GiB"`, `"512.0 MiB"`, `"1024"`)
+/// into bytes. `None` for the unlimited forms `-1` and `unlimited`, and for
+/// anything unrecognised.
+fn parse_duckdb_bytes(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s.is_empty() || s == "-1" || s.eq_ignore_ascii_case("unlimited") {
+        return None;
+    }
+    let digits_end = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let (number, unit) = s.split_at(digits_end);
+    let value: f64 = number.parse().ok()?;
+    if value < 0.0 {
+        return None;
+    }
+    // Both spellings appear and they do NOT mean the same thing: this crate
+    // writes `4GB` and the engine reports back `3.7 GiB`, because DuckDB reads
+    // `GB` as a power of 1000 and `GiB` as a power of 1024. Measured directly
+    // against the pinned engine — `memory_limit = 64GB` reads back as
+    // `59.6 GiB`, and 64 x 10^9 / 1024^3 is 59.6. Collapsing the two into one
+    // multiplier would misjudge every comparison by 7%.
+    let multiplier: f64 = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1.0,
+        "k" | "kb" => 1e3,
+        "kib" => 1024.0,
+        "m" | "mb" => 1e6,
+        "mib" => 1024.0 * 1024.0,
+        "g" | "gb" => 1e9,
+        "gib" => 1024.0 * 1024.0 * 1024.0,
+        "t" | "tb" => 1e12,
+        "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some((value * multiplier) as u64)
+}
+
+/// Set `temp_directory` alone, creating it if needed. Split out so the
+/// spill location is configured on every path, including the one that
+/// deliberately leaves `memory_limit` as the engine set it.
+fn apply_temp_directory(conn: &Connection, temp_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(temp_dir).map_err(|e| {
+        CodeLoreError::Analysis(format!(
+            "create duckdb temp_directory {}: {e}",
+            temp_dir.display()
+        ))
+    })?;
+    conn.pragma_update(
+        None,
+        "temp_directory",
+        &temp_dir.to_string_lossy().into_owned(),
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("set duckdb temp_directory: {e}")))
 }
 
 /// Like [`apply_memory_pragmas`] but with an explicit `memory_limit` value.
@@ -50,21 +141,9 @@ fn apply_memory_pragmas_with_limit(
     memory_limit: &str,
     temp_dir: &Path,
 ) -> Result<()> {
-    std::fs::create_dir_all(temp_dir).map_err(|e| {
-        CodeLoreError::Analysis(format!(
-            "create duckdb temp_directory {}: {e}",
-            temp_dir.display()
-        ))
-    })?;
     conn.pragma_update(None, "memory_limit", &memory_limit.to_string())
         .map_err(|e| CodeLoreError::Analysis(format!("set duckdb memory_limit: {e}")))?;
-    conn.pragma_update(
-        None,
-        "temp_directory",
-        &temp_dir.to_string_lossy().into_owned(),
-    )
-    .map_err(|e| CodeLoreError::Analysis(format!("set duckdb temp_directory: {e}")))?;
-    Ok(())
+    apply_temp_directory(conn, temp_dir)
 }
 
 /// How the HEAD complexity scan's recorded coverage compares to the floor.
@@ -880,6 +959,94 @@ impl FactsDb {
     /// connection.
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+}
+
+#[cfg(test)]
+mod memory_limit_tests {
+    use super::{Connection, apply_memory_pragmas, parse_duckdb_bytes};
+    use crate::constants::DEFAULT_DUCKDB_MEMORY_LIMIT;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn parses_the_shapes_duckdb_reports_and_the_one_this_crate_writes() {
+        // Decimal and binary units mean different things to DuckDB, and the
+        // two shapes this code meets are one of each: the constant this crate
+        // writes, and the value the engine reads back.
+        assert_eq!(parse_duckdb_bytes("4GB"), Some(4_000_000_000));
+        assert_eq!(parse_duckdb_bytes("3.7 GiB"), Some(3_972_844_748));
+        assert_eq!(parse_duckdb_bytes("512.0 MiB"), Some(512 * 1024 * 1024));
+        assert_eq!(parse_duckdb_bytes("1024"), Some(1024));
+        assert_eq!(parse_duckdb_bytes(" 2 TiB "), Some(2 * 1024 * GIB));
+        // The pair the engine itself round-trips: setting 64GB reads back as
+        // 59.6 GiB, so the two spellings must not parse to the same number.
+        assert!(parse_duckdb_bytes("64GB").unwrap() < parse_duckdb_bytes("64GiB").unwrap());
+    }
+
+    /// The unlimited and unreadable forms must not parse as a small number:
+    /// reading either as a low ceiling would suppress the cap on exactly the
+    /// hosts that need it.
+    #[test]
+    fn unlimited_and_unrecognised_forms_are_none() {
+        for raw in ["-1", "unlimited", "", "  ", "lots", "12 parsecs"] {
+            assert_eq!(parse_duckdb_bytes(raw), None, "{raw:?} must not parse");
+        }
+    }
+
+    /// The cap must never raise the engine's own ceiling. Driving a real
+    /// connection down to a small limit stands in for a small host: applying
+    /// the pragmas must leave that lower value alone.
+    #[test]
+    fn the_cap_never_raises_an_already_lower_ceiling() {
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        conn.pragma_update(None, "memory_limit", &"256MB")
+            .expect("set a small ceiling");
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        apply_memory_pragmas(&conn, temp.path()).expect("apply pragmas");
+
+        let after: String = conn
+            .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+            .expect("read memory_limit");
+        let after_bytes = parse_duckdb_bytes(&after).expect("parse");
+        let cap = parse_duckdb_bytes(DEFAULT_DUCKDB_MEMORY_LIMIT).expect("parse cap");
+        assert!(
+            after_bytes <= cap,
+            "the cap must not raise a lower ceiling: {after} > {DEFAULT_DUCKDB_MEMORY_LIMIT}"
+        );
+        // And the spill directory is still configured on that path.
+        let spill: String = conn
+            .query_row("SELECT current_setting('temp_directory')", [], |r| r.get(0))
+            .expect("read temp_directory");
+        assert!(!spill.is_empty(), "temp_directory must still be set");
+    }
+
+    /// The control: from a ceiling above the cap, the cap is applied. Without
+    /// it the test above would pass against a version that never applies the
+    /// cap at all.
+    #[test]
+    fn the_cap_still_lowers_a_higher_ceiling() {
+        let conn = Connection::open_in_memory().expect("in-memory duckdb");
+        conn.pragma_update(None, "memory_limit", &"64GB")
+            .expect("set a large ceiling");
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        apply_memory_pragmas(&conn, temp.path()).expect("apply pragmas");
+
+        let after: String = conn
+            .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+            .expect("read memory_limit");
+        let cap = parse_duckdb_bytes(DEFAULT_DUCKDB_MEMORY_LIMIT).expect("parse cap");
+        let after_bytes = parse_duckdb_bytes(&after).expect("parse");
+        // The engine reports its setting rounded to one decimal place, so the
+        // read-back of a 4GB cap is `3.7 GiB` rather than the exact byte
+        // count. Assert the band, not equality: comfortably below the 64GB it
+        // started at, and no higher than the cap.
+        assert!(
+            after_bytes <= cap && after_bytes * 100 > cap * 99,
+            "a ceiling above the cap must be lowered to it; got {after} against a {DEFAULT_DUCKDB_MEMORY_LIMIT} cap"
+        );
     }
 }
 
