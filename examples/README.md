@@ -1,6 +1,6 @@
 # CodeLore — integration examples
 
-Drop-in templates for the most common CodeLore deployment patterns. Copy them into your own repo, change `<owner>`/`<repo>` placeholders, and you're integrated.
+Drop-in templates for the most common CodeLore deployment patterns. Copy them into your own repo and you're integrated — they run as-is on any GitHub repository.
 
 ## GitHub Actions
 
@@ -32,7 +32,7 @@ Start with `none` for a sprint to calibrate the noise floor against your codebas
 ## Future examples
 
 - GitLab CI YAML (analogous structure; uses `codelore diff` the same way)
-- Pre-commit hook (`codelore analyze --quick` against staged files)
+- Pre-commit hook wrapping `codelore gate` (the working-tree gate) and wiring it into `.git/hooks` automatically
 - Docker Compose snippet (mount-and-run pattern for monorepos with multiple components)
 - A scheduled GitHub Action that produces a weekly hotspot trend report
 

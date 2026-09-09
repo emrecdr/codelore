@@ -276,6 +276,47 @@ fn analyze_exits_3_on_truncated_shallow_checkout() {
     );
 }
 
+/// The witness above only fires when the shallow tip is a merge commit, which
+/// ingests zero history under the default merge filter. On ordinary linear
+/// history the walk gets further and dies at the boundary instead, where gix
+/// reports a missing object — a message that reads as a corrupt repository and
+/// sends the reader nowhere near the checkout step that caused it. Both shapes
+/// of the same truncation must name the same remedy.
+#[test]
+fn analyze_names_the_fetch_depth_remedy_on_a_linear_shallow_checkout() {
+    let full = codelore_lib::test_support::tiny_repo::build();
+    let shallow = tempfile::tempdir().unwrap();
+    let source_url = format!("file://{}", full.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(shallow.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            shallow.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--no-cache",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("truncated") && stderr.contains("fetch-depth"),
+        "the boundary failure must name the truncation and its remedy, not a \
+         missing object; got stderr: {stderr}"
+    );
+}
+
 /// The shallow-checkout witness must survive a date filter. Under
 /// `--after`/`--before`, a zero-commit walk on a FULL clone is a legitimate
 /// empty selection (warn + exit 0), but on a shallow/truncated checkout it is
@@ -336,6 +377,117 @@ fn invalid_options_exit_with_code_2() {
             "80",
             "--max-coupling",
             "30",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
+/// `--analysis clones` short-circuits before the repository is opened so that
+/// it works on a directory that is not a git repository. That deliberately
+/// skips the git checks; it must not skip the path checks, or a mistyped
+/// `--repo` walks nothing and emits a header row with exit 0 — a green CI step
+/// over a repository that was never read.
+#[test]
+fn clones_on_a_missing_repo_path_is_a_repo_error() {
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "clones",
+            "--repo",
+            "/tmp/definitely-does-not-exist-codelore-clones",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+}
+
+/// The same short-circuit must also refuse an `--output` whose parent
+/// directory is absent, with the documented output code rather than the
+/// unclassified failure a raw `File::create` produces.
+#[test]
+fn clones_with_a_missing_output_parent_is_an_output_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let missing_parent = tiny.dir.path().join("no-such-dir").join("out.csv");
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "clones",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--output",
+            missing_parent.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+}
+
+/// The external-findings sidecar is addressed by a hash of the repository
+/// path, so a typo'd `--repo` used to store findings under a repository that
+/// does not exist and report success — leaving every later overlap analysis
+/// and findings gate saying nothing had been ingested.
+#[test]
+fn ingest_sarif_on_a_missing_repo_path_is_a_repo_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sarif = tmp.path().join("findings.sarif.json");
+    std::fs::write(&sarif, sarif_zero_findings("semgrep")).unwrap();
+
+    let output = codelore_cmd()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            "/tmp/definitely-does-not-exist-codelore-sarif",
+            "--cache-dir",
+            tmp.path().to_str().unwrap(),
+            sarif.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+}
+
+/// A `--target` that names no tracked file is an argument mistake, not an
+/// empty result. The MCP tools have refused one since they were written; the
+/// CLI printed a header row and exited 0.
+#[test]
+fn function_xray_with_an_untracked_target_is_an_argument_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-xray",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--target",
+            "src/does_not_exist.rs",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found among files tracked at HEAD"),
+        "error must name the failure; got: {stderr}"
+    );
+}
+
+/// A missing `--target` is an argument error too, and is caught before the
+/// ingest: it used to surface as an analysis error only after the walk had
+/// been paid for.
+#[test]
+fn function_coupling_without_a_target_is_an_argument_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-coupling",
             "--repo",
             tiny.dir.path().to_str().unwrap(),
         ])
@@ -2196,6 +2348,98 @@ fn diff_delta_health_gate_fails_the_run() {
             .any(|v| v["gate"] == "deny_degrading_verdict"),
         "violations: {}",
         json["gate_violations"]
+    );
+}
+
+/// A failing gate must say so on stderr, in every format and whether or not
+/// the report went to a file. `--output` used to take the whole story with it:
+/// the run exited 1 with an empty stderr, so a red Action step carried a blank
+/// log and the reason was visible only to whoever opened the artifact.
+#[test]
+fn diff_failing_gate_prints_a_verdict_to_stderr_with_output_to_a_file() {
+    let (dir, base, head) = delta_health_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(&thresholds, "[diff]\ndeny_degrading_verdict = true\n").unwrap();
+    let report = dir.path().join("report.md");
+    let output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "markdown",
+            "--output",
+            report.to_str().unwrap(),
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("codelore diff: FAIL"),
+        "a failing gate must report its verdict on stderr; got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(report.to_str().unwrap()),
+        "the verdict must point at the report it wrote; got: {stderr:?}"
+    );
+    // Stdout stays the document channel: nothing went there, because the
+    // report went to the file.
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay clean when --output names a file"
+    );
+}
+
+/// The passing counterpart, so the verdict line cannot pass by being printed
+/// unconditionally — and an advisory run (no thresholds, `--fail-on none`)
+/// stays quiet, since it gated nothing and is the common invocation.
+#[test]
+fn diff_reports_pass_only_when_something_was_gated() {
+    let (dir, base, head) = delta_health_fixture();
+    let gated = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--fail-on",
+            "rank-entrant",
+            "--format",
+            "text",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&gated.stderr).contains("codelore diff: PASS"),
+        "a gated run that passes must say so"
+    );
+
+    let advisory = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "text",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(advisory.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&advisory.stderr).contains("codelore diff: PASS"),
+        "an advisory run gated nothing and has no verdict to report"
     );
 }
 

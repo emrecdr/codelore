@@ -439,7 +439,7 @@ corpus_percentile_max = 0.9
 
 **When the gate skips (read this carefully).** The gate records a `skipped` verdict — neither pass nor fail — whenever **no code-health row resolves a corpus percentile**. That happens in more than one situation, and the honest description is: *there is no percentile data to gate on.* Concretely, the skip fires when
 
-- no calibration artifact is active — the embedded world corpus ships by default, so this needs `--no-corpus-lens` or a build with the artifact disabled, **or**
+- no calibration artifact is active — the embedded world corpus ships by default and cannot be switched off from the CLI, so this only happens on a build whose embedded artifact is still the placeholder vintage, **or**
 - an artifact *is* active, but none of the analyzed files produce a percentile — e.g. every covered language was pooled below the 500-function trust floor, every file is in a language the corpus doesn't cover, or the health scan produced no rows at all.
 
 The stderr notice printed on skip mentions passing `--calibration`, but the underlying condition is broader than "no artifact": it is "no row carried a percentile." If you see a skip while an artifact is embedded, check that your repository's languages are covered *and* cleared the sample floor in that artifact.
@@ -908,6 +908,8 @@ Three surfaces evaluate this file, each against a different input: `codelore che
 
 A gate can also report **skipped** — its underlying analysis had nothing to evaluate (no external-findings sidecar, no calibration artifact, a history shallower than a `[new_code]` window, or a change-set that measured no per-file delta). By default a skipped gate does not affect the exit code, so a gate that silently stopped evaluating is indistinguishable at the exit code from one that evaluated and passed. Set `fail_on_skipped = true` in `[gates]` to treat any skipped gate as a failure — honoured by `codelore check`, `codelore gate`, and `codelore diff` (exit 1 on all three), with the ledger still recording the honest `skipped` verdict. It defaults to `false` (behaviour unchanged) and, like `fail_on_degraded`, is a policy modifier that configures no gate on its own.
 
+**`scan_coverage` is a violation the evaluator emits, not a key you set.** Searching `[gates]` for it finds nothing, which is correct — it has no threshold to configure. It appears in the FAIL listing and in SARIF on the pseudo-path `(degraded)` when the HEAD complexity scan was too thin to support the gates that read it, with its `actual` naming the counts and its threshold reading `≥ coverage floor`. One violation is raised per run rather than one per affected gate, because the cause is a single scan. See *[Scan coverage and the AST size cap](#scan-coverage-and-the-ast-size-cap)* for what triggers it and how to turn the failure off while keeping the disclosure.
+
 #### The `[new_code]` period gate
 
 `[gates]`' absolute floors bind on the legacy tail: a `code_health_min` must sit below the worst old file, so it says nothing about whether the code being written *this quarter* is healthy, and it ratchets only when someone re-bases it by hand. `[diff]`'s `new_file_health_min` floors new files, but only within *one pull request*. `[new_code]` fills the period-scoped gap — "new and recently-touched code is held to a strict standard; legacy code is only required not to degrade" — over a rolling window rather than a single PR:
@@ -1115,8 +1117,9 @@ codelore analyze --analysis hotspots --no-cache
 # Override the XDG root (useful in CI with per-job caches)
 codelore analyze --analysis hotspots --cache-dir /tmp/codelore-cache
 
-# Inspect the cache
-ls "$(dirs -c codelore 2>/dev/null || echo $XDG_CACHE_HOME)/codelore/"
+# Inspect the cache — `profile` prints the resolved root, the current
+# size and the eviction cap, on every platform
+codelore profile
 ```
 
 Eviction: 5 entries per repo + 2 GB global cap, oldest-ingest-first. Pruning runs after every successful miss-and-write. Note this is FIFO, not LRU: a cache hit opens the store read-only and so never refreshes its mtime, meaning a frequently-read entry can be evicted ahead of a newer one that was never reused.
@@ -1146,7 +1149,7 @@ WARN cache hit on a working tree with uncommitted changes. The fact store
 
 It fires only when stderr is an interactive terminal: on a redirected stderr (CI, the agent loop, a pipe) the dirty-tree status walk is skipped entirely — nobody would read the hint, and the walk isn't free. Detection is cheap either way (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker), and untracked files don't count toward it.
 
-Auto-invalidation via worktree-content hashing was considered and rejected, and that still holds: hashing every tracked file on every invocation costs 100ms–1s on large trees. Hashing the three ignore files instead is the targeted version of the same idea — they are the only worktree inputs the ingest actually reads.
+Auto-invalidation via worktree-content hashing was considered and rejected, and that still holds: hashing every tracked file on every invocation costs 100ms–1s on large trees. Hashing the ignore files instead is the targeted version of the same idea — together with `.mailmap`, `.codelorebots` and `.codelore-teams` they are the whole set of worktree files the ingest reads, and every one of them is digested by content (the list above).
 
 ### Memory ceiling and disk spill
 
@@ -1313,20 +1316,36 @@ HEAD-time passes (complexity, clones, imports), the working-tree clone scan
 that `analyze --analysis clones`, `gate`'s change-set projection and `diff`
 consume, and the at-rev passes behind the historical trends. A cache hit
 skips the ingest, so on a warm run the working-tree scan is often the only
-census that executes. Two aggregate warnings can fire from any of them,
-both at the default log level:
+census that *executes* — but a cache hit is not silent about the HEAD scan it
+inherited: opening a store whose recorded coverage sits below the floor prints
+a warning naming both counts. Unlike the dirty-worktree hint above, that one is
+not gated on an interactive terminal, because a CI job reading hotspot output
+has no other way to learn the scan was partial. These aggregate warnings can
+fire, all at the default log level:
 
-- **Degraded coverage** — a pass that *failed* to read or parse ≥10% of the
-  eligible source files warns with the loss breakdown. The usual cause is a
-  blobless partial clone (`git clone --filter=blob:none`, or
-  `actions/checkout` with a filter), which the shallow-clone check cannot
-  detect because such a clone has complete commit history. For the HEAD
-  complexity pass this is more than a warning: its `eligible` and `scored`
-  counts are recorded in the fact store, and `codelore check`'s code-health
-  gate reports **`degraded`** when they fall below the same floor — so a scan
-  that reached a minority of the repository fails the gate under the default
-  `fail_on_degraded = true` instead of passing on the part it happened to
-  measure. The counts are stored rather than recomputed because a cache hit
+- **Degraded coverage** — a pass that read and parsed less than the coverage
+  floor (90%) of the eligible source files warns with the loss breakdown. The
+  floor is inclusive: exactly 90% of 100 eligible files is *met*, and 89 is the
+  smallest step below it. The usual cause is a blobless partial clone
+  (`git clone --filter=blob:none`, or `actions/checkout` with a filter), which
+  the shallow-clone check cannot detect because such a clone has complete commit
+  history. For the HEAD complexity pass this is more than a warning: its
+  `eligible` and `scored` counts are recorded in the fact store, and
+  `codelore check` degrades **every gate that reads that table** —
+  `cognitive_max`, `hotspot_score_max`, `hotspot_anchored_max`,
+  `code_health_min`, `max_dependency_cycles`, `max_propagation_cost`,
+  `max_red_effort_pct`, `code_familiarity_min`, `max_findings_in_hot_files` and
+  `corpus_percentile_max` — turning whatever each concluded into `degraded`. A
+  gate already `skipped` stays skipped, since it evaluated nothing to distrust,
+  and `disallow_clone_type_1` is exempt because clone detection runs its own
+  HEAD scan that this figure says nothing about. Under the default
+  `fail_on_degraded = true` that also raises a single violation named
+  `scan_coverage` — see *[Quality gate](#quality-gate)*, which describes it as a
+  verdict you read rather than a key you set — so a scan that reached a minority of the
+  repository fails the gate instead of passing on the part it happened to
+  measure — **which means a previously green run can turn red with no code
+  change**. Set `fail_on_degraded = false` to keep the disclosure without the
+  failure. The counts are stored rather than recomputed because a cache hit
   never re-runs the scan; a store written before they were recorded reads as
   *unknown* and does not trigger the verdict, and a repository with no
   eligible source is *complete*, not degraded.
@@ -1336,8 +1355,15 @@ both at the default log level:
   meaningless metrics. Those skips are deliberately *not* counted as losses,
   so a bundle-carrying repository stays quiet — but when the skipped files
   outnumber the scanned ones, the pass warns: the fact table describes a
-  minority of what looks like source. Exclude bundle directories via
-  `.codeloreignore` so the census reflects the code you maintain.
+  minority of what looks like source. On `codelore check` this is a degrading
+  verdict in its own right, not just a warning: it degrades the same ten
+  complexity-derived gates and raises the same `scan_coverage` violation under
+  the default `fail_on_degraded = true`. It is kept distinct from thin coverage
+  because the remedy differs and the notice says which one applies — a thin scan
+  lost files a re-ingest can recover, whereas an oversize majority lost nothing
+  (the cap did exactly what it exists to do), so re-ingesting changes nothing.
+  Exclude bundle directories via `.codeloreignore` so the census reflects the
+  code you maintain.
 - **Unranked files** — `hotspots` ranks only files the scan could actually
   measure. A file with no complexity data — a language with no tree-sitter
   grammar, an unreadable blob, one past the cap above — is absent from the
@@ -1359,7 +1385,16 @@ See [`examples/.github/workflows/codelore-pr.yml`](../examples/.github/workflows
 - **`fetch-depth: 0`** in `actions/checkout` is mandatory. Without full history, hotspot scores are truncated to one commit and become meaningless. This is the single most common failure mode.
 - **Three-dot merge-base notation** (`origin/main...HEAD`) scopes correctly to PR-only commits even when the base branch has moved since branch creation.
 - **`security-events: write` permission** is required for SARIF upload to Code Scanning.
-- **GHA cache integration** — pass `--cache-dir ${{ runner.temp }}/codelore-cache` and wrap with `actions/cache@v4` to persist across PRs.
+- **Caching across runs** — the fact-store cache key includes the HEAD SHA, so a restored `--cache-dir` misses on every new push and helps only a re-run of the *same* commit. Caching it across pull requests does not work and is not worth the upload. What does persist is `codelore diff --base-cache PATH`: it is keyed on the base revision, so every pull request against an unchanged base reuses the base-side analysis. Wrap that file with `actions/cache` keyed on the base SHA:
+
+  ```yaml
+  - uses: actions/cache@v4
+    with:
+      path: ${{ runner.temp }}/codelore-base.json
+      key: codelore-base-${{ github.event.pull_request.base.sha }}
+  - run: codelore diff origin/${{ github.base_ref }}...HEAD
+           --base-cache ${{ runner.temp }}/codelore-base.json
+  ```
 
 ### Quality gate rollout
 
@@ -1395,9 +1430,11 @@ INFO bench.analyze_and_emit: close time.busy=43ms time.idle=18µs
 For finer-grained timing, raise the level:
 `RUST_LOG=codelore=debug` also shows the per-analysis spans inside
 `codelore-lib` (cache hit/miss, materialize_changes_bucketed,
-etc.). The default `--verbose` flag enables `info` for
-`codelore` but not `codelore::bench`, so the bench-specific
-spans stay out of normal-verbosity output.
+etc.). `--verbose` already includes the bench spans without any
+`RUST_LOG` at all: its filter is `info,codelore=debug`, whose bare
+`info` directive covers the `codelore::bench` target. Reach for
+`RUST_LOG=codelore::bench=info` when you want the timings *without*
+the rest of the verbose output.
 
 ## 11.8. Using codelore as a local quality hook
 
@@ -1429,9 +1466,11 @@ The `--quiet` flag suppresses diagnostic noise (per-violation detail lines, inli
 | 5 | Output/I/O error |
 
 `check` and `gate` open the repository before reading thresholds, so a
-`--repo` that is missing or is not a git repository is an exit-3 repository
-error rather than a vacuous pass — a typo'd path in a CI job cannot produce
-a green gate. (`check --history` prints the gate-run ledger without
+`--repo` that is missing, unreadable, or not a git repository is an exit-3
+repository error rather than a vacuous pass — a typo'd path in a CI job cannot
+produce a green gate. The three are reported separately: an unreadable
+directory is a permission fault, not an absent one, and telling you to create a
+path that already exists would send you the wrong way. (`check --history` prints the gate-run ledger without
 evaluating anything and returns before that check.)
 
 Two out-of-band terminations sit outside this 0–5 contract:

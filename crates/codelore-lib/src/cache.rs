@@ -25,7 +25,16 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v23`) orphans entries written before the HEAD
+/// The current epoch (`schema_v24`) orphans entries whose `imports` table was
+/// resolved while a workspace sibling counted as an unresolvable extern crate.
+/// Every edge between members of a Cargo workspace was dropped, so those
+/// stores hold an import graph severed at each crate boundary — and every
+/// analysis reading it (instability, centrality, dependency cycles, the
+/// architecture family, `god-classes`' fan-in) describes that severed graph as
+/// the structure of the code. Resolution happens once, at ingest, so a cache
+/// hit never re-runs it.
+///
+/// The prior epoch (`schema_v23`) orphans entries written before the HEAD
 /// complexity scan recorded how many files it skipped for exceeding the AST
 /// size cap. Those stores can report their loss ratio but not the second way
 /// the same scan goes blind — a tree of five real files beside five hundred
@@ -69,7 +78,7 @@ use crate::Options;
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v23";
+pub const CACHE_EPOCH: &str = "schema_v25";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

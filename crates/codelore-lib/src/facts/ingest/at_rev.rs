@@ -83,8 +83,19 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
                 let Some(lang) = Tier1Language::from_path(&path) else {
                     return ScanOutcome::NotCounted;
                 };
-                let source = match reader.read(&path) {
-                    Ok(Some(b)) => b,
+                // Capped read so an oversize blob is rejected from its object
+                // header where the backend can, rather than being allocated in
+                // full and immediately discarded.
+                let cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES;
+                let source = match reader.read_capped(&path, cap as u64) {
+                    Ok(Some(crate::repo::BlobRead::Data(b))) => b,
+                    Ok(Some(crate::repo::BlobRead::Oversize(size))) => {
+                        tracing::debug!(
+                            "at_rev complexity: skipping {path} at {rev_owned} \
+                             ({size} bytes > {cap}-byte AST cap)"
+                        );
+                        return ScanOutcome::SkippedOversize;
+                    }
                     Ok(None) => {
                         // Absent at this rev — `live_paths` is derived from
                         // history, so this is expected, not a loss.
@@ -100,15 +111,6 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
                         return ScanOutcome::Lost(REASON_BLOB_READ);
                     }
                 };
-                if source.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                    tracing::debug!(
-                        "at_rev complexity: skipping {path} at {rev_owned} \
-                         ({size} bytes > {cap}-byte AST cap)",
-                        size = source.len(),
-                        cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                    );
-                    return ScanOutcome::SkippedOversize;
-                }
                 let synth_path = std::path::Path::new(&path);
                 let entities = match compute_for_file(synth_path, source, lang) {
                     Ok(v) => v,

@@ -633,14 +633,22 @@ impl Options {
                     .to_string(),
             ));
         }
-        // Explicitly-named input files must exist. These four are hashed by
-        // content into the cache key, and the hasher treats an unreadable
-        // path as "no override" — so a typo does not just go unnoticed, it
-        // collapses the key onto the run that named no file at all. On a
-        // cold cache that surfaces as a clean read error, but on a warm one
-        // the typo'd run hits the un-grouped entry and fails much later with
-        // a missing-table error from the query layer. Rejecting the path up
-        // front makes both paths report the same thing.
+        // Explicitly-named input files must exist. Each is hashed by content,
+        // and the hasher treats an unreadable path as "no override" — so a
+        // typo does not surface as a typo, it silently becomes the run that
+        // named no file at all. Rejecting the path up front is what turns
+        // that back into an error about the path.
+        //
+        // The blast radius differs by flag. `--group-file` and
+        // `--team-map-file` fold into the *ingest* key, so a typo collapses
+        // it onto the un-overridden run: cold, that surfaced as a clean read
+        // error; warm, it hit that entry and failed much later with a
+        // missing-table error from the query layer. `--calibration` and
+        // `--defect-calibration` are deliberately analysis-only — their
+        // digests are subtracted by `ANALYSIS_ONLY_CACHE_KEYS` — so they
+        // never split the ingest key at all; a typo there leaves the
+        // corpus-percentile lens inactive, and the notice that would have
+        // said so is suppressed exactly because a path *was* named.
         //
         // Only the explicit flags are checked: the auto-discovered siblings
         // (`.codelore-teams`, `.codelorebots`) are absent in most repos and

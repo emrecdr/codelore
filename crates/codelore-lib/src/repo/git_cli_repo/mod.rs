@@ -22,6 +22,27 @@ pub struct GitCliRepo {
 
 impl GitCliRepo {
     pub fn open(root: &Path) -> Result<Self> {
+        // Same distinction `GixRepo::open` draws, kept symmetric because the
+        // differential oracle is only an oracle if both backends fail the
+        // same way. Without it a missing directory surfaces as a spawn
+        // failure from `current_dir`, which reads as a broken git install
+        // rather than a mistyped path. See that method for why this is
+        // `try_exists` and not `exists`.
+        match root.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(CodeLoreError::Repo(format!(
+                    "repo path does not exist: {}",
+                    root.display()
+                )));
+            }
+            Err(e) => {
+                return Err(CodeLoreError::Repo(format!(
+                    "cannot access repo path {}: {e}",
+                    root.display()
+                )));
+            }
+        }
         let output = Command::new("git")
             // Disable path-quoting so non-ASCII or space-containing paths
             // come back as raw UTF-8 bytes from `rev-parse` too. Git's

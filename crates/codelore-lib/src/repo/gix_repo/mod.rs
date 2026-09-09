@@ -21,8 +21,39 @@ pub struct GixRepo {
 
 impl GixRepo {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let inner = gix::open(path.as_ref())
-            .map_err(|e| CodeLoreError::Repo(format!("open {}: {e}", path.as_ref().display())))?
+        let path = path.as_ref();
+        // Separate "there is nothing here" from "this is not a repository".
+        // gix reports the second for both, so a mistyped path sends the user
+        // looking for a `.git` directory that was never the problem. The
+        // `analyze` pre-flight already drew this distinction for itself;
+        // making it here means `check`, `gate`, `diff` and `explain` — the
+        // CI and hook surfaces, which never ran that pre-flight — report it
+        // too, rather than each re-implementing the check.
+        //
+        // `try_exists` rather than `exists`: the latter answers `false` when
+        // the metadata cannot be read at all, so an unreadable directory
+        // would be reported as absent — the same conflation this check
+        // exists to remove, one layer down. The cache code nearby does use
+        // `exists`, correctly: for a cache file "cannot tell" and "not
+        // there" both mean recompute, whereas here they are different
+        // problems with different fixes.
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(CodeLoreError::Repo(format!(
+                    "repo path does not exist: {}",
+                    path.display()
+                )));
+            }
+            Err(e) => {
+                return Err(CodeLoreError::Repo(format!(
+                    "cannot access repo path {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        let inner = gix::open(path)
+            .map_err(|e| CodeLoreError::Repo(format!("open {}: {e}", path.display())))?
             .into_sync();
         Ok(Self { inner })
     }

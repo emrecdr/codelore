@@ -203,6 +203,44 @@ pub trait BlobReader {
     /// Same bytes as `Repo::read_blob_at(rev, path)` — `Ok(None)` means the
     /// path isn't a tracked blob at this reader's revision.
     fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>>;
+
+    /// Read `path` unless it is larger than `cap` bytes.
+    ///
+    /// Every HEAD-time scan applies a size cap before handing a blob to
+    /// tree-sitter, and each one used to learn the size by reading the whole
+    /// blob first — so a file the next line discards was materialised in
+    /// full, once per worker, on paths that run under `into_par_iter`. A
+    /// committed multi-hundred-megabyte bundle therefore cost that much
+    /// resident memory per worker to be told it was too big.
+    ///
+    /// The default implementation reads and then measures, which is exactly
+    /// the old behaviour — correct for any backend that cannot answer from
+    /// object metadata, and the reason this is a defaulted method rather
+    /// than a required one. `GixRepo`'s reader overrides it to consult the
+    /// object header, rejecting oversize blobs without ever allocating their
+    /// bytes, the same way the history walker already does.
+    fn read_capped(&mut self, path: &str, cap: u64) -> Result<Option<BlobRead>> {
+        Ok(self.read(path)?.map(|bytes| {
+            let len = bytes.len() as u64;
+            if len > cap {
+                BlobRead::Oversize(len)
+            } else {
+                BlobRead::Data(bytes)
+            }
+        }))
+    }
+}
+
+/// Outcome of [`BlobReader::read_capped`] for a path that *is* a tracked blob.
+///
+/// The oversize arm carries the size so callers can log the same diagnostic
+/// they logged when they measured the bytes themselves.
+#[derive(Debug)]
+pub enum BlobRead {
+    /// The blob exceeds the cap. Its bytes may never have been read.
+    Oversize(u64),
+    /// The blob is within the cap; here are its bytes.
+    Data(Vec<u8>),
 }
 
 /// [`Repo::blob_reader_at`]'s default implementation: forwards every

@@ -117,6 +117,20 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
 
+    // The sidecar is addressed by a hash of the repository path, so a typo'd
+    // `--repo` does not fail — it stores the findings under a repository that
+    // does not exist, reports success, and leaves every later
+    // `finding-hotspot-overlap` and `max_findings_in_hot_files` gate saying
+    // nothing was ingested. Same guard `check` and `gate` grew when a missing
+    // repository read as a passing gate; the banner half of the classifier is
+    // unused because this command prints none.
+    let repo_path_str = args.repo.display().to_string();
+    if let Some((_preflight, err)) = analyze::classify_repo_path(&args.repo, &repo_path_str) {
+        return Err(err.into());
+    }
+    codelore_lib::cli_api::repo::GixRepo::open(&args.repo)
+        .with_context(|| format!("open repo {repo_path_str}"))?;
+
     let store = ExternalStore::open_or_create(&cache_root, &args.repo)
         .context("open external findings store")?;
 
@@ -520,7 +534,35 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
         )
     })?;
 
-    if diff::should_fail(args, &output) {
+    // Verdict line, on stderr, in every format — the contract `check` and
+    // `gate` already keep. Without it a failing run with `--output FILE` put
+    // the whole report in the file and exited 1 with nothing on stderr at all:
+    // in the Action the step turned red with an empty log, and the reason was
+    // only visible to whoever opened the artifact. Stdout stays the document.
+    let findings = output.hotspots.rank_entrants.len()
+        + output.hotspots.score_increased.len()
+        + output.coupling_absences.len()
+        + output.clones.new_families.len();
+    let failing = diff::should_fail(args, &output);
+    if failing {
+        let where_to_look = args.output.as_ref().map_or_else(
+            || " — see the report above".to_string(),
+            |p| format!(" — see the report in {}", p.display()),
+        );
+        eprintln!(
+            "❌ codelore diff: FAIL — {} gate violation(s), {findings} finding(s){where_to_look}",
+            output.gate_violations.len()
+        );
+    } else if args.thresholds_file.is_some()
+        || !matches!(args.fail_on, crate::args::DiffFailOn::None)
+    {
+        // Only when something was actually gated. An advisory run (no
+        // thresholds file, `--fail-on none`) has no verdict to report, and a
+        // PASS line there would be noise on the most common invocation.
+        eprintln!("✅ codelore diff: PASS — {findings} finding(s), no gate violation(s)");
+    }
+
+    if failing {
         // A `[diff]` gate violation (or a skip failed under `fail_on_skipped`)
         // is a gate failure, not an analysis crash — exit 1, matching the
         // `bail!` path in `check`/`gate`.
