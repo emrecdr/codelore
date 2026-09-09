@@ -3,10 +3,16 @@
 //! Sources, applied in order of precedence (later wins):
 //! 1. Hardcoded essentials: just `.git/` (codelore can't analyze its
 //!    own metadata).
-//! 2. `.gitignore`, `.git/info/exclude`, parent-directory `.gitignore`s
+//! 2. `.gitignore` and `.git/info/exclude`, both at the repository root,
 //!    via the `ignore` crate's `gitignore::GitignoreBuilder`. Respects
-//!    standard gitignore syntax including negation (`!keep.txt`),
-//!    directory-only patterns (`build/`), and per-directory inheritance.
+//!    standard gitignore syntax including negation (`!keep.txt`) and
+//!    directory-only patterns (`build/`).
+//!
+//!    **Root only.** A `.gitignore` in a subdirectory is not read, so a
+//!    monorepo that ignores its vendored trees from `packages/*/.gitignore`
+//!    rather than from the root has those trees analysed. Reading them would
+//!    also have to reach the cache key, which digests exactly the files
+//!    listed here — see the finding ledger.
 //! 3. `.codeloreignore` at the repo root — `CodeLore`-specific additions
 //!    that the user wouldn't put in `.gitignore` (e.g. translation
 //!    files that ARE checked in but you don't want `CodeLore` to analyze).
@@ -43,10 +49,10 @@ impl PathsFilter {
     pub fn from_opts(opts: &Options) -> Result<Self> {
         let mut gb = ignore::gitignore::GitignoreBuilder::new(&opts.repo_path);
         if !opts.include_ignored {
-            // .gitignore at the repo root + auto-discovery of parent
-            // .gitignores + .git/info/exclude. add() returns None on
-            // success or Some(err) on parse error; we surface parse
-            // errors but tolerate missing files.
+            // .gitignore at the repo root. add() returns None on success or
+            // Some(err) on parse error; we surface parse errors but tolerate
+            // missing files. Only the root file is read — see the module
+            // header for why nested ones are not.
             let gitignore_path = opts.repo_path.join(".gitignore");
             if gitignore_path.is_file()
                 && let Some(err) = gb.add(&gitignore_path)
