@@ -62,6 +62,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **Release and container builds now resolve from the audited lockfile.** Neither `cargo build` passed `--locked`, so a manifest/lock inconsistency would let the published binary and the image silently resolve transitive versions the `cargo deny` job never audited, and the image was not reproducible from its tag. The window is narrow — the release script runs `cargo update` and commits the result — but it costs nothing to close.
 
+- **The one `analyze` route that needs no git repository, which the exit-code contract invited you to get wrong.** The hook section documents that a `--repo` which is missing, unreadable, or not a git repository is an exit-3 repository error rather than a vacuous pass. That holds for `check` and `gate`, and it sits under a heading a reader generalises from. `analyze --analysis clones` is the deliberate exception: clone detection is a working-tree walk over the files at `--repo` and needs no history, so it short-circuits before the repository opens and reports what it finds in a directory that is not a repository at all. The exception is now written where the rule is, with both of its edges — it covers the four row formats clones emits (`csv`, `json`, `markdown`, `sarif`) and not the composite emitters, which bypass `--analysis` and build from the fact store; and a `--repo` that is missing or unreadable stays an exit-3 error for clones too, because the short-circuit skips the repository checks and not the path checks.
+
 ## [0.29.1] - 2026-09-04
 
 ### Added
