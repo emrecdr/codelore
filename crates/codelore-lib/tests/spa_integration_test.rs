@@ -1070,3 +1070,39 @@ fn extract_data_json(html: &str) -> Option<serde_json::Value> {
     let restored = raw.replace(r"<\/", "</");
     serde_json::from_str(&restored).ok()
 }
+
+/// The document must carry its own icon and the standard installability
+/// meta name. Without a favicon the browser requests `/favicon.ico` from
+/// whatever host the report was opened from and logs a 404 on every view;
+/// with only the `apple-` prefixed capability meta, Chrome logs a
+/// deprecation warning beside it. Both are console noise on the first
+/// impression of a report someone was asked to trust.
+#[test]
+fn the_document_head_carries_an_icon_and_the_standard_capability_meta() {
+    let mut buf = Vec::new();
+    write_spa(
+        &SpaDashboard::default(),
+        "fixture — CodeLore Dashboard",
+        "/tmp/fixture",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8 html");
+    assert!(
+        html.contains("rel=\"icon\""),
+        "the single-file report must embed its own icon rather than request one"
+    );
+    assert!(
+        html.contains("data:image/svg+xml"),
+        "the icon must be inline, so the report stays a single self-contained file"
+    );
+    assert!(
+        html.contains("name=\"mobile-web-app-capable\""),
+        "the standard capability meta must be present"
+    );
+    assert!(
+        html.contains("name=\"apple-mobile-web-app-capable\""),
+        "the prefixed form stays for older iOS"
+    );
+}
