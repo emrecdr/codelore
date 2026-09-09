@@ -13,11 +13,13 @@ on:
 # Permissions needed:
 #   contents: read         — checkout
 #   security-events: write — SARIF upload to Code Scanning
-#   pull-requests: write   — sticky comment on quality-gate failure
+#
+# `pull-requests: write` is deliberately absent: nothing here comments on the
+# pull request. The Markdown report goes to the run summary, which every reader
+# of the run can already see. Add the scope when you add a step that needs it.
 permissions:
   contents: read
   security-events: write
-  pull-requests: write
 
 jobs:
   codelore-diff:
@@ -28,6 +30,14 @@ jobs:
       # --depth: 0 is mandatory — without full history, hotspot scores are
       # truncated to one commit and the analysis returns meaningless results.
       # This is the single most common CodeLore-in-CI failure mode.
+      #
+      # `ref:` names the pull request's own branch. On a `pull_request` event
+      # the default checkout is the synthetic merge commit instead, which is
+      # not what the diff below wants to describe — and `HEAD` must mean the
+      # same thing the checkout produced, which is why every rev range here
+      # ends in `HEAD` rather than in `github.sha`. That context variable is
+      # the merge commit, a ref this checkout never fetches, so naming it
+      # would fail to resolve on every run.
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
@@ -55,7 +65,7 @@ jobs:
       # visible to anyone with read access — no PR write needed.
       - name: Run CodeLore diff (Markdown summary)
         run: |
-          codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
+          codelore diff origin/${{ github.base_ref }}...HEAD \
             --analysis all \
             --top-n 10 \
             --format markdown >> "$GITHUB_STEP_SUMMARY"
@@ -64,7 +74,7 @@ jobs:
       # diff inline for findings whose line falls in the PR's changed lines.
       - name: Run CodeLore diff (SARIF for Code Scanning)
         run: |
-          codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
+          codelore diff origin/${{ github.base_ref }}...HEAD \
             --analysis hotspots \
             --format sarif > codelore-results.sarif
 
@@ -82,7 +92,7 @@ jobs:
       - name: Quality gate (rank-entrant — drop to advisory mode initially)
         continue-on-error: true  # remove this when you trust the signal
         run: |
-          codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
+          codelore diff origin/${{ github.base_ref }}...HEAD \
             --analysis hotspots \
             --top-n 10 \
             --fail-on rank-entrant \
