@@ -10,7 +10,7 @@
 //! [`evaluators`](super::evaluators) module.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -281,9 +281,14 @@ impl Default for NewCodeGates {
 #[serde(deny_unknown_fields)]
 pub struct CalibrationConfig {
     /// Path to a `defects.calib.json` defect-calibration artifact, relative
-    /// to the repo root (absolute paths are used as-is). Overridden by the
-    /// `--defect-calibration` CLI flag and the MCP server's startup flag;
-    /// absent everywhere means uncalibrated.
+    /// to the repo root and confined to it — a value that would resolve
+    /// outside the repository is refused, because this one is declared by
+    /// the analysed repository rather than typed by the operator. Overridden
+    /// by the `--defect-calibration` CLI flag and the MCP server's startup
+    /// flag, neither of which is confined; absent everywhere means
+    /// uncalibrated. Resolve it with
+    /// [`Thresholds::resolve_defect_calibration`], never by joining this
+    /// field directly.
     pub defect_artifact: Option<PathBuf>,
 }
 
@@ -600,12 +605,9 @@ impl Thresholds {
 /// [`CodeLoreError::InvalidOptions`] (exit 2, the configuration bucket) when
 /// the declared path would escape the repository.
 pub fn repo_declared_artifact(repo_root: &Path, declared: &Path) -> Result<PathBuf> {
-    let escapes = declared.components().any(|c| {
-        !matches!(
-            c,
-            std::path::Component::Normal(_) | std::path::Component::CurDir
-        )
-    });
+    let escapes = declared
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir));
     if escapes {
         return Err(CodeLoreError::InvalidOptions(format!(
             "[calibration] defect_artifact = {} must be a relative path inside the repository; \

@@ -4533,6 +4533,17 @@ inside the tree are fine", and "resolve only the final component" is a
 semantic call, and guessing at it would be worse than a stated lexical
 guarantee.
 
+This is not a new policy question for the codebase, which is what makes it a
+defect rather than a preference. Both `Repo` backends already refuse to follow
+symlinks out of the analysed tree: `is_symlink_or_gitlink`
+(`repo/gix_repo/mod.rs`) and `is_symlink_or_gitlink_mode`
+(`repo/git_cli_repo/worktree.rs`) each mask `0o170_000` and exclude
+`0o120_000`, so "a symlink in the analysed tree is not content we follow" is an
+invariant the repository walkers enforce twice over. The calibration reader is
+the one consumer that does not share it. That also points at the fix: the
+canonicalize-and-`starts_with` shape is what brings this reader into line with
+the walkers, rather than a wider lexical test.
+
 Until then the guarantee the code actually provides is lexical containment of
 the *declared string*, not of the bytes eventually read. Found by the cleanup
 review of the commit that added the containment.
@@ -4565,4 +4576,27 @@ blocked, only made more verbose.
 
 Found by the cleanup review of the commit that added the containment.
 
-The next sweep re-opens at **F393**.
+### F393 (Active) — two copies of the canonicalize-with-fallback rule, coupled only by a comment
+
+`defect_calibration::canonicalize_repo_path` (`defect_calibration/mod.rs`) and
+`cache::canonicalize_with_fallback_log` (`cache.rs`) implement the same rule:
+`fs::canonicalize`, falling back to the raw path with a debug log when it
+fails. The duplication is deliberate and the doc comment says so — it exists so
+"a repo's identity fingerprint is derived the same way the cache key is".
+
+The problem is that the coupling is asserted in prose and enforced nowhere. The
+two functions must agree for a repo-identity check and a cache key to describe
+the same repository, but nothing fails if one gains a normalisation step the
+other does not — no shared function, no test comparing them, only a comment
+naming the other. That is the same shape as F384 and F385: a policy that is
+correct in every copy today and has no mechanism keeping it that way.
+
+The fix is to call one from the other rather than to restate it, which is a
+one-line change in the mirroring function. It is recorded rather than applied
+because it is untouched by the work that surfaced it and belongs to whoever
+next has reason to open either file.
+
+Found while checking whether the new path-containment helper duplicated an
+existing one; it does not, but this pair does.
+
+The next sweep re-opens at **F394**.
