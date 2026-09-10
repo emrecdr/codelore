@@ -1900,11 +1900,7 @@ pub fn run_mcp_server(
     // so a containerized server can place its cache explicitly instead of
     // falling back to the per-user /tmp namespace.
     let cache_root = cache_dir.unwrap_or_else(default_cache_root);
-    let defect_calibration = if defect_calibration.is_some() {
-        defect_calibration
-    } else {
-        resolve_defect_calibration(None, &repo)?
-    };
+    let defect_calibration = resolve_defect_calibration(defect_calibration, &repo)?;
     if let Some(path) = &defect_calibration {
         let artifact = defect_calibration::load(path)?;
         defect_calibration::check_repo_identity(&artifact, &repo, allow_foreign_calibration)?;
