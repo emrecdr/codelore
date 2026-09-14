@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788183753770,
+  "lastUpdate": 1789390160680,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -629,6 +629,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 92994065,
             "range": "± 1969731",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ccf6340bac912270513b4d3db3c2e635b773afde",
+          "message": "fix(gates): correct the calibration field doc and drop the fourth copy (#439)\n\n`CalibrationConfig::defect_artifact`'s own doc still promised that \"absolute\npaths are used as-is\", which is the behaviour the containment removed. It is\nthe doc a caller reading the struct sees first, and it contradicted both\nresolvers and the CLI reference. It now states the confinement, says which\ninputs are exempt, and points at the resolver rather than leaving a reader to\njoin the field themselves.\n\nThe MCP server hand-rolled the flag-wins precedence around\n`resolve_defect_calibration(None, ...)`, whose own first statement is that\nsame early return -- a fourth copy of the rule the previous commit\nconsolidated. Auditing which sites reach the guard does not ask which sites\nre-implement the decision to reach it, which is how it survived. Passing the\nflag through is exactly equivalent.\n\n`docs/advanced-usage.md` justified the confinement as a value \"read out of the\nanalysed repository rather than typed by you\", which does not describe\n`--thresholds-file`: that path is typed by the operator, yet the\n`[calibration]` value inside it is still confined. The confinement follows the\nsection rather than the file it arrived in, because naming a file is not\nauthoring its contents.\n\nThe component predicate imports `Component` instead of spelling the full path\ntwice, which is the only reason it needed six lines.\n\nNo behaviour change. Probed: discarding the startup flag fails three MCP\ntests, so the collapsed path is covered rather than assumed.\n\nF391 gains the reason it is a defect rather than a preference -- both `Repo`\nbackends already exclude mode-120000 entries, so refusing to follow a symlink\nout of the analysed tree is an invariant the walkers enforce twice and this\none reader does not share. F393 records that the two canonicalize-with-\nfallback helpers are coupled by a comment naming each other and by nothing\nelse.\n\nClaude-Session: https://claude.ai/code/session_01LRZ8yoFPCFgfZ8raBUeDeP",
+          "timestamp": "2026-09-10T20:19:05Z",
+          "url": "https://github.com/emrecdr/codelore/commit/ccf6340bac912270513b4d3db3c2e635b773afde"
+        },
+        "date": 1789390157734,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 65583755,
+            "range": "± 3694114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 109695054,
+            "range": "± 1856125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 112848116,
+            "range": "± 1687259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 107246978,
+            "range": "± 1953326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 110364770,
+            "range": "± 2472438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 111786702,
+            "range": "± 2414780",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 110700021,
+            "range": "± 2349136",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 110468950,
+            "range": "± 2252851",
             "unit": "ns/iter"
           }
         ]
