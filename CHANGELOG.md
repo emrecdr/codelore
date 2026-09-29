@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **rustls accepted TLS 1.3 handshake messages across encryption-level boundaries (RUSTSEC-2026-0285).** RFC 8446 §5.1 requires that a handshake message not span a key change and that an implementation terminate the connection with an `unexpected_message` alert when one does; rustls before 0.23.45 did not, so a peer could send in plaintext handshake messages that belong after the key change and rustls would accept rather than reject the connection. The handshake transcript stays authenticated, so a network-position attacker cannot use this to alter or complete a handshake — the defect is conformance, not authentication, and it is the same bug as Go's CVE-2025-61730. It reaches this project through `ureq`, which is both a runtime dependency — the advisory enrichment layer's HTTPS client in `enrichment/client.rs` is its only caller, so the exposure is limited to runs that opt into narratives and talk to a model endpoint — and a build dependency, where `build.rs` fetches the SPA's vendored JavaScript over TLS against pinned SHAs under the `spa` feature that released binaries enable. The pinning is what bounds the build-time half: a fetch that returned altered bytes fails the digest check rather than being embedded. Resolved in the lockfile alone, `rustls` 0.23.40 → 0.23.45 and `rustls-webpki` 0.103.13 → 0.103.15, with no manifest change, because the fix is a patch release within the range already requested. Present in released builds.
+
 ## [0.30.0] - 2026-09-09
 
 ### Added
