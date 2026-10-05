@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790602520268,
+  "lastUpdate": 1791210941502,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -839,6 +839,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 91364991,
             "range": "± 2184545",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "36227b3768d649de9399afe84ec3976daefba954",
+          "message": "fix(deps): take the rustls fix for RUSTSEC-2026-0285 (#445)\n\nrustls before 0.23.45 accepts TLS 1.3 handshake messages across an\nencryption-level boundary instead of terminating the connection with an\n`unexpected_message` alert, as RFC 8446 section 5.1 requires. The transcript\nstays authenticated, so this is a conformance defect rather than a break of\nauthentication, but a peer can send in plaintext handshake messages that\nbelong after the key change and rustls will not reject them. Same bug as Go's\nCVE-2025-61730.\n\nIt reaches this project through `ureq`: a runtime dependency whose only caller\nis the enrichment layer's HTTPS client, and a build dependency where\n`build.rs` fetches the SPA's vendored JavaScript under the `spa` feature that\nreleased binaries enable. The SHA pinning bounds the build-time half, since\naltered bytes fail the digest check rather than being embedded.\n\nLockfile only -- `rustls` 0.23.40 -> 0.23.45 and `rustls-webpki` 0.103.13 ->\n0.103.15 are patch releases inside the range already requested, so no manifest\nchange is needed.\n\nThis is why `cargo-deny` had been failing: the identical commit ccf6340b\npassed the gate on 2026-09-14 and failed it on 2026-09-21 and 2026-09-28, so\n`main` was red on a published advisory rather than on any change, and every\nopen pull request inherited that failure. Verified by probe -- `cargo deny\ncheck advisories` reproduces RUSTSEC-2026-0285 on the old lockfile and reports\n`advisories ok` on the new one.\n\nClaude-Session: https://claude.ai/code/session_01LRZ8yoFPCFgfZ8raBUeDeP",
+          "timestamp": "2026-09-29T05:43:16Z",
+          "url": "https://github.com/emrecdr/codelore/commit/36227b3768d649de9399afe84ec3976daefba954"
+        },
+        "date": 1791210938053,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 39946538,
+            "range": "± 2138183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 65797063,
+            "range": "± 1596283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 66726637,
+            "range": "± 1673842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 66686353,
+            "range": "± 1916179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 65851544,
+            "range": "± 1392407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 67542903,
+            "range": "± 2831920",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 67172706,
+            "range": "± 908228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 66390579,
+            "range": "± 1088141",
             "unit": "ns/iter"
           }
         ]
