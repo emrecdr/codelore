@@ -4599,4 +4599,26 @@ next has reason to open either file.
 Found while checking whether the new path-containment helper duplicated an
 existing one; it does not, but this pair does.
 
-The next sweep re-opens at **F394**.
+### F394 (Active) — a dependency comment names a TLS backend the build does not contain
+
+The `[build-dependencies]` note on `ureq` in `crates/codelore-lib/Cargo.toml`
+says its default features give "TLS via rustls' aws-lc-rs backend". aws-lc-rs
+is not in the dependency graph at all: `cargo tree -i aws-lc-rs` matches
+nothing, `ureq` resolves to its `_ring` / `rustls-no-provider` features, and
+rustls is built with `ring`.
+
+The cost is not cosmetic, because the backend decides which TLS advisories
+reach this build. aws-lc-rs offers the post-quantum `X25519MLKEM768` group by
+default and `ring` offers classical groups only, so RUSTSEC-2026-0349 — a
+downgrade *from* that group — reads as reachable to anyone who trusts the
+comment, and is in fact unreachable. A security note written from the comment
+would be wrong, in the alarming direction, and would send someone looking for
+an exposure that does not exist.
+
+The fix is a one-line correction to the comment. It is recorded rather than
+applied because the change that surfaced it is a lockfile bump.
+
+Found while establishing which of the 2026-10 rustls advisories reach this
+build.
+
+The next sweep re-opens at **F395**.
