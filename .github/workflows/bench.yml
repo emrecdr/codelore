@@ -127,7 +127,7 @@ jobs:
       # (To gate PRs later, add a cheap baseline-only subset under a
       # `pull_request` trigger; do NOT run the full suite on every PR.)
       - name: Track regression
-        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
         with:
           tool: cargo
           output-file-path: bench-output.txt
