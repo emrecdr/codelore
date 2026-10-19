@@ -56,7 +56,7 @@ serde = { version = "1", features = ["derive"] }
 # ULPs and a warm cache read would differ from the cold computation.
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
-gix = { version = "0.87", features = ["max-performance", "blob-diff"] }
+gix = { version = "0.89", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10506.0", features = ["bundled"] }
 crossbeam-channel = "0.5"
