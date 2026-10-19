@@ -100,7 +100,7 @@ globset = "0.4"
 # us hand-rolling gitignore semantics (negation patterns, parent-dir
 # inheritance, conditional-include rules, etc.).
 ignore = "0.4"
-dirs = "6"
+dirs = "7"
 # `anstyle` is what cargo + clap use for ANSI styling. Already in our tree
 # transitively via clap; declaring it as a direct dep lets the banner module
 # import it without bumping the binary footprint (anstyle is ~5KB, all-const).
