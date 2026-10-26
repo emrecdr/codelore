@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792415444972,
+  "lastUpdate": 1793019797323,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -1049,6 +1049,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 109726325,
             "range": "± 1530797",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]",
+            "email": "49699333+dependabot[bot]@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "b4c8a7b7844ba28ce0f2a857c88ab446704c8baa",
+          "message": "build(deps): bump the cargo group across 1 directory with 11 updates (#446)\n\n* build(deps): bump the cargo group across 1 directory with 11 updates\n\nBumps the cargo group with 11 updates in the / directory:\n\n| Package | From | To |\n| --- | --- | --- |\n| [rmcp](https://github.com/modelcontextprotocol/rust-sdk) | `3.2.0` | `3.5.1` |\n| [tokio](https://github.com/tokio-rs/tokio) | `1.53.1` | `1.53.2` |\n| [thiserror](https://github.com/dtolnay/thiserror) | `2.0.20` | `2.0.21` |\n| [duckdb](https://github.com/duckdb/duckdb-rs) | `1.10505.0` | `1.10506.0` |\n| [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam) | `0.5.16` | `0.5.17` |\n| [fancy-regex](https://github.com/fancy-regex/fancy-regex) | `0.19.0` | `0.19.2` |\n| [toml](https://github.com/toml-rs/toml) | `1.1.5+spec-1.1.0` | `1.1.8+spec-1.1.0` |\n| [clap](https://github.com/clap-rs/clap) | `4.6.6` | `4.6.7` |\n| [clap_complete](https://github.com/clap-rs/clap) | `4.6.9` | `4.6.11` |\n| [crossbeam](https://github.com/crossbeam-rs/crossbeam) | `0.8.4` | `0.8.5` |\n| [insta](https://github.com/mitsuhiko/insta) | `1.48.0` | `1.49.0` |\n\n\n\nUpdates `rmcp` from 3.2.0 to 3.5.1\n- [Release notes](https://github.com/modelcontextprotocol/rust-sdk/releases)\n- [Changelog](https://github.com/modelcontextprotocol/rust-sdk/blob/main/release-plz.toml)\n- [Commits](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.2.0...rmcp-v3.5.1)\n\nUpdates `tokio` from 1.53.1 to 1.53.2\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-1.53.1...tokio-1.53.2)\n\nUpdates `thiserror` from 2.0.20 to 2.0.21\n- [Release notes](https://github.com/dtolnay/thiserror/releases)\n- [Commits](https://github.com/dtolnay/thiserror/compare/2.0.20...2.0.21)\n\nUpdates `duckdb` from 1.10505.0 to 1.10506.0\n- [Release notes](https://github.com/duckdb/duckdb-rs/releases)\n- [Commits](https://github.com/duckdb/duckdb-rs/compare/v1.10505.0...v1.10506.0)\n\nUpdates `crossbeam-channel` from 0.5.16 to 0.5.17\n- [Release notes](https://github.com/crossbeam-rs/crossbeam/releases)\n- [Changelog](https://github.com/crossbeam-rs/crossbeam/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/crossbeam-rs/crossbeam/compare/crossbeam-channel-0.5.16...crossbeam-channel-0.5.17)\n\nUpdates `fancy-regex` from 0.19.0 to 0.19.2\n- [Release notes](https://github.com/fancy-regex/fancy-regex/releases)\n- [Changelog](https://github.com/fancy-regex/fancy-regex/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/fancy-regex/fancy-regex/compare/0.19.0...0.19.2)\n\nUpdates `toml` from 1.1.5+spec-1.1.0 to 1.1.8+spec-1.1.0\n- [Commits](https://github.com/toml-rs/toml/compare/toml-v1.1.5...toml-v1.1.8)\n\nUpdates `clap` from 4.6.6 to 4.6.7\n- [Release notes](https://github.com/clap-rs/clap/releases)\n- [Changelog](https://github.com/clap-rs/clap/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/clap-rs/clap/compare/clap_complete-v4.6.6...clap_complete-v4.6.7)\n\nUpdates `clap_complete` from 4.6.9 to 4.6.11\n- [Release notes](https://github.com/clap-rs/clap/releases)\n- [Changelog](https://github.com/clap-rs/clap/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/clap-rs/clap/compare/clap_complete-v4.6.9...clap_complete-v4.6.11)\n\nUpdates `crossbeam` from 0.8.4 to 0.8.5\n- [Release notes](https://github.com/crossbeam-rs/crossbeam/releases)\n- [Changelog](https://github.com/crossbeam-rs/crossbeam/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/crossbeam-rs/crossbeam/compare/crossbeam-0.8.4...crossbeam-0.8.5)\n\nUpdates `insta` from 1.48.0 to 1.49.0\n- [Release notes](https://github.com/mitsuhiko/insta/releases)\n- [Changelog](https://github.com/mitsuhiko/insta/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/mitsuhiko/insta/compare/1.48.0...1.49.0)\n\n---\nupdated-dependencies:\n- dependency-name: rmcp\n  dependency-version: 3.5.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: tokio\n  dependency-version: 1.53.2\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: thiserror\n  dependency-version: 2.0.21\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: duckdb\n  dependency-version: 1.10506.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: crossbeam-channel\n  dependency-version: 0.5.17\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: fancy-regex\n  dependency-version: 0.19.2\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: toml\n  dependency-version: 1.1.8+spec-1.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: clap\n  dependency-version: 4.6.7\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: clap_complete\n  dependency-version: 4.6.11\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: crossbeam\n  dependency-version: 0.8.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: insta\n  dependency-version: 1.49.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* fix(provenance): record the DuckDB version this bump actually links\n\nThe cargo group moves `duckdb` from 1.10505.0 to 1.10506.0, but\n`provenance::DUCKDB_VERSION` still named the old release, so every\nprovenance sidecar and the `--version` banner would have reported an engine\nthe binary no longer contains. `dep_versions_drift_test` exists to catch\nexactly that, and it failed the test job on Linux and macOS; it is the only\nfailing test of the 1880 that ran there.\n\nNo other site pins the version: the manifest pin moved with the bump, every\nruntime consumer reads this constant, and no snapshot or golden output stores\nit.\n\nClaude-Session: https://claude.ai/code/session_01LRZ8yoFPCFgfZ8raBUeDeP\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Emre Camdere <cemre79@gmail.com>",
+          "timestamp": "2026-10-16T19:42:09Z",
+          "url": "https://github.com/emrecdr/codelore/commit/b4c8a7b7844ba28ce0f2a857c88ab446704c8baa"
+        },
+        "date": 1793019794347,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 58691019,
+            "range": "± 3892740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 102958505,
+            "range": "± 1110891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 102699016,
+            "range": "± 731877",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 103222272,
+            "range": "± 846970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 104014099,
+            "range": "± 871651",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 104492939,
+            "range": "± 1006527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 104160597,
+            "range": "± 825941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 103402150,
+            "range": "± 1245115",
             "unit": "ns/iter"
           }
         ]
