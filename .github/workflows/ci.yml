@@ -124,7 +124,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.1
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   zizmor:
@@ -162,7 +162,7 @@ jobs:
       # this adds no new pin to maintain. Version-pinned so a new audit
       # landing upstream changes this job's verdict through a visible bump
       # rather than silently on someone else's pull request.
-      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: zizmor@1.29.0
       - run: zizmor --min-severity high --format plain .github/workflows/ action.yml
@@ -259,7 +259,7 @@ jobs:
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Save the cargo cache even when the job fails — a red test
           # run still warms the next attempt's compile.
@@ -268,7 +268,7 @@ jobs:
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
       # --doc` separately.
-      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         if: matrix.run_tests
         with:
           tool: cargo-nextest
@@ -345,7 +345,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Run SPA browser smoke test
         # `--features browser-tests,spa,test-support` opts into all three:
         # the harness feature itself, the SPA emitter, and the in-process
@@ -388,7 +388,7 @@ jobs:
           # needs parent ancestry.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Shares `dogfood`'s cache slot: both are `--release -p
           # codelore` builds, just with a different feature set.
@@ -428,7 +428,7 @@ jobs:
           # own history, so the gix walker needs parent ancestry.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Stable, release-profile-scoped cache slot shared by the two
           # `--release` compiles in this workflow (dogfood and self-gate) —
